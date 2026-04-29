@@ -32,6 +32,7 @@ app.use("/api/pagos",         require("./routes/pagos"));
 app.use("/api/envios",        require("./routes/envios"));
 app.use("/api/notificaciones",require("./routes/notificaciones"));
 app.use("/api/resenas",       require("./routes/resenas"));
+app.use("/api/admin",         require("./routes/admin"));
 
 // ── Ruta de salud ────────────────────────────
 app.get("/", (req, res) => {
