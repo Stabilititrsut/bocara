@@ -4,7 +4,7 @@ import {
   TextInput, Alert, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { pagosAPI } from '@/src/services/api';
+import { pedidosAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import { Colors } from '@/constants/Colors';
 
@@ -29,23 +29,20 @@ export default function PagoScreen() {
 
     setLoading(true);
     try {
-      // Por simplificación procesamos el primer item. Para múltiples items se haría uno por uno.
       const item = items[0];
-      const res = await pagosAPI.crearIntent({
+      const res = await pedidosAPI.crear({
         bolsa_id: item.bolsa.id,
         tipo_entrega: tipo,
-        direccion_envio: tipo === 'envio' ? direccion : null,
+        direccion_envio: tipo === 'envio' ? direccion : undefined,
       });
       const { codigoRecogida, pedidoId } = res.data;
-
-      // Limpiar carrito y mostrar confirmación
       limpiar();
       router.replace({
         pathname: '/qr-recogida',
         params: { codigo: codigoRecogida, pedidoId, tipo },
       } as any);
     } catch (e: any) {
-      Alert.alert('Error al procesar pago', e.message);
+      Alert.alert('Error al confirmar pedido', e.message);
     } finally {
       setLoading(false);
     }

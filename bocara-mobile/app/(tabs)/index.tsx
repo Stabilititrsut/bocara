@@ -133,7 +133,7 @@ export default function HomeScreen() {
       </View>
 
       {/* Categorías */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.cats} contentContainerStyle={{ paddingHorizontal: 16 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.cats} contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 10 }}>
         {CATEGORIAS.map((cat) => (
           <TouchableOpacity key={cat} style={[s.catChip, catSelected === cat && s.catChipActive]} onPress={() => setCatSelected(cat)}>
             <Text style={[s.catText, catSelected === cat && s.catTextActive]}>{cat}</Text>
@@ -188,10 +188,10 @@ const s = StyleSheet.create({
   tabActive: { backgroundColor: Colors.orange },
   tabText: { color: 'rgba(255,255,255,0.6)', fontSize: 13, fontWeight: '600' },
   tabTextActive: { color: Colors.white },
-  cats: { maxHeight: 48, marginTop: 12 },
-  catChip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, marginRight: 8, backgroundColor: Colors.white },
+  cats: { backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  catChip: { borderWidth: 1.5, borderColor: '#C9B8AC', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, marginRight: 8, backgroundColor: Colors.background },
   catChipActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
-  catText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
+  catText: { fontSize: 13, color: Colors.textPrimary, fontWeight: '700' },
   catTextActive: { color: Colors.white },
   feed: { padding: 16 },
   card: { backgroundColor: Colors.white, borderRadius: 20, marginBottom: 14, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, overflow: 'hidden' },

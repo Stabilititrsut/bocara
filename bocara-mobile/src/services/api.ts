@@ -61,6 +61,8 @@ export const pedidosAPI = {
   restaurante: () => api.get('/pedidos/restaurante'),
   actualizarEstado: (id: string, estado: string) =>
     api.put(`/pedidos/${id}/estado`, { estado }),
+  crear: (data: { bolsa_id: string; tipo_entrega: string; direccion_envio?: any }) =>
+    api.post('/pedidos/crear', data),
 };
 
 export const pagosAPI = {

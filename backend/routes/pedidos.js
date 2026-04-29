@@ -3,6 +3,61 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const router = express.Router();
 
+// POST /api/pedidos/crear — confirmar pedido directamente (sin Stripe)
+router.post('/crear', authMiddleware, async (req, res) => {
+  try {
+    const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
+    if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
+
+    const { data: bolsa, error: bolsaErr } = await supabase
+      .from('bolsas')
+      .select('*, negocios(id,nombre)')
+      .eq('id', bolsa_id)
+      .single();
+    if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+    if (bolsa.cantidad_disponible < 1) return res.status(400).json({ error: 'Bolsa agotada' });
+
+    // Código único: BOC- + 6 chars alfanuméricos sin caracteres confusos
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
+      chars[Math.floor(Math.random() * chars.length)]
+    ).join('');
+
+    const costoEnvio = tipo_entrega === 'envio' ? 25 : 0;
+    const total = bolsa.precio_descuento + costoEnvio;
+
+    const insertData = {
+      usuario_id: req.usuario.id,
+      bolsa_id,
+      negocio_id: bolsa.negocios.id,
+      estado: 'confirmado',
+      estado_pago: 'pagado',
+      codigo_recogida: codigoRecogida,
+      total,
+      costo_envio: costoEnvio,
+      comision_bocara: 0,
+      precio_bolsa: bolsa.precio_descuento,
+      hora_recogida_inicio: bolsa.hora_recogida_inicio,
+      hora_recogida_fin: bolsa.hora_recogida_fin,
+    };
+    if (tipo_entrega) insertData.tipo_entrega = tipo_entrega;
+    if (tipo_entrega === 'envio' && direccion_envio) insertData.direccion_envio = direccion_envio;
+
+    const { data: pedido, error } = await supabase
+      .from('pedidos').insert([insertData]).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+
+    // Decrementar cantidad disponible
+    await supabase.from('bolsas')
+      .update({ cantidad_disponible: bolsa.cantidad_disponible - 1 })
+      .eq('id', bolsa_id);
+
+    res.status(201).json({ pedidoId: pedido.id, codigoRecogida, total });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/pedidos — pedidos del cliente autenticado
 router.get('/', authMiddleware, async (req, res) => {
   try {
