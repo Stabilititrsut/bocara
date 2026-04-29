@@ -3,6 +3,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
 import { CartProvider } from '@/src/context/CartContext';
+import { LocationProvider } from '@/src/context/LocationContext';
 import { ActivityIndicator, View } from 'react-native';
 import { Colors } from '@/constants/Colors';
 
@@ -57,10 +58,12 @@ function AuthGuard() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <CartProvider>
-        <AuthGuard />
-        <StatusBar style="dark" />
-      </CartProvider>
+      <LocationProvider>
+        <CartProvider>
+          <AuthGuard />
+          <StatusBar style="dark" />
+        </CartProvider>
+      </LocationProvider>
     </AuthProvider>
   );
 }

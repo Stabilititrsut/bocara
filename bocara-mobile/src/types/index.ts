@@ -32,6 +32,9 @@ export interface Negocio {
   calificacion_promedio: number;
   total_resenas: number;
   total_bolsas_vendidas: number;
+  latitud?: number | null;
+  longitud?: number | null;
+  permite_envio?: boolean;
 }
 
 export interface Bolsa {
@@ -53,6 +56,7 @@ export interface Bolsa {
   co2_salvado_kg: number;
   activo: boolean;
   negocios?: Negocio;
+  distancia_km?: number | null;
 }
 
 export type EstadoPedido = 'pendiente' | 'confirmado' | 'listo' | 'recogido' | 'cancelado';

@@ -39,7 +39,15 @@
           }
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Bocara usa tu ubicación para mostrarte restaurantes cercanos y calcular distancias de entrega.",
+          "locationWhenInUsePermission": "Bocara usa tu ubicación para mostrarte restaurantes cercanos y calcular distancias de entrega.",
+          "isIosBackgroundLocationEnabled": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

@@ -1,26 +1,33 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { haversine } = require('../utils/geo');
 const router = express.Router();
 
-// GET /api/bolsas — listar bolsas disponibles
+// GET /api/bolsas — listar bolsas disponibles con distancia opcional
 router.get('/', async (req, res) => {
-  const { tipo, negocio_id, zona, categoria, mi_negocio } = req.query;
+  const { tipo, negocio_id, zona, categoria, mi_negocio, lat, lng, max_distancia } = req.query;
+
+  const userLat = lat ? parseFloat(lat) : null;
+  const userLng = lng ? parseFloat(lng) : null;
+  const maxKm   = max_distancia ? parseFloat(max_distancia) : null;
+
   let query = supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,permite_envio)')
     .eq('activo', true)
     .order('created_at', { ascending: false });
+
   if (mi_negocio !== 'true') query = query.gt('cantidad_disponible', 0);
   if (tipo) query = query.eq('tipo', tipo);
   if (negocio_id) query = query.eq('negocio_id', negocio_id);
 
   let { data, error } = await query;
   if (error) {
-    // Fallback: sin columnas opcionales (activo, tipo, created_at pueden no existir aún)
+    // Fallback sin columnas opcionales
     let q2 = supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria)')
+      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
       .gt('cantidad_disponible', 0);
     if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
     const r = await q2;
@@ -29,16 +36,46 @@ router.get('/', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   let resultado = data || [];
+
+  // Filtros de texto
   if (zona) resultado = resultado.filter(b => b.negocios?.zona === zona);
   if (categoria) resultado = resultado.filter(b => b.negocios?.categoria === categoria);
+
+  // Calcular distancia si el cliente envió coordenadas
+  if (userLat !== null && userLng !== null) {
+    resultado = resultado.map(b => {
+      const nLat = b.negocios?.latitud;
+      const nLng = b.negocios?.longitud;
+      const distancia_km = (nLat != null && nLng != null)
+        ? Math.round(haversine(userLat, userLng, nLat, nLng) * 10) / 10
+        : null;
+      return { ...b, distancia_km };
+    });
+
+    // Filtrar por distancia máxima (solo si el negocio tiene coords)
+    if (maxKm !== null) {
+      resultado = resultado.filter(b =>
+        b.distancia_km === null || b.distancia_km <= maxKm
+      );
+    }
+
+    // Ordenar: primero los que tienen distancia conocida (ascendente), luego los sin coords
+    resultado.sort((a, b) => {
+      if (a.distancia_km === null && b.distancia_km === null) return 0;
+      if (a.distancia_km === null) return 1;
+      if (b.distancia_km === null) return -1;
+      return a.distancia_km - b.distancia_km;
+    });
+  }
+
   res.json(resultado);
 });
 
-// GET /api/bolsas/:id — detalle de bolsa
+// GET /api/bolsas/:id — detalle de bolsa con coords del negocio
 router.get('/:id', async (req, res) => {
   const { data, error } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,permite_envio)')
     .eq('id', req.params.id)
     .single();
   if (error || !data) return res.status(404).json({ error: 'Bolsa no encontrada' });
@@ -57,7 +94,6 @@ router.post('/', authMiddleware, async (req, res) => {
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
-  // Verificar que el negocio_id pertenece al restaurante
   const { data: negocio } = await supabase
     .from('negocios').select('id').eq('propietario_id', req.usuario.id).single();
   const nId = negocio_id || negocio?.id;
@@ -85,7 +121,6 @@ router.post('/', authMiddleware, async (req, res) => {
 
 // PUT /api/bolsas/:id — actualizar bolsa
 router.put('/:id', authMiddleware, async (req, res) => {
-  // Verificar propiedad
   const { data: bolsa } = await supabase
     .from('bolsas')
     .select('negocio_id, negocios(propietario_id)')

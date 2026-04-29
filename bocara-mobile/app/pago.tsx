@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, ActivityIndicator, SafeAreaView,
@@ -6,18 +6,33 @@ import {
 import { useRouter } from 'expo-router';
 import { pedidosAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
+import { useLocation } from '@/src/context/LocationContext';
 import { Colors } from '@/constants/Colors';
+
+const ENVIO_MAX_KM = 10;
 
 type TipoEntrega = 'recogida' | 'envio';
 
 export default function PagoScreen() {
   const { items, total, limpiar } = useCart();
   const router = useRouter();
+  const { haversine, formatDistancia, coords } = useLocation();
   const [tipo, setTipo] = useState<TipoEntrega>('recogida');
   const [direccion, setDireccion] = useState({ calle: '', zona: '', ciudad: 'Guatemala', referencia: '' });
   const [loading, setLoading] = useState(false);
   const costoEnvio = tipo === 'envio' ? 25 : 0;
   const totalFinal = total + costoEnvio;
+
+  // Calcular distancia al restaurante del primer item
+  const distanciaRestaurante = useMemo(() => {
+    if (!items[0]) return null;
+    const neg = items[0].bolsa.negocios;
+    if (!neg?.latitud || !neg?.longitud) return null;
+    return haversine(neg.latitud, neg.longitud);
+  }, [items, haversine]);
+
+  const envioDisponible = distanciaRestaurante === null || distanciaRestaurante <= ENVIO_MAX_KM;
+  const distStr = formatDistancia(distanciaRestaurante);
 
   const set = (k: string) => (v: string) => setDireccion((d) => ({ ...d, [k]: v }));
 
@@ -66,16 +81,36 @@ export default function PagoScreen() {
         {/* Tipo entrega */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>🚗 Tipo de entrega</Text>
+          {distStr && (
+            <View style={s.distInfo}>
+              <Text style={s.distInfoText}>
+                {envioDisponible
+                  ? `📍 El restaurante está a ${distStr} de tu ubicación`
+                  : `⚠️ El restaurante está a ${distStr} — fuera del radio de envío (máx. ${ENVIO_MAX_KM} km)`}
+              </Text>
+            </View>
+          )}
           <View style={s.tipoRow}>
             <TouchableOpacity style={[s.tipoBtn, tipo === 'recogida' && s.tipoBtnActive]} onPress={() => setTipo('recogida')}>
               <Text style={s.tipoEmoji}>🏪</Text>
               <Text style={[s.tipoLabel, tipo === 'recogida' && s.tipoLabelActive]}>Recoger</Text>
               <Text style={[s.tipoPrecio, tipo === 'recogida' && s.tipoPrecioActive]}>Gratis</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[s.tipoBtn, tipo === 'envio' && s.tipoBtnActive]} onPress={() => setTipo('envio')}>
+            <TouchableOpacity
+              style={[s.tipoBtn, tipo === 'envio' && s.tipoBtnActive, !envioDisponible && s.tipoBtnDisabled]}
+              onPress={() => {
+                if (!envioDisponible) {
+                  Alert.alert('Envío no disponible', `Este restaurante está a ${distStr}, fuera del radio de entrega de ${ENVIO_MAX_KM} km.`);
+                  return;
+                }
+                setTipo('envio');
+              }}
+            >
               <Text style={s.tipoEmoji}>🏍️</Text>
-              <Text style={[s.tipoLabel, tipo === 'envio' && s.tipoLabelActive]}>Envío</Text>
-              <Text style={[s.tipoPrecio, tipo === 'envio' && s.tipoPrecioActive]}>Q25</Text>
+              <Text style={[s.tipoLabel, tipo === 'envio' && s.tipoLabelActive, !envioDisponible && { color: Colors.textLight }]}>Envío</Text>
+              <Text style={[s.tipoPrecio, tipo === 'envio' && s.tipoPrecioActive, !envioDisponible && { color: Colors.textLight }]}>
+                {envioDisponible ? 'Q25' : 'No disponible'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -154,6 +189,9 @@ const s = StyleSheet.create({
   orderName: { flex: 1, fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   orderNegocio: { fontSize: 12, color: Colors.textSecondary, marginRight: 8 },
   orderPrice: { fontSize: 14, fontWeight: '800', color: Colors.orange },
+  distInfo: { backgroundColor: Colors.brownLight, borderRadius: 10, padding: 10, marginBottom: 12 },
+  distInfoText: { fontSize: 12, color: Colors.brown, fontWeight: '600' },
+  tipoBtnDisabled: { opacity: 0.45, borderColor: Colors.border },
   tipoRow: { flexDirection: 'row', gap: 10 },
   tipoBtn: { flex: 1, borderWidth: 2, borderColor: Colors.border, borderRadius: 14, padding: 14, alignItems: 'center', gap: 4 },
   tipoBtnActive: { borderColor: Colors.orange, backgroundColor: Colors.orangeLight },
