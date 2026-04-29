@@ -84,11 +84,19 @@ export const notificacionesAPI = {
 export const adminAPI = {
   stats: () => api.get('/admin/stats'),
   usuarios: (params?: any) => api.get('/admin/usuarios', { params }),
+  gestionarUsuario: (id: string, data: any) => api.put(`/admin/usuarios/${id}`, data),
+  suspenderUsuario: (id: string) => api.put(`/admin/usuarios/${id}/suspender`),
+  rehabilitarUsuario: (id: string, rol_restaurar?: string) =>
+    api.put(`/admin/usuarios/${id}/rehabilitar`, { rol_restaurar }),
   negocios: (params?: any) => api.get('/admin/negocios', { params }),
   verificarNegocio: (id: string) => api.put(`/admin/negocios/${id}/verificar`),
+  rechazarNegocio: (id: string, motivo?: string) =>
+    api.put(`/admin/negocios/${id}/rechazar`, { motivo }),
   toggleNegocio: (id: string) => api.put(`/admin/negocios/${id}/toggle`),
-  gestionarUsuario: (id: string, data: any) =>
-    api.put(`/admin/usuarios/${id}`, data),
+  financiero: (periodo?: string) => api.get('/admin/financiero', { params: { periodo } }),
+  pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),
+  getConfig: () => api.get('/admin/config'),
+  updateConfig: (data: any) => api.put('/admin/config', data),
 };
 
 export default api;
