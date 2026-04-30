@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
+const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
 const router = express.Router();
 
 // GET /api/bolsas — listar bolsas disponibles con distancia opcional
@@ -116,6 +117,10 @@ router.post('/', authMiddleware, async (req, res) => {
     .single();
 
   if (error) return res.status(400).json({ error: error.message });
+
+  // Notificar a usuarios que tienen este negocio en favoritos
+  notificarFavoritos(nId, data.nombre, data.id).catch(() => {});
+
   res.status(201).json(data);
 });
 
@@ -146,5 +151,40 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
   res.json({ ok: true });
 });
+
+async function notificarFavoritos(negocioId, bolsaNombre, bolsaId) {
+  try {
+    const { data: negocio } = await supabase.from('negocios').select('nombre').eq('id', negocioId).single();
+    const nombreNegocio = negocio?.nombre || 'Tu restaurante favorito';
+
+    const { data: favs } = await supabase
+      .from('favoritos')
+      .select('usuario_id, usuarios(expo_push_token)')
+      .eq('negocio_id', negocioId);
+
+    if (!favs?.length) return;
+
+    const tokens = favs.map(f => f.usuarios?.expo_push_token).filter(Boolean);
+    if (tokens.length) {
+      await enviarNotificacionesMultiples(
+        tokens,
+        '🛍️ ¡Nueva bolsa disponible!',
+        `${nombreNegocio} publicó: ${bolsaNombre}`,
+        { negocioId, bolsaId, screen: 'home' }
+      );
+    }
+
+    for (const fav of favs) {
+      await guardarNotificacion(
+        supabase, fav.usuario_id, 'nueva_bolsa',
+        '🛍️ Nueva bolsa disponible',
+        `${nombreNegocio} publicó: ${bolsaNombre}`,
+        { negocioId, bolsaId }
+      );
+    }
+  } catch {
+    // tabla favoritos puede no existir aún — fallo silencioso
+  }
+}
 
 module.exports = router;

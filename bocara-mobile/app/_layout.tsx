@@ -1,16 +1,79 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
 import { CartProvider } from '@/src/context/CartContext';
 import { LocationProvider } from '@/src/context/LocationContext';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, View, Platform } from 'react-native';
 import { Colors } from '@/constants/Colors';
+import { notificacionesAPI } from '@/src/services/api';
+
+// Expo Notifications — solo nativo
+let Notifications: any = null;
+let Device: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    Notifications = require('expo-notifications');
+    Device = require('expo-device');
+  } catch { }
+}
+
+if (Notifications) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}
+
+async function registrarPushToken() {
+  if (!Notifications || !Device) return;
+  if (!Device.isDevice) return; // no funciona en emulador sin config especial
+
+  const { status: existente } = await Notifications.getPermissionsAsync();
+  let finalStatus = existente;
+  if (existente !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+  if (finalStatus !== 'granted') return;
+
+  const tokenData = await Notifications.getExpoPushTokenAsync({
+    projectId: process.env.EXPO_PROJECT_ID,
+  });
+  const token = tokenData.data;
+  if (token) {
+    await notificacionesAPI.guardarToken(token).catch(() => { });
+  }
+
+  // Canal Android
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('default', {
+      name: 'Bocara',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      lightColor: Colors.orange,
+      sound: 'default',
+    });
+  }
+}
 
 function AuthGuard() {
   const { usuario, loading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
+  const pushRegistered = useRef(false);
+
+  // Registrar push token cuando el usuario inicia sesión
+  useEffect(() => {
+    if (usuario && !pushRegistered.current) {
+      pushRegistered.current = true;
+      registrarPushToken().catch(() => { });
+    }
+    if (!usuario) pushRegistered.current = false;
+  }, [usuario]);
 
   useEffect(() => {
     if (loading) return;

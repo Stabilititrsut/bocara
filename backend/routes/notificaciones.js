@@ -5,12 +5,17 @@ const router = express.Router();
 
 // GET /api/notificaciones
 router.get('/', authMiddleware, async (req, res) => {
-  const { data } = await supabase
+  let { data, error } = await supabase
     .from('notificaciones')
     .select('*')
     .eq('usuario_id', req.usuario.id)
     .order('created_at', { ascending: false })
-    .limit(30);
+    .limit(50);
+  if (error) {
+    // Fallback sin order (por si la columna no existe)
+    const r = await supabase.from('notificaciones').select('*').eq('usuario_id', req.usuario.id).limit(50);
+    data = r.data;
+  }
   res.json(data || []);
 });
 

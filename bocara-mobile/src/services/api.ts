@@ -66,7 +66,9 @@ export const pedidosAPI = {
 };
 
 export const pagosAPI = {
-  crearIntent: (data: any) => api.post('/pagos/crear-intent', data),
+  crearIntent: (data: { bolsa_id: string; tipo_entrega: string; direccion_envio?: any }) =>
+    api.post('/pagos/crear-intent', data),
+  estado: (id: string) => api.get(`/pagos/estado/${id}`),
 };
 
 export const resenasAPI = {

@@ -47,6 +47,15 @@
           "locationWhenInUsePermission": "Bocara usa tu ubicación para mostrarte restaurantes cercanos y calcular distancias de entrega.",
           "isIosBackgroundLocationEnabled": false
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#F97316",
+          "defaultChannel": "default",
+          "sounds": []
+        }
       ]
     ],
     "experiments": {
