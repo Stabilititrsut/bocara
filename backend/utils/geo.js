@@ -1,3 +1,5 @@
+const axios = require('axios');
+
 // Haversine formula — returns distance in km between two lat/lng points
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -10,4 +12,24 @@ function haversine(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-module.exports = { haversine };
+// Geocode a street address in Guatemala using Nominatim (OpenStreetMap, free, no key)
+// Returns { lat, lng } or null if not found / on error
+async function geocodeAddress(direccion, zona = '', ciudad = 'Guatemala') {
+  if (!direccion) return null;
+  const partes = [direccion, zona, ciudad, 'Guatemala'].filter(Boolean);
+  const q = partes.join(', ');
+  try {
+    const res = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: { q, format: 'json', limit: 1, countrycodes: 'gt' },
+      headers: { 'User-Agent': 'BocararApp/1.0 (contacto@bocara.gt)' },
+      timeout: 5000,
+    });
+    const hit = res.data?.[0];
+    if (hit) return { lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { haversine, geocodeAddress };

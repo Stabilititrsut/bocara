@@ -162,6 +162,44 @@ export default function AdminConfigScreen() {
           <Text style={s.saveBtnText}>{saving ? 'Guardando...' : '💾 Guardar configuración'}</Text>
         </TouchableOpacity>
 
+        {/* Herramienta de geocodificación masiva */}
+        <View style={s.geoCard}>
+          <Text style={s.geoTitle}>🗺️ Geocodificación de restaurantes</Text>
+          <Text style={s.geoDesc}>
+            Asigna coordenadas automáticamente a todos los negocios que aún no tienen ubicación registrada.
+            Usa OpenStreetMap y tarda ~1 segundo por negocio.
+          </Text>
+          <TouchableOpacity
+            style={[s.geoBtn, saving && { opacity: 0.5 }]}
+            disabled={saving}
+            onPress={async () => {
+              Alert.alert(
+                'Geocodificar negocios',
+                '¿Buscar coordenadas para todos los negocios sin ubicación? Esto puede tardar varios segundos.',
+                [
+                  { text: 'Cancelar', style: 'cancel' },
+                  {
+                    text: 'Iniciar', onPress: async () => {
+                      setSaving(true);
+                      try {
+                        const res = await adminAPI.geocodificarNegocios();
+                        const { total, ok, sin_resultado, errores } = res.data;
+                        Alert.alert('Completado', `${total} negocios procesados\n✅ ${ok} con coordenadas\n⚠️ ${sin_resultado} sin resultado\n❌ ${errores} errores`);
+                      } catch (e: any) {
+                        Alert.alert('Error', e.message);
+                      } finally {
+                        setSaving(false);
+                      }
+                    }
+                  },
+                ]
+              );
+            }}
+          >
+            <Text style={s.geoBtnText}>🔍 Geocodificar ahora</Text>
+          </TouchableOpacity>
+        </View>
+
         <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
@@ -229,4 +267,9 @@ const s = StyleSheet.create({
   previewVal: { fontSize: 13, fontWeight: '800', color: Colors.white },
   saveBtn: { backgroundColor: Colors.orange, borderRadius: 16, padding: 16, alignItems: 'center', marginTop: 20 },
   saveBtnText: { color: Colors.white, fontWeight: '900', fontSize: 16 },
+  geoCard: { backgroundColor: '#1E293B', borderRadius: 16, padding: 16, marginTop: 16, borderWidth: 1, borderColor: '#334155' },
+  geoTitle: { fontSize: 15, fontWeight: '800', color: Colors.white, marginBottom: 8 },
+  geoDesc: { fontSize: 12, color: '#94A3B8', lineHeight: 18, marginBottom: 14 },
+  geoBtn: { backgroundColor: '#1D4ED8', borderRadius: 12, padding: 12, alignItems: 'center' },
+  geoBtnText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
 });

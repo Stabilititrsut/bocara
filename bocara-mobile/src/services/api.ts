@@ -97,6 +97,7 @@ export const adminAPI = {
   pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),
   getConfig: () => api.get('/admin/config'),
   updateConfig: (data: any) => api.put('/admin/config', data),
+  geocodificarNegocios: () => api.post('/admin/geocodificar-negocios'),
 };
 
 export default api;

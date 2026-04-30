@@ -1,6 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { geocodeAddress } = require('../utils/geo');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -196,6 +197,33 @@ router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
   res.json(data || []);
+});
+
+// POST /api/admin/geocodificar-negocios — geocodifica todos los negocios sin coordenadas
+router.post('/geocodificar-negocios', authMiddleware, adminOnly, async (req, res) => {
+  const { data: negocios, error } = await supabase
+    .from('negocios')
+    .select('id,nombre,direccion,zona,ciudad')
+    .or('latitud.is.null,longitud.is.null');
+  if (error) return res.status(500).json({ error: error.message });
+
+  const resultados = { ok: 0, sin_resultado: 0, errores: 0 };
+  // Nominatim pide máximo 1 req/seg — procesamos secuencialmente con delay
+  for (const n of (negocios || [])) {
+    try {
+      const coords = await geocodeAddress(n.direccion, n.zona, n.ciudad);
+      if (coords) {
+        await supabase.from('negocios').update({ latitud: coords.lat, longitud: coords.lng }).eq('id', n.id);
+        resultados.ok++;
+      } else {
+        resultados.sin_resultado++;
+      }
+      await new Promise(r => setTimeout(r, 1100)); // respetar rate limit de Nominatim
+    } catch {
+      resultados.errores++;
+    }
+  }
+  res.json({ total: negocios?.length || 0, ...resultados });
 });
 
 // GET /api/admin/config

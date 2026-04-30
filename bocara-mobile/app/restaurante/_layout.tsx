@@ -25,7 +25,7 @@ export default function RestauranteLayout() {
       <Tabs.Screen name="cupones"   options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🎫" label="Cupones" focused={focused} /> }} />
       <Tabs.Screen name="pedidos"   options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Pedidos" focused={focused} /> }} />
       <Tabs.Screen name="historial" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Historial" focused={focused} /> }} />
-      <Tabs.Screen name="perfil"    options={{ href: null }} />
+      <Tabs.Screen name="perfil"    options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />
     </Tabs>
   );
 }
