@@ -7,7 +7,11 @@ const router = express.Router();
 
 // POST /api/auth/registro
 router.post('/registro', async (req, res) => {
-  const { email, password, nombre, apellido, rol, telefono, nombre_negocio, direccion_negocio, categoria } = req.body;
+  const {
+  email, password, nombre, apellido, rol, telefono,
+  nombre_negocio, direccion_negocio, categoria, zona, ciudad, descripcion,
+  nit, dpi, datos_bancarios, horario_atencion,
+} = req.body;
   if (!email || !password || !nombre || !rol)
     return res.status(400).json({ error: 'email, password, nombre y rol son requeridos' });
   try {
@@ -32,15 +36,24 @@ router.post('/registro', async (req, res) => {
     }
 
     if (rol === 'restaurante' && nombre_negocio) {
-      await supabase.from('negocios').insert([{
+      const negocioData = {
         propietario_id: usuario.id,
         email: email.toLowerCase().trim(),
         nombre: nombre_negocio,
         direccion: direccion_negocio || '',
         categoria: categoria || 'Restaurante',
-        zona: '',
-        ciudad: 'Guatemala',
-      }]);
+        zona: zona || '',
+        ciudad: ciudad || 'Guatemala',
+        descripcion: descripcion || '',
+        estado_verificacion: 'pendiente',
+        activo: false,
+        verificado: false,
+      };
+      if (nit) negocioData.nit = nit;
+      if (dpi) negocioData.dpi = dpi;
+      if (datos_bancarios) negocioData.datos_bancarios = datos_bancarios;
+      if (horario_atencion) negocioData.horario_atencion = horario_atencion;
+      await supabase.from('negocios').insert([negocioData]);
     }
 
     // Puntos de bienvenida para clientes nuevos

@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, StyleSheet, SafeAreaView,
   ActivityIndicator, TouchableOpacity, RefreshControl,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { adminAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
@@ -15,6 +16,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const { logout, usuario } = useAuth();
+  const router = useRouter();
 
   const cargar = useCallback(async () => {
     try {
@@ -63,13 +65,13 @@ export default function AdminDashboard() {
 
         {/* Alerta pendientes */}
         {stats?.negocios_sin_verificar > 0 && (
-          <View style={s.alertCard}>
+          <TouchableOpacity style={s.alertCard} onPress={() => router.push('/admin/verificacion' as any)}>
             <Text style={{ fontSize: 28 }}>⚠️</Text>
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={s.alertTitle}>{stats.negocios_sin_verificar} restaurante{stats.negocios_sin_verificar !== 1 ? 's' : ''} pendientes de aprobación</Text>
-              <Text style={s.alertSub}>Ve a la pestaña Negocios para revisar</Text>
+              <Text style={s.alertSub}>Toca para revisar y aprobar →</Text>
             </View>
-          </View>
+          </TouchableOpacity>
         )}
 
         {/* Grid de métricas */}

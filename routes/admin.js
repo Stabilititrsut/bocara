@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
+const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -94,21 +95,60 @@ router.get('/negocios', authMiddleware, adminOnly, async (req, res) => {
   res.json(data || []);
 });
 
-// PUT /api/admin/negocios/:id/verificar
+// GET /api/admin/negocios/pendientes — restaurantes esperando verificación
+router.get('/negocios/pendientes', authMiddleware, adminOnly, async (req, res) => {
+  let { data, error } = await supabase
+    .from('negocios')
+    .select('*,usuarios!negocios_propietario_id_fkey(nombre,apellido,email,expo_push_token)')
+    .eq('estado_verificacion', 'pendiente')
+    .order('created_at', { ascending: false });
+  if (error) {
+    const r = await supabase.from('negocios').select('id,nombre,categoria,zona,nit,dpi,datos_bancarios,horario_atencion,telefono,verificado,activo,propietario_id,created_at').eq('verificado', false).eq('activo', false);
+    data = r.data; error = r.error;
+  }
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// PUT /api/admin/negocios/:id/verificar (alias de /aprobar)
 router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res) => {
   const { data, error } = await supabase
-    .from('negocios').update({ verificado: true, activo: true }).eq('id', req.params.id).select().single();
+    .from('negocios').update({ verificado: true, activo: true, estado_verificacion: 'aprobado' }).eq('id', req.params.id).select('*,usuarios!negocios_propietario_id_fkey(expo_push_token,nombre,email)').single();
   if (error) return res.status(400).json({ error: error.message });
+  const propietario = data.usuarios;
+  if (propietario?.expo_push_token) {
+    await enviarNotificacionPush(propietario.expo_push_token, '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`, { tipo: 'negocio_aprobado' });
+    await guardarNotificacion(supabase, data.propietario_id, 'negocio_aprobado', '¡Negocio aprobado!', `${data.nombre} ya está visible para los clientes.`);
+  }
+  res.json(data);
+});
+
+// PUT /api/admin/negocios/:id/aprobar
+router.put('/negocios/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
+  const { data, error } = await supabase
+    .from('negocios').update({ verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null }).eq('id', req.params.id).select('*,usuarios!negocios_propietario_id_fkey(expo_push_token,nombre,email)').single();
+  if (error) return res.status(400).json({ error: error.message });
+  const propietario = data.usuarios;
+  if (propietario?.expo_push_token) {
+    await enviarNotificacionPush(propietario.expo_push_token, '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`, { tipo: 'negocio_aprobado' });
+    await guardarNotificacion(supabase, data.propietario_id, 'negocio_aprobado', '¡Negocio aprobado!', `${data.nombre} ya está visible para los clientes.`);
+  }
   res.json(data);
 });
 
 // PUT /api/admin/negocios/:id/rechazar
 router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
   const { motivo } = req.body;
-  const updates = { verificado: false, activo: false };
-  if (motivo) updates.descripcion_rechazo = motivo;
-  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+  const updates = { verificado: false, activo: false, estado_verificacion: 'rechazado' };
+  if (motivo) updates.motivo_rechazo = motivo;
+  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select('*,usuarios!negocios_propietario_id_fkey(expo_push_token)').single();
   if (error) return res.status(400).json({ error: error.message });
+  const propietario = data.usuarios;
+  if (propietario?.expo_push_token) {
+    const motivoTexto = motivo ? `: ${motivo}` : '. Contacta a soporte para más información.';
+    await enviarNotificacionPush(propietario.expo_push_token, '❌ Solicitud rechazada', `Tu solicitud para ${data.nombre} fue rechazada${motivoTexto}`, { tipo: 'negocio_rechazado', motivo });
+    await guardarNotificacion(supabase, data.propietario_id, 'negocio_rechazado', 'Solicitud rechazada', `Tu solicitud fue rechazada${motivoTexto}`);
+  }
   res.json(data);
 });
 
@@ -224,6 +264,111 @@ router.post('/geocodificar-negocios', authMiddleware, adminOnly, async (req, res
     }
   }
   res.json({ total: negocios?.length || 0, ...resultados });
+});
+
+// GET /api/admin/liquidaciones — deuda pendiente por restaurante
+router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
+  // Calcular neto por restaurante desde pedidos no liquidados
+  const { data: pedidos } = await supabase
+    .from('pedidos')
+    .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id,usuarios!negocios_propietario_id_fkey(expo_push_token))')
+    .eq('estado', 'recogido')
+    .is('liquidacion_id', null);
+
+  // Liquidaciones ya pagadas
+  let { data: liquidaciones } = await supabase
+    .from('liquidaciones')
+    .select('*,negocios(nombre)')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (!liquidaciones) liquidaciones = [];
+
+  // Agrupar pedidos por negocio
+  const mapa = {};
+  for (const p of (pedidos || [])) {
+    const nid = p.negocio_id;
+    if (!mapa[nid]) {
+      mapa[nid] = {
+        negocio_id: nid,
+        nombre: p.negocios?.nombre || 'Sin nombre',
+        datos_bancarios: p.negocios?.datos_bancarios || null,
+        propietario_id: p.negocios?.propietario_id,
+        push_token: p.negocios?.usuarios?.expo_push_token,
+        pedidos: 0,
+        bruto: 0,
+        neto: 0,
+      };
+    }
+    const bruto = p.precio_bolsa || p.total || 0;
+    mapa[nid].pedidos += 1;
+    mapa[nid].bruto += bruto;
+    mapa[nid].neto += p.monto_neto_restaurante || bruto * 0.75;
+  }
+  const pendientes = Object.values(mapa)
+    .map(r => ({ ...r, bruto: parseFloat(r.bruto.toFixed(2)), neto: parseFloat(r.neto.toFixed(2)) }))
+    .filter(r => r.neto > 0)
+    .sort((a, b) => b.neto - a.neto);
+
+  res.json({ pendientes, historial: liquidaciones });
+});
+
+// POST /api/admin/liquidaciones/:restaurante_id/pagar
+router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, async (req, res) => {
+  const { restaurante_id } = req.params;
+  const { datos_transferencia, monto } = req.body;
+
+  // Buscar pedidos pendientes del restaurante
+  const { data: pedidosPend } = await supabase
+    .from('pedidos')
+    .select('id,precio_bolsa,total,monto_neto_restaurante')
+    .eq('negocio_id', restaurante_id)
+    .eq('estado', 'recogido')
+    .is('liquidacion_id', null);
+
+  const bruto = (pedidosPend || []).reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
+  const neto = monto || parseFloat(((pedidosPend || []).reduce((s, p) => s + (p.monto_neto_restaurante || (p.precio_bolsa || p.total || 0) * 0.75), 0)).toFixed(2));
+
+  // Crear liquidacion
+  const { data: liq, error: liqErr } = await supabase
+    .from('liquidaciones')
+    .insert([{
+      negocio_id: restaurante_id,
+      monto: neto,
+      ventas_brutas: parseFloat(bruto.toFixed(2)),
+      comision_bocara: parseFloat((bruto * 0.25).toFixed(2)),
+      estado: 'pagado',
+      datos_transferencia: datos_transferencia || null,
+      total_pedidos: (pedidosPend || []).length,
+      pagado_en: new Date().toISOString(),
+      pagado_por: req.usuario.id,
+    }])
+    .select()
+    .single();
+  if (liqErr) return res.status(400).json({ error: liqErr.message });
+
+  // Marcar pedidos como liquidados
+  if (pedidosPend?.length && liq?.id) {
+    const ids = pedidosPend.map(p => p.id);
+    await supabase.from('pedidos').update({ liquidacion_id: liq.id }).in('id', ids);
+  }
+
+  // Push al propietario
+  const { data: negocio } = await supabase
+    .from('negocios')
+    .select('nombre,propietario_id,usuarios!negocios_propietario_id_fkey(expo_push_token)')
+    .eq('id', restaurante_id)
+    .single();
+  if (negocio?.usuarios?.expo_push_token) {
+    await enviarNotificacionPush(
+      negocio.usuarios.expo_push_token,
+      '💸 ¡Pago recibido!',
+      `Recibiste Q${neto.toFixed(2)} por ${(pedidosPend || []).length} pedidos. Revisa tu cuenta bancaria.`,
+      { tipo: 'liquidacion_pagada', monto: neto }
+    );
+    await guardarNotificacion(supabase, negocio.propietario_id, 'liquidacion', '¡Pago recibido!', `Q${neto.toFixed(2)} transferidos a tu cuenta.`, { monto: neto });
+  }
+
+  res.json({ ok: true, liquidacion: liq });
 });
 
 // GET /api/admin/config

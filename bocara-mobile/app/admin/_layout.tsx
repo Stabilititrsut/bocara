@@ -22,11 +22,13 @@ export default function AdminLayout() {
       tabBarStyle: { backgroundColor: ADMIN_COLOR, borderTopColor: '#334155', height: 64, paddingBottom: 8 },
       tabBarShowLabel: false,
     }}>
-      <Tabs.Screen name="index"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
-      <Tabs.Screen name="negocios"   options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Negocios" focused={focused} /> }} />
-      <Tabs.Screen name="financiero" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Finanzas" focused={focused} /> }} />
-      <Tabs.Screen name="usuarios"   options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="👥" label="Usuarios" focused={focused} /> }} />
-      <Tabs.Screen name="config"     options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="⚙️" label="Config" focused={focused} /> }} />
+      <Tabs.Screen name="index"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
+      <Tabs.Screen name="verificacion"  options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="✅" label="Aprobar" focused={focused} /> }} />
+      <Tabs.Screen name="liquidaciones" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💸" label="Pagos" focused={focused} /> }} />
+      <Tabs.Screen name="negocios"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Negocios" focused={focused} /> }} />
+      <Tabs.Screen name="financiero"    options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Finanzas" focused={focused} /> }} />
+      <Tabs.Screen name="usuarios"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="👥" label="Usuarios" focused={focused} /> }} />
+      <Tabs.Screen name="config"        options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="⚙️" label="Config" focused={focused} /> }} />
     </Tabs>
   );
 }

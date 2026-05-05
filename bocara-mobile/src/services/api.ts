@@ -49,6 +49,7 @@ export const negociosAPI = {
   miNegocio: () => api.get('/negocios/mi-negocio'),
   actualizar: (id: string, data: any) => api.put(`/negocios/${id}`, data),
   estadisticas: (id: string) => api.get(`/negocios/${id}/estadisticas`),
+  ganancias: (periodo?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo } }),
 };
 
 export const bolsasAPI = {
@@ -106,7 +107,9 @@ export const adminAPI = {
   rehabilitarUsuario: (id: string, rol_restaurar?: string) =>
     api.put(`/admin/usuarios/${id}/rehabilitar`, { rol_restaurar }),
   negocios: (params?: any) => api.get('/admin/negocios', { params }),
+  negociosPendientes: () => api.get('/admin/negocios/pendientes'),
   verificarNegocio: (id: string) => api.put(`/admin/negocios/${id}/verificar`),
+  aprobarNegocio: (id: string) => api.put(`/admin/negocios/${id}/aprobar`),
   rechazarNegocio: (id: string, motivo?: string) =>
     api.put(`/admin/negocios/${id}/rechazar`, { motivo }),
   toggleNegocio: (id: string) => api.put(`/admin/negocios/${id}/toggle`),
@@ -115,6 +118,9 @@ export const adminAPI = {
   getConfig: () => api.get('/admin/config'),
   updateConfig: (data: any) => api.put('/admin/config', data),
   geocodificarNegocios: () => api.post('/admin/geocodificar-negocios'),
+  liquidaciones: () => api.get('/admin/liquidaciones'),
+  pagarLiquidacion: (restaurante_id: string, data?: any) =>
+    api.post(`/admin/liquidaciones/${restaurante_id}/pagar`, data || {}),
 };
 
 export default api;
