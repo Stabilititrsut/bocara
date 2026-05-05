@@ -23,6 +23,6 @@
     }
   ],
   "env": {
-    "EXPO_PUBLIC_API_URL": "https://api.bocarafood.com/api"
+    "EXPO_PUBLIC_API_URL": "https://bocara.onrender.com/api"
   }
 }
