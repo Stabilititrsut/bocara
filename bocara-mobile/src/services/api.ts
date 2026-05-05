@@ -2,11 +2,12 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-// Web usa localhost; móvil usa la IP local de la máquina
-export const API_BASE_URL =
-  Platform.OS === 'web'
-    ? 'http://localhost:3000/api'
-    : 'http://192.168.1.34:3000/api';
+const PROD_URL = 'https://api.bocarafood.com/api';
+const DEV_URL  = Platform.OS === 'web'
+  ? 'http://localhost:3000/api'
+  : 'http://192.168.1.34:3000/api';
+
+export const API_BASE_URL = __DEV__ ? DEV_URL : PROD_URL;
 
 const api = axios.create({
   baseURL: API_BASE_URL,

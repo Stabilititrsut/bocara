@@ -11,8 +11,31 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(helmet());
-app.use(cors({ origin: '*' }));
-app.use(morgan('dev'));
+
+const ALLOWED_ORIGINS = [
+  'https://app.bocarafood.com',
+  'https://bocarafood.com',
+  'https://www.bocarafood.com',
+  // desarrollo local
+  'http://localhost:3000',
+  'http://localhost:8081',
+  'http://localhost:19006',
+  'http://localhost:19000',
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // permitir requests sin origen (apps móviles nativas, Postman, curl)
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origen no permitido → ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // PayU webhook envía application/x-www-form-urlencoded
 app.use('/api/pagos/webhook', express.urlencoded({ extended: false }));
