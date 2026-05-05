@@ -1,4 +1,4 @@
-export type Rol = 'cliente' | 'restaurante' | 'admin';
+export type Rol = 'cliente' | 'restaurante' | 'admin' | 'suspendido';
 
 export interface Usuario {
   id: string;
@@ -79,6 +79,7 @@ export interface Pedido {
   created_at: string;
   bolsas?: Bolsa;
   negocios?: Negocio;
+  resena_id?: string | null;
 }
 
 export interface CartItem {
@@ -90,4 +91,12 @@ export interface AuthState {
   usuario: Usuario | null;
   token: string | null;
   loading: boolean;
+}
+
+export interface Favorito {
+  id: string;
+  usuario_id: string;
+  negocio_id: string;
+  created_at: string;
+  negocios?: Negocio;
 }

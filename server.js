@@ -50,6 +50,8 @@ app.use('/api/envios',         require('./routes/envios'));
 app.use('/api/notificaciones', require('./routes/notificaciones'));
 app.use('/api/resenas',        require('./routes/resenas'));
 app.use('/api/admin',          require('./routes/admin'));
+app.use('/api/favoritos',      require('./routes/favoritos'));
+app.use('/api/uploads',        require('./routes/uploads'));
 
 app.get('/', (req, res) => {
   res.json({ status: '✅ Bocara API funcionando', version: '2.0.0', ambiente: process.env.NODE_ENV });

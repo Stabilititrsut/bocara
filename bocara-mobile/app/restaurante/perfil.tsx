@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, SafeAreaView, Alert, ActivityIndicator,
+  StyleSheet, SafeAreaView, Alert, ActivityIndicator, Platform,
 } from 'react-native';
-import { negociosAPI } from '@/src/services/api';
+import { Image } from 'expo-image';
+import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
+
+// expo-image-picker cargado dinámicamente — no disponible en web sin config adicional
+let ImagePicker: any = null;
+try { ImagePicker = require('expo-image-picker'); } catch { }
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otro'];
 
@@ -14,7 +19,8 @@ export default function PerfilRestauranteScreen() {
   const [form, setForm] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const { logout, usuario } = useAuth();
+  const [uploadingImg, setUploadingImg] = useState(false);
+  const { logout } = useAuth();
   const set = (k: string) => (v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
   useEffect(() => {
@@ -34,17 +40,67 @@ export default function PerfilRestauranteScreen() {
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
+  async function seleccionarImagen() {
+    if (!ImagePicker) {
+      Alert.alert('No disponible', 'La subida de imágenes no está disponible en esta plataforma.');
+      return;
+    }
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería para cambiar la foto.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    await subirImagen(asset.uri);
+  }
+
+  async function subirImagen(uri: string) {
+    if (!negocio?.id) return;
+    setUploadingImg(true);
+    try {
+      const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
+      const path = `negocios/${negocio.id}/imagen_${Date.now()}.${ext}`;
+
+      // 1. Obtener URL firmada del backend
+      const { data } = await uploadsAPI.getSignedUrl(path);
+
+      // 2. Subir directo a Supabase Storage
+      const blob = await fetch(uri).then((r) => r.blob());
+      const uploadRes = await fetch(data.signedUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': blob.type || 'image/jpeg' },
+        body: blob,
+      });
+      if (!uploadRes.ok) throw new Error('Error al subir la imagen');
+
+      // 3. Guardar URL pública en el negocio
+      await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
+      setNegocio((n: any) => ({ ...n, imagen_url: data.publicUrl }));
+      Alert.alert('¡Foto actualizada!', 'La imagen del negocio fue guardada.');
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudo subir la imagen');
+    } finally {
+      setUploadingImg(false);
+    }
+  }
+
   async function guardar() {
     setSaving(true);
     try {
       const payload: any = { ...form };
-      // Solo enviar coords si son números válidos
       const lat = parseFloat(form.latitud);
       const lng = parseFloat(form.longitud);
       payload.latitud  = isNaN(lat) ? null : lat;
       payload.longitud = isNaN(lng) ? null : lng;
       await negociosAPI.actualizar(negocio.id, payload);
-      Alert.alert('¡Guardado!', 'Los datos del negocio fueron actualizados.\nSi cambiaste la dirección, las coordenadas se actualizarán automáticamente.');
+      Alert.alert('¡Guardado!', 'Datos del negocio actualizados.');
     } catch (e: any) { Alert.alert('Error', e.message); }
     finally { setSaving(false); }
   }
@@ -53,12 +109,10 @@ export default function PerfilRestauranteScreen() {
     if (!form.direccion) return Alert.alert('Sin dirección', 'Ingresa una dirección primero');
     setSaving(true);
     try {
-      // Guardar con coords vacías para forzar re-geocodificación en el backend
       await negociosAPI.actualizar(negocio.id, {
         direccion: form.direccion, zona: form.zona, ciudad: form.ciudad,
         latitud: null, longitud: null,
       });
-      // Recargar para obtener las coordenadas geocodificadas
       const res = await negociosAPI.miNegocio();
       setNegocio(res.data);
       setForm((f: any) => ({
@@ -69,7 +123,7 @@ export default function PerfilRestauranteScreen() {
       if (res.data.latitud) {
         Alert.alert('✅ Ubicación obtenida', `Lat: ${res.data.latitud.toFixed(6)}\nLng: ${res.data.longitud?.toFixed(6)}`);
       } else {
-        Alert.alert('Sin resultado', 'No se encontró ubicación para esa dirección. Ingresa las coordenadas manualmente.');
+        Alert.alert('Sin resultado', 'No se encontró la dirección. Ingresa coordenadas manualmente.');
       }
     } catch (e: any) { Alert.alert('Error', e.message); }
     finally { setSaving(false); }
@@ -89,6 +143,24 @@ export default function PerfilRestauranteScreen() {
       </View>
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+        {/* Foto del negocio */}
+        <TouchableOpacity style={s.imgContainer} onPress={seleccionarImagen} disabled={uploadingImg}>
+          {negocio?.imagen_url ? (
+            <Image source={{ uri: negocio.imagen_url }} style={s.imgNegocio} contentFit="cover" transition={200} />
+          ) : (
+            <View style={s.imgPlaceholder}>
+              <Text style={{ fontSize: 40 }}>🏪</Text>
+              <Text style={s.imgPlaceholderText}>Agregar foto</Text>
+            </View>
+          )}
+          <View style={s.imgEditBtn}>
+            {uploadingImg
+              ? <ActivityIndicator color={Colors.white} size="small" />
+              : <Text style={s.imgEditText}>📷 Cambiar foto</Text>
+            }
+          </View>
+        </TouchableOpacity>
+
         {/* Stats rápidos */}
         <View style={s.statsRow}>
           <View style={s.stat}>
@@ -135,16 +207,13 @@ export default function PerfilRestauranteScreen() {
         {/* Dirección */}
         <Text style={s.sectionTitle}>Dirección</Text>
         {[
-          { key: 'direccion', label: 'Dirección (calle y número)', placeholder: '5a Calle 10-35' },
-          { key: 'zona',      label: 'Zona / Colonia',             placeholder: 'Zona 10' },
-          { key: 'ciudad',    label: 'Ciudad',                     placeholder: 'Guatemala' },
+          { key: 'direccion', label: 'Dirección', placeholder: '5a Calle 10-35' },
+          { key: 'zona',      label: 'Zona / Colonia', placeholder: 'Zona 10' },
+          { key: 'ciudad',    label: 'Ciudad', placeholder: 'Guatemala' },
         ].map(({ key, label, placeholder }) => (
           <View key={key}>
             <Text style={s.label}>{label}</Text>
-            <TextInput
-              style={s.input} placeholder={placeholder} placeholderTextColor={Colors.textLight}
-              value={form[key]} onChangeText={set(key)}
-            />
+            <TextInput style={s.input} placeholder={placeholder} placeholderTextColor={Colors.textLight} value={form[key]} onChangeText={set(key)} />
           </View>
         ))}
 
@@ -154,46 +223,31 @@ export default function PerfilRestauranteScreen() {
           <View style={s.coordsStatus}>
             <Text style={{ fontSize: 24 }}>{tieneCoordenadas ? '✅' : '❌'}</Text>
             <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={s.coordsStatusTitle}>
-                {tieneCoordenadas ? 'Ubicación registrada' : 'Sin ubicación'}
-              </Text>
+              <Text style={s.coordsStatusTitle}>{tieneCoordenadas ? 'Ubicación registrada' : 'Sin ubicación'}</Text>
               <Text style={s.coordsStatusSub}>
                 {tieneCoordenadas
-                  ? 'Tu negocio aparece en el mapa de distancias de Bocara'
-                  : 'Sin coordenadas, los clientes no verán la distancia a tu negocio'}
+                  ? 'Tu negocio aparece en las búsquedas por distancia'
+                  : 'Sin coordenadas los clientes no verán la distancia'}
               </Text>
             </View>
           </View>
-
           <View style={s.coordsInputRow}>
             <View style={{ flex: 1 }}>
               <Text style={s.label}>Latitud</Text>
-              <TextInput
-                style={s.input} value={form.latitud} onChangeText={set('latitud')}
-                placeholder="14.6349" placeholderTextColor={Colors.textLight} keyboardType="decimal-pad"
-              />
+              <TextInput style={s.input} value={form.latitud} onChangeText={set('latitud')} placeholder="14.6349" placeholderTextColor={Colors.textLight} keyboardType="decimal-pad" />
             </View>
             <View style={{ width: 12 }} />
             <View style={{ flex: 1 }}>
               <Text style={s.label}>Longitud</Text>
-              <TextInput
-                style={s.input} value={form.longitud} onChangeText={set('longitud')}
-                placeholder="-90.5069" placeholderTextColor={Colors.textLight} keyboardType="decimal-pad"
-              />
+              <TextInput style={s.input} value={form.longitud} onChangeText={set('longitud')} placeholder="-90.5069" placeholderTextColor={Colors.textLight} keyboardType="decimal-pad" />
             </View>
           </View>
-
           <TouchableOpacity style={s.geocodeBtn} onPress={geocodificarAhora} disabled={saving}>
-            <Text style={s.geocodeBtnText}>
-              {saving ? 'Buscando...' : '🔍 Detectar coordenadas desde mi dirección'}
-            </Text>
+            <Text style={s.geocodeBtnText}>{saving ? 'Buscando...' : '🔍 Detectar desde dirección'}</Text>
           </TouchableOpacity>
-          <Text style={s.coordsHint}>
-            O busca tu negocio en maps.google.com, haz clic derecho sobre el punto y copia las coordenadas.
-          </Text>
+          <Text style={s.coordsHint}>O busca en maps.google.com, haz clic derecho y copia las coordenadas.</Text>
         </View>
 
-        {/* Cerrar sesión */}
         <TouchableOpacity style={s.logoutBtn} onPress={logout}>
           <Text style={s.logoutText}>Cerrar sesión</Text>
         </TouchableOpacity>
@@ -211,6 +265,12 @@ const s = StyleSheet.create({
   saveBtn: { backgroundColor: Colors.orange, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
   saveBtnText: { color: Colors.white, fontWeight: '700', fontSize: 14 },
   scroll: { padding: 16 },
+  imgContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 20, height: 160 },
+  imgNegocio: { width: '100%', height: '100%' },
+  imgPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, justifyContent: 'center', alignItems: 'center', gap: 8 },
+  imgPlaceholderText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
+  imgEditBtn: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.55)', paddingVertical: 10, alignItems: 'center' },
+  imgEditText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
   stat: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 12, alignItems: 'center', elevation: 1 },
   statVal: { fontSize: 22, fontWeight: '900', color: Colors.orange },

@@ -24,7 +24,10 @@ api.interceptors.request.use(async (config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    const msg = err.response?.data?.error || err.message || 'Error de red';
+    if (!err.response) {
+      return Promise.reject(new Error('Sin conexión a internet. Verifica tu red e intenta de nuevo.'));
+    }
+    const msg = err.response?.data?.error || err.message || 'Error del servidor';
     return Promise.reject(new Error(msg));
   }
 );
@@ -82,6 +85,17 @@ export const notificacionesAPI = {
   marcarLeida: (id: string) => api.put(`/notificaciones/${id}/leer`),
   guardarToken: (token: string) =>
     api.post('/notificaciones/token', { expo_push_token: token }),
+};
+
+export const favoritosAPI = {
+  listar: () => api.get('/favoritos'),
+  check: (negocio_id: string) => api.get(`/favoritos/check/${negocio_id}`),
+  agregar: (negocio_id: string) => api.post('/favoritos', { negocio_id }),
+  quitar: (negocio_id: string) => api.delete(`/favoritos/${negocio_id}`),
+};
+
+export const uploadsAPI = {
+  getSignedUrl: (path: string) => api.post('/uploads/signed-url', { path }),
 };
 
 export const adminAPI = {
