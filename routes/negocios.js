@@ -184,7 +184,20 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (coords) { updates.latitud = coords.lat; updates.longitud = coords.lng; }
   }
 
-  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+  let { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+
+  // If dpi_foto_url column doesn't exist yet, store it inside datos_bancarios JSONB
+  if (error && updates.dpi_foto_url && error.message.includes('dpi_foto_url')) {
+    const dpiUrl = updates.dpi_foto_url;
+    delete updates.dpi_foto_url;
+    const { data: cur } = await supabase.from('negocios').select('datos_bancarios').eq('id', req.params.id).single();
+    updates.datos_bancarios = { ...(cur?.datos_bancarios || {}), dpi_foto_url: dpiUrl };
+    const retry = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+    if (retry.error) return res.status(400).json({ error: retry.error.message });
+    data = { ...retry.data, dpi_foto_url: dpiUrl };
+    error = null;
+  }
+
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });

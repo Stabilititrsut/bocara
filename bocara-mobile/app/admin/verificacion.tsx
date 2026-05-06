@@ -129,11 +129,11 @@ export default function AdminVerificacionScreen() {
                 <Text style={s.sectionTitle}>📋 Datos legales</Text>
                 <InfoRow label="NIT" val={n.nit || 'No proporcionado'} />
                 <InfoRow label="DPI" val={n.dpi || 'No proporcionado'} />
-                {n.dpi_foto_url ? (
+                {(n.dpi_foto_url || n.datos_bancarios?.dpi_foto_url) ? (
                   <View style={{ marginTop: 10 }}>
                     <Text style={{ fontSize: 11, color: '#94A3B8', fontWeight: '700', marginBottom: 6 }}>FOTO DPI ESCANEADO</Text>
                     <Image
-                      source={{ uri: n.dpi_foto_url }}
+                      source={{ uri: n.dpi_foto_url || n.datos_bancarios?.dpi_foto_url }}
                       style={{ width: '100%', height: 140, borderRadius: 8, backgroundColor: '#334155' }}
                       contentFit="contain"
                     />
