@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 app.use(helmet());
 
 const ALLOWED_ORIGINS = [
+  'https://bocara.vercel.app',
   'https://app.bocarafood.com',
   'https://bocarafood.com',
   'https://www.bocarafood.com',
