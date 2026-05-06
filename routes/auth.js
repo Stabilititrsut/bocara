@@ -185,4 +185,50 @@ router.put('/perfil', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// POST /api/auth/setup-admin — crea o repara el usuario admin con hash bcrypt correcto
+// Protegido por ADMIN_SETUP_SECRET (env var). Llamar UNA sola vez desde producción.
+router.post('/setup-admin', async (req, res) => {
+  const { secret, email, password } = req.body;
+  const expectedSecret = process.env.ADMIN_SETUP_SECRET || 'bocara-setup-2025';
+  if (secret !== expectedSecret) {
+    return res.status(403).json({ error: 'Secret incorrecto' });
+  }
+  const adminEmail = (email || 'admin@bocarafood.com').toLowerCase().trim();
+  const adminPassword = password || 'Admin1234';
+
+  try {
+    const hash = await bcrypt.hash(adminPassword, 10);
+
+    // Verificar si el usuario ya existe
+    const { data: existing } = await supabase
+      .from('usuarios')
+      .select('id,email,rol,password_hash')
+      .eq('email', adminEmail)
+      .single();
+
+    if (existing) {
+      // Actualizar hash y asegurar rol admin
+      const { data, error } = await supabase
+        .from('usuarios')
+        .update({ password_hash: hash, rol: 'admin', nombre: existing.nombre || 'Admin' })
+        .eq('email', adminEmail)
+        .select('id,email,rol')
+        .single();
+      if (error) return res.status(400).json({ error: error.message });
+      return res.json({ ok: true, action: 'updated', usuario: data });
+    }
+
+    // Crear usuario nuevo
+    const { data, error } = await supabase
+      .from('usuarios')
+      .insert([{ email: adminEmail, password_hash: hash, nombre: 'Admin', rol: 'admin' }])
+      .select('id,email,rol')
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true, action: 'created', usuario: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

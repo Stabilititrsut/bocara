@@ -1,58 +1,84 @@
+/**
+ * Script para crear/reparar el usuario admin en la tabla pública `usuarios`.
+ * Usa bcryptjs (compatible con el sistema de autenticación del backend).
+ *
+ * Uso local:
+ *   node scripts/create-admin.js
+ *
+ * Variables de entorno requeridas: SUPABASE_URL, SUPABASE_SERVICE_KEY (o SUPABASE_ANON_KEY)
+ */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const { createClient } = require('@supabase/supabase-js');
+const bcrypt = require('bcryptjs');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
+  process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-async function createAdmin() {
-  const EMAIL    = 'admin@bocarafood.com';
-  const PASSWORD = 'Admin1234';
+const EMAIL    = process.env.ADMIN_EMAIL    || 'admin@bocarafood.com';
+const PASSWORD = process.env.ADMIN_PASSWORD || 'Admin1234';
 
-  // 1. Crear usuario en auth.users
-  const { data: authData, error: authError } = await supabase.auth.admin.createUser({
-    email: EMAIL,
-    password: PASSWORD,
-    email_confirm: true,
-  });
+async function main() {
+  console.log(`\n🔑 Configurando usuario admin: ${EMAIL}\n`);
 
-  if (authError) {
-    if (authError.message.includes('already been registered') || authError.code === 'email_exists') {
-      console.log('El usuario ya existe en auth. Buscando su UUID...');
-      const { data: list, error: listErr } = await supabase.auth.admin.listUsers();
-      if (listErr) { console.error('Error listando usuarios:', listErr.message); process.exit(1); }
-      const existing = list.users.find(u => u.email === EMAIL);
-      if (!existing) { console.error('No se encontró el usuario existente.'); process.exit(1); }
-      return upsertUsuariosRow(existing.id, EMAIL);
+  const hash = await bcrypt.hash(PASSWORD, 10);
+  console.log('✓ Hash bcrypt generado');
+
+  // Verificar si ya existe
+  const { data: existing, error: fetchErr } = await supabase
+    .from('usuarios')
+    .select('id,email,rol,password_hash')
+    .eq('email', EMAIL)
+    .single();
+
+  if (existing) {
+    const esBcrypt = existing.password_hash && existing.password_hash.startsWith('$2');
+    console.log(`✓ Usuario encontrado (ID: ${existing.id})`);
+    console.log(`  Rol actual: ${existing.rol}`);
+    console.log(`  Hash válido: ${esBcrypt ? 'Sí' : 'NO — necesita reparación'}`);
+
+    const { data, error } = await supabase
+      .from('usuarios')
+      .update({ password_hash: hash, rol: 'admin', nombre: 'Admin' })
+      .eq('email', EMAIL)
+      .select('id,email,rol')
+      .single();
+
+    if (error) {
+      console.error('✗ Error actualizando:', error.message);
+      process.exit(1);
     }
-    console.error('Error creando usuario en auth:', authError.message);
-    process.exit(1);
+    console.log('\n✅ Usuario admin actualizado correctamente');
+    console.log('   Email :', data.email);
+    console.log('   Rol   :', data.rol);
+    console.log('   Pass  :', PASSWORD);
+  } else {
+    if (fetchErr && !fetchErr.message.includes('No rows')) {
+      console.error('✗ Error consultando:', fetchErr.message);
+    }
+
+    console.log('  No existe — creando...');
+    const { data, error } = await supabase
+      .from('usuarios')
+      .insert([{ email: EMAIL, password_hash: hash, nombre: 'Admin', rol: 'admin' }])
+      .select('id,email,rol')
+      .single();
+
+    if (error) {
+      console.error('✗ Error creando:', error.message);
+      process.exit(1);
+    }
+    console.log('\n✅ Usuario admin creado correctamente');
+    console.log('   Email :', data.email);
+    console.log('   Rol   :', data.rol);
+    console.log('   Pass  :', PASSWORD);
   }
 
-  console.log('Usuario auth creado:', authData.user.id);
-  await upsertUsuariosRow(authData.user.id, EMAIL);
+  console.log('\n🚀 Ya puedes hacer login en bocara.vercel.app con esas credenciales.\n');
 }
 
-async function upsertUsuariosRow(id, email) {
-  // 2. Insertar / actualizar fila en tabla pública usuarios
-  const { error } = await supabase.from('usuarios').upsert({
-    id,
-    email,
-    nombre: 'Admin',
-    rol: 'admin',
-    password_hash: 'SUPABASE_AUTH', // auth manejada por Supabase Auth, no usado
-  }, { onConflict: 'id' });
-
-  if (error) {
-    console.error('Error insertando en tabla usuarios:', error.message);
-    process.exit(1);
-  }
-
-  console.log('✓ Usuario admin creado correctamente');
-  console.log('  Email   :', email);
-  console.log('  UUID    :', id);
-  console.log('  Rol     : admin');
-}
-
-createAdmin();
+main().catch(err => {
+  console.error('Error inesperado:', err.message);
+  process.exit(1);
+});
