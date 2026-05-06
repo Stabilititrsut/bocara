@@ -1,10 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
-  Modal, TextInput, Alert, RefreshControl, Switch, Image,
+  Modal, TextInput, Alert, RefreshControl, Switch, Image, ActivityIndicator,
 } from 'react-native';
-import { bolsasAPI, negociosAPI } from '@/src/services/api';
+import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+
+let ImagePicker: any = null;
+try { ImagePicker = require('expo-image-picker'); } catch { }
 
 const FORM_INIT = {
   nombre: '', descripcion: '', contenido: '',
@@ -22,7 +25,38 @@ export default function BolsasRestauranteScreen() {
   const [form, setForm] = useState<any>(FORM_INIT);
   const [editId, setEditId] = useState<string | null>(null);
   const [negocioId, setNegocioId] = useState('');
+  const [uploadingFoto, setUploadingFoto] = useState(false);
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  async function seleccionarFotoBolsa() {
+    if (!ImagePicker) {
+      Alert.alert('No disponible', 'Usa una URL de imagen en su lugar.');
+      return;
+    }
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') return Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería.');
+    } catch { }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true, aspect: [1, 1], quality: 0.7, base64: true,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    if (!asset.base64) return Alert.alert('Error', 'No se pudo leer la imagen.');
+    setUploadingFoto(true);
+    try {
+      const path = `bolsas/${negocioId}_${Date.now()}.jpg`;
+      const { data } = await uploadsAPI.uploadBase64(asset.base64, path);
+      if (data?.publicUrl) {
+        setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+      }
+    } catch (e: any) {
+      Alert.alert('Error al subir foto', e.message);
+    } finally {
+      setUploadingFoto(false);
+    }
+  }
 
   const cargar = useCallback(async () => {
     try {
@@ -171,14 +205,29 @@ export default function BolsasRestauranteScreen() {
           </View>
 
           <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
-            {/* Foto URL */}
-            <Text style={s.sectionLabel}>📷 Foto</Text>
-            {form.imagen_url ? (
-              <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
-            ) : (
-              <View style={s.fotoPlaceholder}><Text style={{ fontSize: 40 }}>🥡</Text><Text style={s.fotoPlaceholderText}>Sin foto</Text></View>
-            )}
-            <Field label="URL de la foto" value={form.imagen_url} onChange={set('imagen_url')} placeholder="https://..." />
+            {/* Foto */}
+            <Text style={s.sectionLabel}>📷 Foto de la bolsa</Text>
+            <TouchableOpacity
+              style={[s.fotoBtn, uploadingFoto && { opacity: 0.6 }]}
+              onPress={seleccionarFotoBolsa}
+              disabled={uploadingFoto}
+              activeOpacity={0.8}
+            >
+              {form.imagen_url ? (
+                <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
+              ) : (
+                <View style={s.fotoPlaceholder}>
+                  <Text style={{ fontSize: 40 }}>🥡</Text>
+                  <Text style={s.fotoPlaceholderText}>Toca para agregar foto</Text>
+                </View>
+              )}
+              <View style={s.fotoOverlay}>
+                {uploadingFoto
+                  ? <ActivityIndicator color={Colors.white} />
+                  : <Text style={s.fotoOverlayText}>{form.imagen_url ? '📷 Cambiar foto' : '📷 Seleccionar foto'}</Text>
+                }
+              </View>
+            </TouchableOpacity>
 
             <Text style={s.sectionLabel}>📝 Información</Text>
             <Field label="Nombre *" value={form.nombre} onChange={set('nombre')} placeholder="Bolsa Sorpresa de Panadería" />
@@ -296,7 +345,10 @@ const s = StyleSheet.create({
   priceRow: { flexDirection: 'row' },
   descInfo: { backgroundColor: Colors.greenLight, borderRadius: 10, padding: 10, marginBottom: 12 },
   descInfoText: { fontSize: 13, color: Colors.green, fontWeight: '600' },
-  fotoPreview: { width: '100%', height: 160, borderRadius: 12, marginBottom: 8 },
-  fotoPlaceholder: { height: 100, backgroundColor: Colors.brownLight, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 8, gap: 4 },
+  fotoBtn: { borderRadius: 12, overflow: 'hidden', height: 150, marginBottom: 16 },
+  fotoPreview: { width: '100%', height: '100%' },
+  fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', gap: 6 },
   fotoPlaceholderText: { fontSize: 13, color: Colors.textSecondary },
+  fotoOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.5)', paddingVertical: 8, alignItems: 'center' },
+  fotoOverlayText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
 });

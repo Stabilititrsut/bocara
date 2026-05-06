@@ -129,6 +129,20 @@ export default function AdminVerificacionScreen() {
                 <Text style={s.sectionTitle}>📋 Datos legales</Text>
                 <InfoRow label="NIT" val={n.nit || 'No proporcionado'} />
                 <InfoRow label="DPI" val={n.dpi || 'No proporcionado'} />
+                {n.dpi_foto_url ? (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={{ fontSize: 11, color: '#94A3B8', fontWeight: '700', marginBottom: 6 }}>FOTO DPI ESCANEADO</Text>
+                    <Image
+                      source={{ uri: n.dpi_foto_url }}
+                      style={{ width: '100%', height: 140, borderRadius: 8, backgroundColor: '#334155' }}
+                      contentFit="contain"
+                    />
+                  </View>
+                ) : (
+                  <View style={{ marginTop: 6, backgroundColor: '#451A03', borderRadius: 8, padding: 8 }}>
+                    <Text style={{ fontSize: 11, color: '#F59E0B', fontWeight: '700' }}>⚠ Sin foto de DPI — solicitar al propietario</Text>
+                  </View>
+                )}
               </View>
 
               {/* Info del negocio */}

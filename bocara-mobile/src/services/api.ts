@@ -97,6 +97,8 @@ export const favoritosAPI = {
 
 export const uploadsAPI = {
   getSignedUrl: (path: string) => api.post('/uploads/signed-url', { path }),
+  uploadBase64: (base64: string, path: string, contentType = 'image/jpeg') =>
+    api.post('/uploads/base64', { base64, path, contentType }),
 };
 
 export const adminAPI = {

@@ -303,7 +303,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   // Calcular neto por restaurante desde pedidos no liquidados
   const { data: pedidos } = await supabase
     .from('pedidos')
-    .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id,usuarios!negocios_propietario_id_fkey(expo_push_token))')
+    .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
     .eq('estado', 'recogido')
     .is('liquidacion_id', null);
 
@@ -325,7 +325,6 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
         nombre: p.negocios?.nombre || 'Sin nombre',
         datos_bancarios: p.negocios?.datos_bancarios || null,
         propietario_id: p.negocios?.propietario_id,
-        push_token: p.negocios?.usuarios?.expo_push_token,
         pedidos: 0,
         bruto: 0,
         neto: 0,
@@ -335,6 +334,18 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     mapa[nid].pedidos += 1;
     mapa[nid].bruto += bruto;
     mapa[nid].neto += p.monto_neto_restaurante || bruto * 0.75;
+  }
+
+  // Enriquecer con push token del propietario
+  const propIds = [...new Set(Object.values(mapa).map((r: any) => r.propietario_id).filter(Boolean))];
+  if (propIds.length > 0) {
+    const { data: propUsers } = await supabase
+      .from('usuarios').select('id,expo_push_token').in('id', propIds);
+    const tokenMap: any = {};
+    for (const u of (propUsers || [])) tokenMap[u.id] = u.expo_push_token;
+    for (const r of Object.values(mapa) as any[]) {
+      r.push_token = tokenMap[r.propietario_id] || null;
+    }
   }
   const pendientes = Object.values(mapa)
     .map(r => ({ ...r, bruto: parseFloat(r.bruto.toFixed(2)), neto: parseFloat(r.neto.toFixed(2)) }))
@@ -387,16 +398,20 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
   // Push al propietario
   const { data: negocio } = await supabase
     .from('negocios')
-    .select('nombre,propietario_id,usuarios!negocios_propietario_id_fkey(expo_push_token)')
+    .select('nombre,propietario_id')
     .eq('id', restaurante_id)
     .single();
-  if (negocio?.usuarios?.expo_push_token) {
-    await enviarNotificacionPush(
-      negocio.usuarios.expo_push_token,
-      '💸 ¡Pago recibido!',
-      `Recibiste Q${neto.toFixed(2)} por ${(pedidosPend || []).length} pedidos. Revisa tu cuenta bancaria.`,
-      { tipo: 'liquidacion_pagada', monto: neto }
-    );
+  if (negocio?.propietario_id) {
+    const { data: propUser } = await supabase
+      .from('usuarios').select('expo_push_token').eq('id', negocio.propietario_id).single();
+    if (propUser?.expo_push_token) {
+      await enviarNotificacionPush(
+        propUser.expo_push_token,
+        '💸 ¡Pago recibido!',
+        `Recibiste Q${neto.toFixed(2)} por ${(pedidosPend || []).length} pedidos. Revisa tu cuenta bancaria.`,
+        { tipo: 'liquidacion_pagada', monto: neto }
+      );
+    }
     await guardarNotificacion(supabase, negocio.propietario_id, 'liquidacion', '¡Pago recibido!', `Q${neto.toFixed(2)} transferidos a tu cuenta.`, { monto: neto });
   }
 

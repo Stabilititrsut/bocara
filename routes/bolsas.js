@@ -38,6 +38,11 @@ router.get('/', async (req, res) => {
 
   let resultado = data || [];
 
+  // Solo bolsas de negocios activos/aprobados (excepto cuando el restaurante consulta sus propias bolsas)
+  if (mi_negocio !== 'true') {
+    resultado = resultado.filter(b => b.negocios?.activo !== false);
+  }
+
   // Filtros de texto
   if (zona) resultado = resultado.filter(b => b.negocios?.zona === zona);
   if (categoria) resultado = resultado.filter(b => b.negocios?.categoria === categoria);

@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
+import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { Image } from 'expo-image';
 
@@ -26,23 +27,36 @@ export default function RegistroRestauranteScreen() {
     direccion_negocio: '', zona: '', horario_atencion: '',
     nit: '', dpi: '',
     banco: '', banco_otro: '', numero_cuenta: '', tipo_cuenta: 'Monetaria', titular_cuenta: '',
-    foto_perfil_uri: '',
+    dpi_foto_uri: '', dpi_foto_base64: '',
+    foto_negocio_uri: '', foto_negocio_base64: '',
   });
   const [loading, setLoading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState('');
   const { registroRestaurante } = useAuth();
   const router = useRouter();
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  async function seleccionarFoto() {
-    if (!ImagePicker) return Alert.alert('No disponible', 'La subida de fotos no está disponible aquí.');
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería.');
+  async function seleccionarFoto(tipo: 'dpi' | 'negocio') {
+    if (!ImagePicker) return Alert.alert('No disponible', 'La subida de fotos no está disponible en este dispositivo.');
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') return Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería para subir la foto.');
+    } catch { /* web no necesita permisos */ }
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, aspect: [1, 1], quality: 0.8,
+      allowsEditing: true,
+      aspect: tipo === 'dpi' ? [16, 9] : [1, 1],
+      quality: 0.7,
+      base64: true,
     });
     if (result.canceled || !result.assets?.length) return;
-    setForm(f => ({ ...f, foto_perfil_uri: result.assets[0].uri }));
+    const asset = result.assets[0];
+    if (tipo === 'dpi') {
+      setForm(f => ({ ...f, dpi_foto_uri: asset.uri, dpi_foto_base64: asset.base64 || '' }));
+    } else {
+      setForm(f => ({ ...f, foto_negocio_uri: asset.uri, foto_negocio_base64: asset.base64 || '' }));
+    }
   }
 
   function validarPaso(): string | null {
@@ -71,6 +85,10 @@ export default function RegistroRestauranteScreen() {
       if (!form.numero_cuenta.trim())  return 'El campo "Número de cuenta" es obligatorio.';
       if (!form.titular_cuenta.trim()) return 'El campo "Titular de la cuenta" es obligatorio.';
     }
+    if (step === 4) {
+      if (!form.dpi_foto_uri && !form.dpi_foto_base64)
+        return 'La foto del DPI escaneado es obligatoria. Por favor selecciona una foto.';
+    }
     return null;
   }
 
@@ -80,8 +98,23 @@ export default function RegistroRestauranteScreen() {
     setStep(s => Math.min(s + 1, 4) as Step);
   }
 
+  async function subirFotoBase64(base64: string, path: string): Promise<string | null> {
+    if (!base64) return null;
+    try {
+      const { data } = await uploadsAPI.uploadBase64(base64, path);
+      return data.publicUrl || null;
+    } catch (e: any) {
+      console.warn('Error subiendo foto:', e.message);
+      return null;
+    }
+  }
+
   async function handleRegistro() {
+    const error = validarPaso();
+    if (error) return Alert.alert('Campo requerido', error);
+
     setLoading(true);
+    setUploadStatus('Creando cuenta...');
     try {
       const nombreBanco = form.banco === 'Otro' ? form.banco_otro : form.banco;
       const datos_bancarios = {
@@ -91,6 +124,7 @@ export default function RegistroRestauranteScreen() {
         titular: form.titular_cuenta,
       };
 
+      // 1. Registrar usuario — obtenemos token automáticamente
       await registroRestaurante({
         nombre: form.nombre.trim(),
         apellido: form.apellido.trim(),
@@ -108,19 +142,58 @@ export default function RegistroRestauranteScreen() {
         datos_bancarios,
       });
 
+      // 2. Obtener negocio recién creado
+      setUploadStatus('Subiendo documentos...');
+      let negocioId = '';
+      try {
+        const neg = await negociosAPI.miNegocio();
+        negocioId = neg.data?.id || '';
+      } catch { /* si falla, continuamos sin fotos */ }
+
+      // 3. Subir foto DPI (obligatoria) y foto del negocio (opcional)
+      let dpi_foto_url: string | null = null;
+      let imagen_url: string | null = null;
+
+      if (negocioId && form.dpi_foto_base64) {
+        setUploadStatus('Subiendo foto del DPI...');
+        dpi_foto_url = await subirFotoBase64(
+          form.dpi_foto_base64,
+          `dpi/${negocioId}_${Date.now()}.jpg`
+        );
+      }
+      if (negocioId && form.foto_negocio_base64) {
+        setUploadStatus('Subiendo foto del negocio...');
+        imagen_url = await subirFotoBase64(
+          form.foto_negocio_base64,
+          `negocios/${negocioId}_${Date.now()}.jpg`
+        );
+      }
+
+      // 4. Actualizar negocio con URLs de fotos
+      if (negocioId && (dpi_foto_url || imagen_url)) {
+        setUploadStatus('Guardando información...');
+        try {
+          const updates: any = {};
+          if (dpi_foto_url) updates.dpi_foto_url = dpi_foto_url;
+          if (imagen_url)   updates.imagen_url = imagen_url;
+          await negociosAPI.actualizar(negocioId, updates);
+        } catch { /* si falla la actualización de fotos, no bloqueamos el registro */ }
+      }
+
       Alert.alert(
         '¡Solicitud enviada! 🎉',
-        'Tu negocio está en revisión. El equipo de Bocara revisará tu información y te notificará cuando esté aprobado (normalmente en 24-48 horas).',
+        'Tu negocio está en revisión. El equipo de Bocara verificará tu DPI y datos, y te notificará cuando sea aprobado (normalmente en 24-48 horas).',
         [{ text: 'Entendido', onPress: () => router.replace('/restaurante') }]
       );
     } catch (e: any) {
       Alert.alert('Error al registrar', e.message || 'Ocurrió un error inesperado. Intenta de nuevo.');
     } finally {
       setLoading(false);
+      setUploadStatus('');
     }
   }
 
-  const steps = ['Propietario', 'Negocio', 'Bancario', 'Foto'];
+  const steps = ['Propietario', 'Negocio', 'Bancario', 'Documentos'];
 
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -245,7 +318,6 @@ export default function RegistroRestauranteScreen() {
             {!form.banco && <Text style={s.required}>Selecciona un banco</Text>}
             <View style={{ height: 12 }} />
 
-            {/* Campo de texto para banco personalizado */}
             {form.banco === 'Otro' && (
               <View>
                 <Text style={s.label}>Nombre del banco *</Text>
@@ -270,8 +342,8 @@ export default function RegistroRestauranteScreen() {
             </View>
 
             {[
-              { key: 'numero_cuenta',  label: 'Número de cuenta *',      placeholder: '000-000000-00', keyboard: 'numeric' as any },
-              { key: 'titular_cuenta', label: 'Titular de la cuenta *',   placeholder: 'María González' },
+              { key: 'numero_cuenta',  label: 'Número de cuenta *',     placeholder: '000-000000-00', keyboard: 'numeric' as any },
+              { key: 'titular_cuenta', label: 'Titular de la cuenta *',  placeholder: 'María González' },
             ].map(({ key, label, placeholder, keyboard }) => (
               <View key={key}>
                 <Text style={s.label}>{label}</Text>
@@ -284,15 +356,40 @@ export default function RegistroRestauranteScreen() {
           </>
         )}
 
-        {/* ─── PASO 4: Foto y confirmación ─── */}
+        {/* ─── PASO 4: Documentos / Fotos ─── */}
         {step === 4 && (
           <>
-            <Text style={s.section}>📸 Foto del negocio</Text>
-            <Text style={s.optionalNote}>Opcional. Puedes subirla ahora o después desde tu panel.</Text>
+            {/* DPI del representante legal — OBLIGATORIO */}
+            <Text style={s.section}>🪪 DPI del representante legal *</Text>
+            <View style={s.infoCard}>
+              <Text style={s.infoText}>Necesitamos una foto clara del DPI (cédula) del propietario para verificar tu identidad. Esta información es confidencial y solo la revisa el equipo de Bocara.</Text>
+            </View>
 
-            <TouchableOpacity style={s.fotoBtn} onPress={seleccionarFoto}>
-              {form.foto_perfil_uri ? (
-                <Image source={{ uri: form.foto_perfil_uri }} style={s.fotoPreview} contentFit="cover" />
+            <TouchableOpacity style={[s.fotoBtn, { height: 160 }]} onPress={() => seleccionarFoto('dpi')}>
+              {form.dpi_foto_uri ? (
+                <Image source={{ uri: form.dpi_foto_uri }} style={s.fotoPreview} contentFit="cover" />
+              ) : (
+                <View style={[s.fotoPlaceholder, { backgroundColor: '#FEF3C7' }]}>
+                  <Text style={{ fontSize: 40 }}>🪪</Text>
+                  <Text style={s.fotoPlaceholderText}>Toca para fotografiar el DPI</Text>
+                  <Text style={{ fontSize: 11, color: Colors.textLight, marginTop: 2 }}>Frente del documento, bien iluminado</Text>
+                </View>
+              )}
+              <View style={[s.fotoOverlay, form.dpi_foto_uri ? {} : { backgroundColor: 'rgba(245,158,11,0.9)' }]}>
+                <Text style={s.fotoOverlayText}>
+                  {form.dpi_foto_uri ? '✓ DPI seleccionado — toca para cambiar' : '📷 Seleccionar foto del DPI (obligatorio)'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+            {!form.dpi_foto_uri && <Text style={[s.required, { marginBottom: 16 }]}>La foto del DPI es obligatoria</Text>}
+
+            {/* Foto del negocio — opcional */}
+            <Text style={s.section}>🏪 Foto del negocio</Text>
+            <Text style={s.optionalNote}>Opcional. Puedes subirla ahora o actualizarla después desde tu panel.</Text>
+
+            <TouchableOpacity style={s.fotoBtn} onPress={() => seleccionarFoto('negocio')}>
+              {form.foto_negocio_uri ? (
+                <Image source={{ uri: form.foto_negocio_uri }} style={s.fotoPreview} contentFit="cover" />
               ) : (
                 <View style={s.fotoPlaceholder}>
                   <Text style={{ fontSize: 48 }}>🏪</Text>
@@ -300,10 +397,13 @@ export default function RegistroRestauranteScreen() {
                 </View>
               )}
               <View style={s.fotoOverlay}>
-                <Text style={s.fotoOverlayText}>📷 {form.foto_perfil_uri ? 'Cambiar foto' : 'Agregar foto'}</Text>
+                <Text style={s.fotoOverlayText}>
+                  📷 {form.foto_negocio_uri ? 'Cambiar foto del negocio' : 'Agregar foto del negocio (opcional)'}
+                </Text>
               </View>
             </TouchableOpacity>
 
+            {/* Resumen */}
             <View style={s.resumenCard}>
               <Text style={s.resumenTitle}>Resumen de tu solicitud</Text>
               {[
@@ -314,8 +414,10 @@ export default function RegistroRestauranteScreen() {
                 { label: 'Categoría',   val: form.categoria },
                 { label: 'Dirección',   val: `${form.direccion_negocio}, ${form.zona}` },
                 { label: 'NIT',         val: form.nit },
+                { label: 'DPI',         val: form.dpi },
                 { label: 'Banco',       val: form.banco === 'Otro' ? form.banco_otro : form.banco },
                 { label: 'Cuenta',      val: form.numero_cuenta },
+                { label: 'DPI escaneado', val: form.dpi_foto_uri ? '✓ Foto adjunta' : '⚠ Pendiente (obligatorio)' },
               ].map(({ label, val }) => val ? (
                 <View key={label} style={s.resumenRow}>
                   <Text style={s.resumenLabel}>{label}</Text>
@@ -327,8 +429,8 @@ export default function RegistroRestauranteScreen() {
             <View style={s.pendienteInfo}>
               <Text style={{ fontSize: 24 }}>⏳</Text>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={s.pendienteTitle}>Estado: En revisión</Text>
-                <Text style={s.pendienteSub}>Recibirás una notificación cuando tu negocio sea aprobado (24-48 horas).</Text>
+                <Text style={s.pendienteTitle}>Estado: En revisión (24-48 h)</Text>
+                <Text style={s.pendienteSub}>Verificaremos tu DPI y datos. Recibirás una notificación cuando sea aprobado.</Text>
               </View>
             </View>
           </>
@@ -341,9 +443,18 @@ export default function RegistroRestauranteScreen() {
               <Text style={s.btnNextText}>Siguiente →</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={s.btnSubmit} onPress={handleRegistro} disabled={loading}>
+            <TouchableOpacity
+              style={[s.btnSubmit, !form.dpi_foto_uri && s.btnDisabled]}
+              onPress={handleRegistro}
+              disabled={loading || !form.dpi_foto_uri}
+            >
               {loading
-                ? <ActivityIndicator color={Colors.white} />
+                ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ActivityIndicator color={Colors.white} />
+                    <Text style={s.btnSubmitText}>{uploadStatus || 'Enviando...'}</Text>
+                  </View>
+                )
                 : <Text style={s.btnSubmitText}>🚀 Enviar solicitud</Text>
               }
             </TouchableOpacity>
@@ -391,7 +502,7 @@ const s = StyleSheet.create({
   infoCard: { backgroundColor: Colors.brownLight, borderRadius: 12, padding: 14, marginBottom: 20 },
   infoText: { fontSize: 13, color: Colors.brown, lineHeight: 20 },
   optionalNote: { fontSize: 12, color: Colors.textLight, marginBottom: 16, fontStyle: 'italic' },
-  fotoBtn: { borderRadius: 16, overflow: 'hidden', height: 180, marginBottom: 20 },
+  fotoBtn: { borderRadius: 16, overflow: 'hidden', height: 180, marginBottom: 12 },
   fotoPreview: { width: '100%', height: '100%' },
   fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', gap: 8 },
   fotoPlaceholderText: { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
@@ -410,4 +521,5 @@ const s = StyleSheet.create({
   btnNextText: { color: Colors.white, fontWeight: '800', fontSize: 16 },
   btnSubmit: { backgroundColor: Colors.green, borderRadius: 14, padding: 16, alignItems: 'center' },
   btnSubmitText: { color: Colors.white, fontWeight: '800', fontSize: 16 },
+  btnDisabled: { backgroundColor: Colors.textLight },
 });

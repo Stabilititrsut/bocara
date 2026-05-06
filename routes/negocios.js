@@ -150,16 +150,23 @@ router.put('/:id', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'No autorizado' });
 
   const { nombre, descripcion, direccion, zona, ciudad, telefono, categoria, activo,
+    imagen_url, dpi_foto_url, nit, dpi, datos_bancarios, horario_atencion,
     latitud: latManual, longitud: lngManual } = req.body;
   const updates = {};
-  if (nombre !== undefined)      updates.nombre = nombre;
-  if (descripcion !== undefined) updates.descripcion = descripcion;
-  if (direccion !== undefined)   updates.direccion = direccion;
-  if (zona !== undefined)        updates.zona = zona;
-  if (ciudad !== undefined)      updates.ciudad = ciudad;
-  if (telefono !== undefined)    updates.telefono = telefono;
-  if (categoria !== undefined)   updates.categoria = categoria;
-  if (activo !== undefined)      updates.activo = activo;
+  if (nombre !== undefined)           updates.nombre = nombre;
+  if (descripcion !== undefined)      updates.descripcion = descripcion;
+  if (direccion !== undefined)        updates.direccion = direccion;
+  if (zona !== undefined)             updates.zona = zona;
+  if (ciudad !== undefined)           updates.ciudad = ciudad;
+  if (telefono !== undefined)         updates.telefono = telefono;
+  if (categoria !== undefined)        updates.categoria = categoria;
+  if (activo !== undefined)           updates.activo = activo;
+  if (imagen_url !== undefined)       updates.imagen_url = imagen_url;
+  if (dpi_foto_url !== undefined)     updates.dpi_foto_url = dpi_foto_url;
+  if (nit !== undefined)              updates.nit = nit;
+  if (dpi !== undefined)              updates.dpi = dpi;
+  if (datos_bancarios !== undefined)  updates.datos_bancarios = datos_bancarios;
+  if (horario_atencion !== undefined) updates.horario_atencion = horario_atencion;
 
   // Coordenadas manuales tienen prioridad
   if (latManual != null) updates.latitud  = parseFloat(latManual);
