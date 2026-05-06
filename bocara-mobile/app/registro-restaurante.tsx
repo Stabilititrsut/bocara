@@ -5,7 +5,6 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
-import { uploadsAPI, negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { Image } from 'expo-image';
 
@@ -22,19 +21,14 @@ type Step = 1 | 2 | 3 | 4;
 export default function RegistroRestauranteScreen() {
   const [step, setStep] = useState<Step>(1);
   const [form, setForm] = useState({
-    // Paso 1: datos del propietario
     nombre: '', apellido: '', email: '', password: '', telefono: '',
-    // Paso 2: datos del negocio
     nombre_negocio: '', descripcion: '', categoria: '',
     direccion_negocio: '', zona: '', horario_atencion: '',
     nit: '', dpi: '',
-    // Paso 3: datos bancarios
-    banco: '', numero_cuenta: '', tipo_cuenta: 'Monetaria', titular_cuenta: '',
-    // Paso 4: fotos (uris locales)
+    banco: '', banco_otro: '', numero_cuenta: '', tipo_cuenta: 'Monetaria', titular_cuenta: '',
     foto_perfil_uri: '',
   });
   const [loading, setLoading] = useState(false);
-  const [uploadingImg, setUploadingImg] = useState(false);
   const { registroRestaurante } = useAuth();
   const router = useRouter();
   const set = (k: string) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -51,75 +45,79 @@ export default function RegistroRestauranteScreen() {
     setForm(f => ({ ...f, foto_perfil_uri: result.assets[0].uri }));
   }
 
-  async function handleRegistro() {
-    if (!form.nombre || !form.email || !form.password || !form.nombre_negocio)
-      return Alert.alert('Campos requeridos', 'Nombre, email, contraseña y nombre del negocio son obligatorios.');
-    if (form.password.length < 6)
-      return Alert.alert('Contraseña muy corta', 'Mínimo 6 caracteres.');
-
-    setLoading(true);
-    try {
-      const datos_bancarios = (form.banco || form.numero_cuenta) ? {
-        banco: form.banco,
-        numero_cuenta: form.numero_cuenta,
-        tipo_cuenta: form.tipo_cuenta,
-        titular: form.titular_cuenta || `${form.nombre} ${form.apellido}`.trim(),
-      } : undefined;
-
-      await registroRestaurante({
-        nombre: form.nombre,
-        apellido: form.apellido,
-        email: form.email,
-        password: form.password,
-        telefono: form.telefono,
-        nombre_negocio: form.nombre_negocio,
-        descripcion: form.descripcion,
-        categoria: form.categoria || 'Restaurante',
-        direccion_negocio: form.direccion_negocio,
-        zona: form.zona,
-        horario_atencion: form.horario_atencion,
-        nit: form.nit,
-        dpi: form.dpi,
-        datos_bancarios,
-      });
-
-      // Subir foto si hay una seleccionada
-      if (form.foto_perfil_uri) {
-        try {
-          setUploadingImg(true);
-          const ext = form.foto_perfil_uri.split('.').pop()?.split('?')[0] || 'jpg';
-          const path = `negocios/registro_${Date.now()}.${ext}`;
-          const { data } = await uploadsAPI.getSignedUrl(path);
-          const blob = await fetch(form.foto_perfil_uri).then(r => r.blob());
-          await fetch(data.signedUrl, { method: 'PUT', headers: { 'Content-Type': blob.type || 'image/jpeg' }, body: blob });
-          const { data: negocio } = await negociosAPI.miNegocio();
-          if (negocio?.id) await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
-        } catch { }
-        setUploadingImg(false);
-      }
-
-      Alert.alert(
-        '¡Solicitud enviada! 🎉',
-        'Tu negocio está en revisión. El equipo de Bocara revisará tu información y te notificaremos cuando esté aprobado (normalmente en 24-48h).',
-        [{ text: 'Entendido', style: 'default' }]
-      );
-    } catch (e: any) {
-      Alert.alert('Error', e.message);
-    } finally {
-      setLoading(false);
-      setUploadingImg(false);
+  function validarPaso(): string | null {
+    if (step === 1) {
+      if (!form.nombre.trim())    return 'El campo "Nombre" es obligatorio.';
+      if (!form.apellido.trim())  return 'El campo "Apellido" es obligatorio.';
+      if (!form.email.trim())     return 'El campo "Correo electrónico" es obligatorio.';
+      if (!/\S+@\S+\.\S+/.test(form.email)) return 'Ingresa un correo electrónico válido.';
+      if (!form.password)         return 'El campo "Contraseña" es obligatorio.';
+      if (form.password.length < 6) return 'La contraseña debe tener al menos 6 caracteres.';
+      if (!form.telefono.trim())  return 'El campo "Teléfono" es obligatorio.';
     }
+    if (step === 2) {
+      if (!form.nombre_negocio.trim())    return 'El campo "Nombre del negocio" es obligatorio.';
+      if (!form.descripcion.trim())       return 'El campo "Descripción" es obligatorio.';
+      if (!form.nit.trim())               return 'El campo "NIT" es obligatorio.';
+      if (!form.dpi.trim())               return 'El campo "DPI del propietario" es obligatorio.';
+      if (!form.direccion_negocio.trim()) return 'El campo "Dirección" es obligatorio.';
+      if (!form.horario_atencion.trim())  return 'El campo "Horario de atención" es obligatorio.';
+      if (!form.zona)                     return 'Selecciona una zona o sector.';
+      if (!form.categoria)                return 'Selecciona la categoría del negocio.';
+    }
+    if (step === 3) {
+      if (!form.banco) return 'Selecciona un banco.';
+      if (form.banco === 'Otro' && !form.banco_otro.trim()) return 'Escribe el nombre de tu banco.';
+      if (!form.numero_cuenta.trim())  return 'El campo "Número de cuenta" es obligatorio.';
+      if (!form.titular_cuenta.trim()) return 'El campo "Titular de la cuenta" es obligatorio.';
+    }
+    return null;
   }
 
   function nextStep() {
-    if (step === 1) {
-      if (!form.nombre || !form.email || !form.password)
-        return Alert.alert('Completa los datos', 'Nombre, email y contraseña son obligatorios.');
-      if (form.password.length < 6) return Alert.alert('Contraseña', 'Mínimo 6 caracteres.');
-    }
-    if (step === 2 && !form.nombre_negocio)
-      return Alert.alert('Completa los datos', 'El nombre del negocio es obligatorio.');
+    const error = validarPaso();
+    if (error) return Alert.alert('Campo requerido', error);
     setStep(s => Math.min(s + 1, 4) as Step);
+  }
+
+  async function handleRegistro() {
+    setLoading(true);
+    try {
+      const nombreBanco = form.banco === 'Otro' ? form.banco_otro : form.banco;
+      const datos_bancarios = {
+        banco: nombreBanco,
+        numero_cuenta: form.numero_cuenta,
+        tipo_cuenta: form.tipo_cuenta,
+        titular: form.titular_cuenta,
+      };
+
+      await registroRestaurante({
+        nombre: form.nombre.trim(),
+        apellido: form.apellido.trim(),
+        email: form.email.trim().toLowerCase(),
+        password: form.password,
+        telefono: form.telefono.trim(),
+        nombre_negocio: form.nombre_negocio.trim(),
+        descripcion: form.descripcion.trim(),
+        categoria: form.categoria,
+        direccion_negocio: form.direccion_negocio.trim(),
+        zona: form.zona,
+        horario_atencion: form.horario_atencion.trim(),
+        nit: form.nit.trim(),
+        dpi: form.dpi.trim(),
+        datos_bancarios,
+      });
+
+      Alert.alert(
+        '¡Solicitud enviada! 🎉',
+        'Tu negocio está en revisión. El equipo de Bocara revisará tu información y te notificará cuando esté aprobado (normalmente en 24-48 horas).',
+        [{ text: 'Entendido', onPress: () => router.replace('/restaurante') }]
+      );
+    } catch (e: any) {
+      Alert.alert('Error al registrar', e.message || 'Ocurrió un error inesperado. Intenta de nuevo.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   const steps = ['Propietario', 'Negocio', 'Bancario', 'Foto'];
@@ -159,11 +157,11 @@ export default function RegistroRestauranteScreen() {
           <>
             <Text style={s.section}>👤 Datos del propietario</Text>
             {[
-              { key: 'nombre',   label: 'Nombre *',     placeholder: 'María' },
-              { key: 'apellido', label: 'Apellido',      placeholder: 'González' },
-              { key: 'email',    label: 'Correo *',      placeholder: 'maria@negocio.com', keyboard: 'email-address' as any, lower: true },
-              { key: 'password', label: 'Contraseña *',  placeholder: 'Mínimo 6 caracteres', secure: true },
-              { key: 'telefono', label: 'Teléfono',      placeholder: '5555-1234', keyboard: 'phone-pad' as any },
+              { key: 'nombre',   label: 'Nombre *',            placeholder: 'María' },
+              { key: 'apellido', label: 'Apellido *',           placeholder: 'González' },
+              { key: 'email',    label: 'Correo electrónico *', placeholder: 'maria@negocio.com', keyboard: 'email-address' as any, lower: true },
+              { key: 'password', label: 'Contraseña *',         placeholder: 'Mínimo 6 caracteres', secure: true },
+              { key: 'telefono', label: 'Teléfono *',           placeholder: '5555-1234', keyboard: 'phone-pad' as any },
             ].map(({ key, label, placeholder, keyboard, secure, lower }) => (
               <View key={key}>
                 <Text style={s.label}>{label}</Text>
@@ -182,12 +180,12 @@ export default function RegistroRestauranteScreen() {
           <>
             <Text style={s.section}>🍽️ Información del negocio</Text>
             {[
-              { key: 'nombre_negocio', label: 'Nombre del negocio *', placeholder: 'Panadería San Marcos' },
-              { key: 'descripcion',    label: 'Descripción',          placeholder: 'Somos una panadería artesanal...', multi: true },
-              { key: 'nit',            label: 'NIT',                  placeholder: '1234567-8' },
-              { key: 'dpi',            label: 'DPI del propietario',  placeholder: '1234 12345 1234' },
-              { key: 'direccion_negocio', label: 'Dirección',         placeholder: '5a Avenida 10-35' },
-              { key: 'horario_atencion',  label: 'Horario de atención', placeholder: 'Lunes a Viernes 7am - 9pm' },
+              { key: 'nombre_negocio',    label: 'Nombre del negocio *',  placeholder: 'Panadería San Marcos' },
+              { key: 'descripcion',       label: 'Descripción *',         placeholder: 'Somos una panadería artesanal...', multi: true },
+              { key: 'nit',              label: 'NIT *',                  placeholder: '1234567-8' },
+              { key: 'dpi',              label: 'DPI del propietario *',  placeholder: '1234 12345 1234' },
+              { key: 'direccion_negocio', label: 'Dirección *',           placeholder: '5a Avenida 10-35' },
+              { key: 'horario_atencion',  label: 'Horario de atención *', placeholder: 'Lunes a Viernes 7am - 9pm' },
             ].map(({ key, label, placeholder, multi }) => (
               <View key={key}>
                 <Text style={s.label}>{label}</Text>
@@ -200,23 +198,27 @@ export default function RegistroRestauranteScreen() {
               </View>
             ))}
 
-            <Text style={s.label}>Zona / Sector</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }} contentContainerStyle={{ gap: 8 }}>
+            <Text style={s.label}>Zona / Sector *</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }} contentContainerStyle={{ gap: 8 }}>
               {ZONAS_GT.map((z) => (
                 <TouchableOpacity key={z} style={[s.chip, form.zona === z && s.chipActive]} onPress={() => setForm(f => ({ ...f, zona: z }))}>
                   <Text style={[s.chipText, form.zona === z && s.chipTextActive]}>{z}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
+            {!form.zona && <Text style={s.required}>Selecciona una zona</Text>}
+            <View style={{ height: 12 }} />
 
-            <Text style={s.label}>Categoría</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }} contentContainerStyle={{ gap: 8 }}>
+            <Text style={s.label}>Categoría *</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }} contentContainerStyle={{ gap: 8 }}>
               {CATEGORIAS.map((cat) => (
                 <TouchableOpacity key={cat} style={[s.chip, form.categoria === cat && s.chipActive]} onPress={() => setForm(f => ({ ...f, categoria: cat }))}>
                   <Text style={[s.chipText, form.categoria === cat && s.chipTextActive]}>{cat}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
+            {!form.categoria && <Text style={s.required}>Selecciona una categoría</Text>}
+            <View style={{ height: 12 }} />
           </>
         )}
 
@@ -225,19 +227,40 @@ export default function RegistroRestauranteScreen() {
           <>
             <Text style={s.section}>🏦 Datos bancarios</Text>
             <View style={s.infoCard}>
-              <Text style={s.infoText}>Estos datos se usan para transferirte el 75% de tus ventas cada semana. Son completamente seguros y solo los ve el equipo de Bocara.</Text>
+              <Text style={s.infoText}>Estos datos se usan para transferirte el 75% de tus ventas. Son completamente seguros y solo los ve el equipo de Bocara.</Text>
             </View>
 
-            <Text style={s.label}>Banco</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }} contentContainerStyle={{ gap: 8 }}>
+            <Text style={s.label}>Banco *</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }} contentContainerStyle={{ gap: 8 }}>
               {BANCOS_GT.map((b) => (
-                <TouchableOpacity key={b} style={[s.chip, form.banco === b && s.chipActive]} onPress={() => setForm(f => ({ ...f, banco: b }))}>
+                <TouchableOpacity
+                  key={b}
+                  style={[s.chip, form.banco === b && s.chipActive]}
+                  onPress={() => setForm(f => ({ ...f, banco: b, banco_otro: b === 'Otro' ? f.banco_otro : '' }))}
+                >
                   <Text style={[s.chipText, form.banco === b && s.chipTextActive]}>{b}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
+            {!form.banco && <Text style={s.required}>Selecciona un banco</Text>}
+            <View style={{ height: 12 }} />
 
-            <Text style={s.label}>Tipo de cuenta</Text>
+            {/* Campo de texto para banco personalizado */}
+            {form.banco === 'Otro' && (
+              <View>
+                <Text style={s.label}>Nombre del banco *</Text>
+                <TextInput
+                  style={s.input}
+                  placeholder="Escribe el nombre de tu banco"
+                  placeholderTextColor={Colors.textLight}
+                  value={form.banco_otro}
+                  onChangeText={set('banco_otro')}
+                  autoFocus
+                />
+              </View>
+            )}
+
+            <Text style={s.label}>Tipo de cuenta *</Text>
             <View style={s.row}>
               {TIPOS_CUENTA.map((t) => (
                 <TouchableOpacity key={t} style={[s.chipSmall, form.tipo_cuenta === t && s.chipActive]} onPress={() => setForm(f => ({ ...f, tipo_cuenta: t }))}>
@@ -247,8 +270,8 @@ export default function RegistroRestauranteScreen() {
             </View>
 
             {[
-              { key: 'numero_cuenta',   label: 'Número de cuenta', placeholder: '000-000000-00', keyboard: 'numeric' as any },
-              { key: 'titular_cuenta',  label: 'Titular de la cuenta', placeholder: 'María González' },
+              { key: 'numero_cuenta',  label: 'Número de cuenta *',      placeholder: '000-000000-00', keyboard: 'numeric' as any },
+              { key: 'titular_cuenta', label: 'Titular de la cuenta *',   placeholder: 'María González' },
             ].map(({ key, label, placeholder, keyboard }) => (
               <View key={key}>
                 <Text style={s.label}>{label}</Text>
@@ -258,8 +281,6 @@ export default function RegistroRestauranteScreen() {
                 />
               </View>
             ))}
-
-            <Text style={s.optionalNote}>* Los datos bancarios son opcionales. Puedes agregarlos después desde tu panel.</Text>
           </>
         )}
 
@@ -267,7 +288,7 @@ export default function RegistroRestauranteScreen() {
         {step === 4 && (
           <>
             <Text style={s.section}>📸 Foto del negocio</Text>
-            <Text style={s.optionalNote}>Opcional. Puedes subir una foto ahora o después desde tu panel.</Text>
+            <Text style={s.optionalNote}>Opcional. Puedes subirla ahora o después desde tu panel.</Text>
 
             <TouchableOpacity style={s.fotoBtn} onPress={seleccionarFoto}>
               {form.foto_perfil_uri ? (
@@ -284,18 +305,21 @@ export default function RegistroRestauranteScreen() {
             </TouchableOpacity>
 
             <View style={s.resumenCard}>
-              <Text style={s.resumenTitle}>Resumen de tu registro</Text>
+              <Text style={s.resumenTitle}>Resumen de tu solicitud</Text>
               {[
                 { label: 'Propietario', val: `${form.nombre} ${form.apellido}` },
-                { label: 'Email', val: form.email },
-                { label: 'Negocio', val: form.nombre_negocio },
-                { label: 'Categoría', val: form.categoria || 'Restaurante' },
-                { label: 'Dirección', val: `${form.direccion_negocio}${form.zona ? `, ${form.zona}` : ''}` },
-                { label: 'Banco', val: form.banco || 'No especificado' },
+                { label: 'Email',       val: form.email },
+                { label: 'Teléfono',    val: form.telefono },
+                { label: 'Negocio',     val: form.nombre_negocio },
+                { label: 'Categoría',   val: form.categoria },
+                { label: 'Dirección',   val: `${form.direccion_negocio}, ${form.zona}` },
+                { label: 'NIT',         val: form.nit },
+                { label: 'Banco',       val: form.banco === 'Otro' ? form.banco_otro : form.banco },
+                { label: 'Cuenta',      val: form.numero_cuenta },
               ].map(({ label, val }) => val ? (
                 <View key={label} style={s.resumenRow}>
                   <Text style={s.resumenLabel}>{label}</Text>
-                  <Text style={s.resumenVal}>{val}</Text>
+                  <Text style={s.resumenVal} numberOfLines={1}>{val}</Text>
                 </View>
               ) : null)}
             </View>
@@ -317,12 +341,11 @@ export default function RegistroRestauranteScreen() {
               <Text style={s.btnNextText}>Siguiente →</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={s.btnSubmit} onPress={handleRegistro} disabled={loading || uploadingImg}>
-              {loading || uploadingImg ? (
-                <ActivityIndicator color={Colors.white} />
-              ) : (
-                <Text style={s.btnSubmitText}>🚀 Enviar solicitud</Text>
-              )}
+            <TouchableOpacity style={s.btnSubmit} onPress={handleRegistro} disabled={loading}>
+              {loading
+                ? <ActivityIndicator color={Colors.white} />
+                : <Text style={s.btnSubmitText}>🚀 Enviar solicitud</Text>
+              }
             </TouchableOpacity>
           )}
         </View>
@@ -354,6 +377,7 @@ const s = StyleSheet.create({
   scroll: { padding: 20 },
   section: { fontSize: 16, fontWeight: '800', color: Colors.brown, marginBottom: 16, marginTop: 4 },
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
+  required: { fontSize: 11, color: Colors.error, marginBottom: 8 },
   input: {
     backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border,
     borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 16,
@@ -376,8 +400,8 @@ const s = StyleSheet.create({
   resumenCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1.5, borderColor: Colors.border },
   resumenTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
   resumenRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  resumenLabel: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
-  resumenVal: { fontSize: 13, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
+  resumenLabel: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  resumenVal: { fontSize: 12, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
   pendienteInfo: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF3C7', borderRadius: 14, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#F59E0B40' },
   pendienteTitle: { fontSize: 14, fontWeight: '800', color: '#92400E' },
   pendienteSub: { fontSize: 12, color: '#B45309', marginTop: 2, lineHeight: 18 },

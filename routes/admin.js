@@ -14,7 +14,7 @@ function adminOnly(req, res, next) {
 router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const [usersRes, negociosRes, pedidosRes, bolsasRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
-    supabase.from('negocios').select('id,verificado,activo'),
+    supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
     supabase.from('pedidos').select('total,estado,estado_pago'),
     supabase.from('bolsas').select('co2_salvado_kg'),
   ]);
@@ -23,11 +23,15 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const ingresos = pagados.reduce((s, p) => s + (p.total || 0), 0);
   const negocios = negociosRes.data || [];
   const comision = ingresos * 0.25;
+  // Contar pendientes: estado_verificacion='pendiente' o activo=false y no verificado (legacy)
+  const negocios_pendientes = negocios.filter(n =>
+    n.estado_verificacion === 'pendiente' || (!n.verificado && n.activo === false && n.estado_verificacion !== 'rechazado')
+  ).length;
   res.json({
     total_usuarios: usersRes.count || 0,
     total_negocios: negocios.length,
     negocios_activos: negocios.filter(n => n.activo !== false).length,
-    negocios_sin_verificar: negocios.filter(n => !n.verificado).length,
+    negocios_sin_verificar: negocios_pendientes,
     total_pedidos: pedidos.length,
     pedidos_completados: pedidos.filter(p => p.estado === 'recogido').length,
     ingresos_totales: ingresos,
@@ -97,59 +101,87 @@ router.get('/negocios', authMiddleware, adminOnly, async (req, res) => {
 
 // GET /api/admin/negocios/pendientes — restaurantes esperando verificación
 router.get('/negocios/pendientes', authMiddleware, adminOnly, async (req, res) => {
+  // Intentar con estado_verificacion primero
   let { data, error } = await supabase
     .from('negocios')
-    .select('*,usuarios!negocios_propietario_id_fkey(nombre,apellido,email,expo_push_token)')
+    .select('*')
     .eq('estado_verificacion', 'pendiente')
     .order('created_at', { ascending: false });
+
   if (error) {
-    const r = await supabase.from('negocios').select('id,nombre,categoria,zona,nit,dpi,datos_bancarios,horario_atencion,telefono,verificado,activo,propietario_id,created_at').eq('verificado', false).eq('activo', false);
+    // Fallback: columna no existe aún — usar verificado + activo
+    const r = await supabase
+      .from('negocios')
+      .select('id,nombre,descripcion,categoria,zona,ciudad,telefono,direccion,email,verificado,activo,propietario_id,created_at')
+      .eq('verificado', false)
+      .eq('activo', false)
+      .order('created_at', { ascending: false });
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+
+  // Enriquecer con datos del propietario (query separada, más compatible)
+  const negocios = data || [];
+  if (negocios.length > 0) {
+    const propIds = [...new Set(negocios.map(n => n.propietario_id).filter(Boolean))];
+    if (propIds.length > 0) {
+      const { data: users } = await supabase
+        .from('usuarios')
+        .select('id,nombre,apellido,email,expo_push_token')
+        .in('id', propIds);
+      const usersMap = {};
+      for (const u of (users || [])) usersMap[u.id] = u;
+      for (const n of negocios) {
+        n.usuarios = usersMap[n.propietario_id] || null;
+      }
+    }
+  }
+  res.json(negocios);
 });
+
+async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo, extra = {}) {
+  try {
+    const { data: u } = await supabase.from('usuarios').select('expo_push_token').eq('id', propietarioId).single();
+    if (u?.expo_push_token) {
+      await enviarNotificacionPush(u.expo_push_token, titulo, cuerpo, { tipo, ...extra });
+    }
+    await guardarNotificacion(supabase, propietarioId, tipo, titulo, cuerpo, extra);
+  } catch { }
+}
 
 // PUT /api/admin/negocios/:id/verificar (alias de /aprobar)
 router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res) => {
-  const { data, error } = await supabase
-    .from('negocios').update({ verificado: true, activo: true, estado_verificacion: 'aprobado' }).eq('id', req.params.id).select('*,usuarios!negocios_propietario_id_fkey(expo_push_token,nombre,email)').single();
+  const updates = { verificado: true, activo: true };
+  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
-  const propietario = data.usuarios;
-  if (propietario?.expo_push_token) {
-    await enviarNotificacionPush(propietario.expo_push_token, '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`, { tipo: 'negocio_aprobado' });
-    await guardarNotificacion(supabase, data.propietario_id, 'negocio_aprobado', '¡Negocio aprobado!', `${data.nombre} ya está visible para los clientes.`);
-  }
-  res.json(data);
+  // Intentar marcar estado_verificacion si la columna existe
+  await supabase.from('negocios').update({ estado_verificacion: 'aprobado', motivo_rechazo: null }).eq('id', req.params.id);
+  await notificarPropietario(data.propietario_id, data.nombre, 'negocio_aprobado', '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`);
+  res.json({ ...data, estado_verificacion: 'aprobado' });
 });
 
 // PUT /api/admin/negocios/:id/aprobar
 router.put('/negocios/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
-  const { data, error } = await supabase
-    .from('negocios').update({ verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null }).eq('id', req.params.id).select('*,usuarios!negocios_propietario_id_fkey(expo_push_token,nombre,email)').single();
+  const updates = { verificado: true, activo: true };
+  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
-  const propietario = data.usuarios;
-  if (propietario?.expo_push_token) {
-    await enviarNotificacionPush(propietario.expo_push_token, '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`, { tipo: 'negocio_aprobado' });
-    await guardarNotificacion(supabase, data.propietario_id, 'negocio_aprobado', '¡Negocio aprobado!', `${data.nombre} ya está visible para los clientes.`);
-  }
-  res.json(data);
+  await supabase.from('negocios').update({ estado_verificacion: 'aprobado', motivo_rechazo: null }).eq('id', req.params.id);
+  await notificarPropietario(data.propietario_id, data.nombre, 'negocio_aprobado', '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`);
+  res.json({ ...data, estado_verificacion: 'aprobado' });
 });
 
 // PUT /api/admin/negocios/:id/rechazar
 router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
   const { motivo } = req.body;
-  const updates = { verificado: false, activo: false, estado_verificacion: 'rechazado' };
-  if (motivo) updates.motivo_rechazo = motivo;
-  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select('*,usuarios!negocios_propietario_id_fkey(expo_push_token)').single();
+  const { data, error } = await supabase.from('negocios').update({ verificado: false, activo: false }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
-  const propietario = data.usuarios;
-  if (propietario?.expo_push_token) {
-    const motivoTexto = motivo ? `: ${motivo}` : '. Contacta a soporte para más información.';
-    await enviarNotificacionPush(propietario.expo_push_token, '❌ Solicitud rechazada', `Tu solicitud para ${data.nombre} fue rechazada${motivoTexto}`, { tipo: 'negocio_rechazado', motivo });
-    await guardarNotificacion(supabase, data.propietario_id, 'negocio_rechazado', 'Solicitud rechazada', `Tu solicitud fue rechazada${motivoTexto}`);
-  }
-  res.json(data);
+  // Intentar guardar motivo/estado si las columnas existen
+  const rechazarUpd = { estado_verificacion: 'rechazado' };
+  if (motivo) rechazarUpd.motivo_rechazo = motivo;
+  await supabase.from('negocios').update(rechazarUpd).eq('id', req.params.id);
+  const motivoTexto = motivo ? `: ${motivo}` : '. Contacta a soporte para más información.';
+  await notificarPropietario(data.propietario_id, data.nombre, 'negocio_rechazado', '❌ Solicitud rechazada', `Tu solicitud para ${data.nombre} fue rechazada${motivoTexto}`, { motivo });
+  res.json({ ...data, estado_verificacion: 'rechazado', motivo_rechazo: motivo });
 });
 
 // PUT /api/admin/negocios/:id/toggle

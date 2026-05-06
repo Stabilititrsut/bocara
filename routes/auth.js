@@ -53,7 +53,28 @@ router.post('/registro', async (req, res) => {
       if (dpi) negocioData.dpi = dpi;
       if (datos_bancarios) negocioData.datos_bancarios = datos_bancarios;
       if (horario_atencion) negocioData.horario_atencion = horario_atencion;
-      await supabase.from('negocios').insert([negocioData]);
+
+      const { error: negocioError } = await supabase.from('negocios').insert([negocioData]);
+      if (negocioError) {
+        // Fallback: columnas nuevas no existen aún — reintentar con campos básicos
+        const basicData = {
+          propietario_id: usuario.id,
+          email: email.toLowerCase().trim(),
+          nombre: nombre_negocio,
+          direccion: direccion_negocio || '',
+          categoria: categoria || 'Restaurante',
+          zona: zona || '',
+          ciudad: ciudad || 'Guatemala',
+          activo: false,
+          verificado: false,
+        };
+        const { error: basicError } = await supabase.from('negocios').insert([basicData]);
+        if (basicError) {
+          // Eliminar el usuario recién creado para no dejar datos huérfanos
+          await supabase.from('usuarios').delete().eq('id', usuario.id);
+          return res.status(400).json({ error: `Error al crear el negocio: ${basicError.message}` });
+        }
+      }
     }
 
     // Puntos de bienvenida para clientes nuevos
