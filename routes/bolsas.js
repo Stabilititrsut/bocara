@@ -19,13 +19,17 @@ router.get('/', async (req, res) => {
     .eq('activo', true)
     .order('created_at', { ascending: false });
 
-  if (mi_negocio !== 'true') query = query.gt('cantidad_disponible', 0);
+  if (mi_negocio !== 'true') {
+    query = query.gt('cantidad_disponible', 0);
+    // Solo bolsas aprobadas en el feed público; degradar si la columna no existe
+    query = query.or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
+  }
   if (tipo) query = query.eq('tipo', tipo);
   if (negocio_id) query = query.eq('negocio_id', negocio_id);
 
   let { data, error } = await query;
   if (error) {
-    // Fallback sin columnas opcionales
+    // Fallback sin columnas opcionales (estado_aprobacion puede no existir aún)
     let q2 = supabase
       .from('bolsas')
       .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
@@ -105,7 +109,9 @@ router.post('/', authMiddleware, async (req, res) => {
   const nId = negocio_id || negocio?.id;
   if (!nId) return res.status(400).json({ error: 'Negocio no encontrado' });
 
-  const { data, error } = await supabase
+  const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
+
+  let { data, error } = await supabase
     .from('bolsas')
     .insert([{
       negocio_id: nId, nombre, descripcion, contenido,
@@ -117,14 +123,37 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
       co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
+      estado_aprobacion: estadoAprobacion,
     }])
     .select()
     .single();
 
+  if (error) {
+    // Fallback: columna estado_aprobacion puede no existir aún
+    const r = await supabase
+      .from('bolsas')
+      .insert([{
+        negocio_id: nId, nombre, descripcion, contenido,
+        precio_original: parseFloat(precio_original),
+        precio_descuento: parseFloat(precio_descuento),
+        cantidad_disponible: parseInt(cantidad_disponible) || 1,
+        tipo: tipo || 'bolsa', categoria,
+        hora_recogida_inicio: hora_recogida_inicio || '18:00',
+        hora_recogida_fin: hora_recogida_fin || '20:00',
+        permite_envio: permite_envio || false,
+        co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
+      }])
+      .select()
+      .single();
+    data = r.data; error = r.error;
+  }
+
   if (error) return res.status(400).json({ error: error.message });
 
-  // Notificar a usuarios que tienen este negocio en favoritos
-  notificarFavoritos(nId, data.nombre, data.id).catch(() => {});
+  // Notificar favoritos solo si la bolsa está aprobada (no pendiente)
+  if (!data.estado_aprobacion || data.estado_aprobacion === 'aprobado') {
+    notificarFavoritos(nId, data.nombre, data.id).catch(() => {});
+  }
 
   res.status(201).json(data);
 });
@@ -133,7 +162,7 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa } = await supabase
     .from('bolsas')
-    .select('negocio_id, negocios(propietario_id)')
+    .select('negocio_id, estado_aprobacion, negocios(propietario_id)')
     .eq('id', req.params.id)
     .single();
   if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
@@ -142,11 +171,24 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','co2_salvado_kg','activo'];
+    'permite_envio','co2_salvado_kg','activo','estado_aprobacion'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
-  const { data, error } = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();
+  // Si un restaurante (no admin) edita una bolsa rechazada, reenviarla a revisión
+  if (req.usuario.rol !== 'admin' && bolsa.estado_aprobacion === 'rechazado') {
+    updates.estado_aprobacion = 'pendiente';
+    updates.motivo_rechazo = null;
+  }
+
+  let { data, error } = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();
+  if (error) {
+    // Fallback: columna estado_aprobacion puede no existir aún — reintentar sin ella
+    delete updates.estado_aprobacion;
+    delete updates.motivo_rechazo;
+    const r = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();
+    data = r.data; error = r.error;
+  }
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });

@@ -147,6 +147,10 @@ const SQL_STATEMENTS = [
     clave TEXT PRIMARY KEY,
     valor TEXT NOT NULL
   )`,
+  // bolsas — aprobación de contenido
+  "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS estado_aprobacion TEXT DEFAULT 'aprobado'",
+  "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT",
+  "UPDATE bolsas SET estado_aprobacion = 'aprobado' WHERE estado_aprobacion IS NULL",
 ];
 
 async function runSQLMigrations() {

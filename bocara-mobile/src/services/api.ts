@@ -123,6 +123,10 @@ export const adminAPI = {
   liquidaciones: () => api.get('/admin/liquidaciones'),
   pagarLiquidacion: (restaurante_id: string, data?: any) =>
     api.post(`/admin/liquidaciones/${restaurante_id}/pagar`, data || {}),
+  contenidoPendiente: () => api.get('/admin/contenido/pendiente'),
+  aprobarBolsa: (id: string) => api.put(`/admin/bolsas/${id}/aprobar`),
+  rechazarBolsa: (id: string, motivo?: string) =>
+    api.put(`/admin/bolsas/${id}/rechazar`, { motivo }),
 };
 
 export default api;

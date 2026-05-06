@@ -114,6 +114,7 @@ export default function PedidosRestauranteScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filtro, setFiltro] = useState('todos');
   const [scannerVisible, setScannerVisible] = useState(false);
+  const pollingRef = useRef<any>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -123,6 +124,12 @@ export default function PedidosRestauranteScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  // Polling cada 10 segundos para detectar nuevos pedidos
+  useEffect(() => {
+    pollingRef.current = setInterval(cargar, 10000);
+    return () => clearInterval(pollingRef.current);
+  }, [cargar]);
 
   async function cambiarEstado(id: string, nuevoEstado: string) {
     try {

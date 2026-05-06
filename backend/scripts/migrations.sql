@@ -81,3 +81,8 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS activo            BOOLEAN DEFAULT 
     );
 */
 -- NOTA: Las políticas de Storage se manejan desde Supabase Dashboard > Storage > Policies
+
+-- 9. Aprobación de bolsas/cupones
+ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS estado_aprobacion TEXT DEFAULT 'aprobado';
+ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT;
+UPDATE bolsas SET estado_aprobacion = 'aprobado' WHERE estado_aprobacion IS NULL;

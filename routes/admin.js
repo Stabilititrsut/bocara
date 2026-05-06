@@ -458,4 +458,142 @@ router.put('/config', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
+// GET /api/admin/contenido/pendiente — bolsas y cupones pendientes de aprobación
+router.get('/contenido/pendiente', authMiddleware, adminOnly, async (req, res) => {
+  let { data, error } = await supabase
+    .from('bolsas')
+    .select('*, negocios(id,nombre,zona,ciudad,propietario_id)')
+    .eq('estado_aprobacion', 'pendiente')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    // Columna no existe aún — devolver lista vacía de forma segura
+    return res.json([]);
+  }
+
+  const bolsas = data || [];
+
+  // Enriquecer con datos del propietario
+  if (bolsas.length > 0) {
+    const propIds = [...new Set(bolsas.map(b => b.negocios?.propietario_id).filter(Boolean))];
+    if (propIds.length > 0) {
+      const { data: users } = await supabase
+        .from('usuarios')
+        .select('id,nombre,apellido,email,expo_push_token')
+        .in('id', propIds);
+      const usersMap = {};
+      for (const u of (users || [])) usersMap[u.id] = u;
+      for (const b of bolsas) {
+        if (b.negocios?.propietario_id) {
+          b.negocios.usuarios = usersMap[b.negocios.propietario_id] || null;
+        }
+      }
+    }
+  }
+
+  res.json(bolsas);
+});
+
+// PUT /api/admin/bolsas/:id/aprobar
+router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
+  const { data: bolsa, error: fetchErr } = await supabase
+    .from('bolsas')
+    .select('*, negocios(id,nombre,propietario_id)')
+    .eq('id', req.params.id)
+    .single();
+  if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+
+  const { data, error } = await supabase
+    .from('bolsas')
+    .update({ estado_aprobacion: 'aprobado', motivo_rechazo: null })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+
+  // Notificar al propietario del restaurante
+  const propietarioId = bolsa.negocios?.propietario_id;
+  if (propietarioId) {
+    await notificarPropietario(
+      propietarioId,
+      bolsa.nombre,
+      'bolsa_aprobada',
+      '✅ ¡Bolsa aprobada!',
+      `Tu bolsa "${bolsa.nombre}" ya está visible para los clientes en Bocara.`,
+      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id }
+    );
+  }
+
+  // Notificar a favoritos que hay una nueva bolsa disponible
+  try {
+    const { data: negocio } = await supabase.from('negocios').select('nombre').eq('id', bolsa.negocio_id).single();
+    const nombreNegocio = negocio?.nombre || 'Tu restaurante favorito';
+    const { data: favs } = await supabase
+      .from('favoritos')
+      .select('usuario_id, usuarios(expo_push_token)')
+      .eq('negocio_id', bolsa.negocio_id);
+    if (favs?.length) {
+      const { enviarNotificacionesMultiples } = require('../services/notificaciones');
+      const tokens = favs.map(f => f.usuarios?.expo_push_token).filter(Boolean);
+      if (tokens.length) {
+        await enviarNotificacionesMultiples(
+          tokens,
+          '🛍️ ¡Nueva bolsa disponible!',
+          `${nombreNegocio} publicó: ${bolsa.nombre}`,
+          { negocioId: bolsa.negocio_id, bolsaId: bolsa.id, screen: 'home' }
+        );
+      }
+      for (const fav of favs) {
+        await guardarNotificacion(
+          supabase, fav.usuario_id, 'nueva_bolsa',
+          '🛍️ Nueva bolsa disponible',
+          `${nombreNegocio} publicó: ${bolsa.nombre}`,
+          { negocioId: bolsa.negocio_id, bolsaId: bolsa.id }
+        );
+      }
+    }
+  } catch { /* tabla favoritos puede no existir aún — fallo silencioso */ }
+
+  res.json(data);
+});
+
+// PUT /api/admin/bolsas/:id/rechazar
+router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
+  const { motivo } = req.body;
+
+  const { data: bolsa, error: fetchErr } = await supabase
+    .from('bolsas')
+    .select('*, negocios(id,nombre,propietario_id)')
+    .eq('id', req.params.id)
+    .single();
+  if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+
+  const updates = { estado_aprobacion: 'rechazado' };
+  if (motivo) updates.motivo_rechazo = motivo;
+
+  const { data, error } = await supabase
+    .from('bolsas')
+    .update(updates)
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+
+  // Notificar al propietario del restaurante
+  const propietarioId = bolsa.negocios?.propietario_id;
+  if (propietarioId) {
+    const motivoTexto = motivo ? `: ${motivo}` : '. Contacta a soporte para más información.';
+    await notificarPropietario(
+      propietarioId,
+      bolsa.nombre,
+      'bolsa_rechazada',
+      '❌ Bolsa rechazada',
+      `Tu bolsa "${bolsa.nombre}" fue rechazada${motivoTexto}`,
+      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
+    );
+  }
+
+  res.json(data);
+});
+
 module.exports = router;

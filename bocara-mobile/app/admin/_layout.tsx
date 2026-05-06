@@ -24,6 +24,7 @@ export default function AdminLayout() {
     }}>
       <Tabs.Screen name="index"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
       <Tabs.Screen name="verificacion"  options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="✅" label="Aprobar" focused={focused} /> }} />
+      <Tabs.Screen name="contenido"     options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Contenido" focused={focused} /> }} />
       <Tabs.Screen name="liquidaciones" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💸" label="Pagos" focused={focused} /> }} />
       <Tabs.Screen name="negocios"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Negocios" focused={focused} /> }} />
       <Tabs.Screen name="financiero"    options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Finanzas" focused={focused} /> }} />

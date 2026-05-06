@@ -147,11 +147,11 @@ export default function PedidosScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  // Polling cada 30 segundos si hay pedidos activos
+  // Polling cada 10 segundos si hay pedidos activos
   useEffect(() => {
-    const tieneActivos = pedidos.some(p => p.estado === 'confirmado' || p.estado === 'listo');
+    const tieneActivos = pedidos.some(p => p.estado === 'confirmado' || p.estado === 'listo' || p.estado === 'pendiente');
     if (tieneActivos) {
-      pollingRef.current = setInterval(cargar, 30000);
+      pollingRef.current = setInterval(cargar, 10000);
     } else {
       clearInterval(pollingRef.current);
     }
