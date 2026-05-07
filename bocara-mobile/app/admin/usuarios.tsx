@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl, Alert, TextInput, ActivityIndicator,
+  SafeAreaView, RefreshControl, TextInput, ActivityIndicator,
 } from 'react-native';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
@@ -21,6 +21,9 @@ export default function AdminUsuariosScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [rolFiltro, setRolFiltro] = useState('todos');
+  const [confirmando, setConfirmando] = useState<{ id: string; accion: string; nombre: string; rol?: string } | null>(null);
+  const [procesando, setProcesando] = useState<string | null>(null);
+  const [errores, setErrores] = useState<Record<string, string>>({});
 
   const cargar = useCallback(async () => {
     try {
@@ -31,44 +34,22 @@ export default function AdminUsuariosScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function suspender(id: string, nombre: string) {
-    Alert.alert('Suspender cuenta', `¿Suspender a "${nombre}"? No podrá iniciar sesión.`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Suspender', style: 'destructive',
-        onPress: async () => {
-          try { await adminAPI.suspenderUsuario(id); cargar(); }
-          catch (e: any) { Alert.alert('Error', e.message); }
-        },
-      },
-    ]);
-  }
-
-  async function rehabilitar(id: string, nombre: string, rolOriginal: string) {
-    const rol = rolOriginal === 'suspendido' ? 'cliente' : rolOriginal;
-    Alert.alert('Rehabilitar cuenta', `¿Rehabilitar a "${nombre}" como ${rol}?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Rehabilitar',
-        onPress: async () => {
-          try { await adminAPI.rehabilitarUsuario(id, rol); cargar(); }
-          catch (e: any) { Alert.alert('Error', e.message); }
-        },
-      },
-    ]);
-  }
-
-  async function cambiarRol(id: string, nuevoRol: string, nombre: string) {
-    Alert.alert('Cambiar rol', `¿Cambiar a "${nombre}" al rol "${nuevoRol}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Confirmar',
-        onPress: async () => {
-          try { await adminAPI.gestionarUsuario(id, { rol: nuevoRol }); cargar(); }
-          catch (e: any) { Alert.alert('Error', e.message); }
-        },
-      },
-    ]);
+  async function ejecutarAccion() {
+    if (!confirmando) return;
+    const { id, accion, rol } = confirmando;
+    setProcesando(id);
+    setConfirmando(null);
+    setErrores(prev => ({ ...prev, [id]: '' }));
+    try {
+      if (accion === 'suspender') await adminAPI.suspenderUsuario(id);
+      else if (accion === 'rehabilitar') await adminAPI.rehabilitarUsuario(id, rol || 'cliente');
+      else if (accion === 'cambiar_rol') await adminAPI.gestionarUsuario(id, { rol });
+      cargar();
+    } catch (e: any) {
+      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al procesar' }));
+    } finally {
+      setProcesando(null);
+    }
   }
 
   const filtrados = usuarios.filter((u) => {
@@ -97,7 +78,7 @@ export default function AdminUsuariosScreen() {
         />
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filtros} contentContainerStyle={{ paddingHorizontal: 14 }}>
+      <View style={s.filtros}>
         {(['todos', 'cliente', 'restaurante', 'admin', 'suspendido'] as const).map((r) => {
           const cfg = ROL_CONFIG[r];
           const isActive = rolFiltro === r;
@@ -113,7 +94,7 @@ export default function AdminUsuariosScreen() {
             </TouchableOpacity>
           );
         })}
-      </ScrollView>
+      </View>
 
       <ScrollView
         contentContainerStyle={s.scroll}
@@ -147,29 +128,56 @@ export default function AdminUsuariosScreen() {
                 <Text style={s.statItem}>💰 Q{(u.total_ahorrado || 0).toFixed(0)}</Text>
               </View>
 
-              {u.rol !== 'admin' && (
+              {errores[u.id] ? (
+                <View style={s.errorCard}><Text style={s.errorText}>⚠️ {errores[u.id]}</Text></View>
+              ) : null}
+
+              {confirmando?.id === u.id ? (
+                <View style={s.confirmCard}>
+                  <Text style={s.confirmText}>
+                    {confirmando.accion === 'suspender' && `¿Suspender a "${confirmando.nombre}"? No podrá iniciar sesión.`}
+                    {confirmando.accion === 'rehabilitar' && `¿Rehabilitar a "${confirmando.nombre}" como ${confirmando.rol}?`}
+                    {confirmando.accion === 'cambiar_rol' && `¿Cambiar a "${confirmando.nombre}" al rol "${confirmando.rol}"?`}
+                  </Text>
+                  <View style={s.confirmRow}>
+                    <TouchableOpacity style={s.confirmNo} onPress={() => setConfirmando(null)}>
+                      <Text style={s.confirmNoText}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[s.confirmSi, procesando === u.id && { opacity: 0.5 }]}
+                      onPress={ejecutarAccion}
+                      disabled={procesando === u.id}
+                    >
+                      {procesando === u.id
+                        ? <ActivityIndicator color={Colors.white} size="small" />
+                        : <Text style={s.confirmSiText}>Confirmar</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : u.rol !== 'admin' ? (
                 <View style={s.actions}>
                   {u.rol === 'suspendido' ? (
-                    <TouchableOpacity style={s.btnRehabilitar} onPress={() => rehabilitar(u.id, u.nombre, 'cliente')}>
+                    <TouchableOpacity style={s.btnRehabilitar} onPress={() => setConfirmando({ id: u.id, accion: 'rehabilitar', nombre: u.nombre, rol: 'cliente' })}>
                       <Text style={s.btnRehabilitarText}>▶ Rehabilitar</Text>
                     </TouchableOpacity>
                   ) : (
-                    <TouchableOpacity style={s.btnSuspender} onPress={() => suspender(u.id, u.nombre)}>
+                    <TouchableOpacity style={s.btnSuspender} onPress={() => setConfirmando({ id: u.id, accion: 'suspender', nombre: u.nombre })}>
                       <Text style={s.btnSuspenderText}>⏸ Suspender</Text>
                     </TouchableOpacity>
                   )}
                   {u.rol === 'cliente' && (
-                    <TouchableOpacity style={s.btnRol} onPress={() => cambiarRol(u.id, 'restaurante', u.nombre)}>
+                    <TouchableOpacity style={s.btnRol} onPress={() => setConfirmando({ id: u.id, accion: 'cambiar_rol', nombre: u.nombre, rol: 'restaurante' })}>
                       <Text style={s.btnRolText}>→ Restaurante</Text>
                     </TouchableOpacity>
                   )}
                   {(u.rol === 'cliente' || u.rol === 'restaurante') && (
-                    <TouchableOpacity style={[s.btnRol, { borderColor: '#7C3AED' }]} onPress={() => cambiarRol(u.id, 'admin', u.nombre)}>
+                    <TouchableOpacity style={[s.btnRol, { borderColor: '#7C3AED' }]} onPress={() => setConfirmando({ id: u.id, accion: 'cambiar_rol', nombre: u.nombre, rol: 'admin' })}>
                       <Text style={[s.btnRolText, { color: '#A78BFA' }]}>→ Admin</Text>
                     </TouchableOpacity>
                   )}
                 </View>
-              )}
+              ) : null}
             </View>
           );
         })}
@@ -186,8 +194,8 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: '900', color: Colors.white },
   searchRow: { padding: 12, paddingBottom: 4, backgroundColor: DARK },
   search: { backgroundColor: '#334155', borderRadius: 12, padding: 12, fontSize: 14, color: Colors.white },
-  filtros: { maxHeight: 52, backgroundColor: DARK, marginBottom: 2 },
-  chip: { borderWidth: 1.5, borderColor: '#334155', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, marginRight: 8, marginVertical: 8, backgroundColor: '#1E293B' },
+  filtros: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, paddingVertical: 10, backgroundColor: DARK, marginBottom: 2 },
+  chip: { borderWidth: 1.5, borderColor: '#334155', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7, backgroundColor: '#1E293B' },
   chipText: { fontSize: 12, color: '#94A3B8', fontWeight: '600' },
   scroll: { padding: 14 },
   count: { fontSize: 12, color: '#64748B', marginBottom: 12 },
@@ -208,4 +216,13 @@ const s = StyleSheet.create({
   btnRehabilitarText: { color: '#34D399', fontSize: 12, fontWeight: '700' },
   btnRol: { borderWidth: 1.5, borderColor: '#1D4ED8', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
   btnRolText: { color: '#60A5FA', fontSize: 12, fontWeight: '700' },
+  errorCard: { backgroundColor: '#450A0A', borderRadius: 8, padding: 8, marginBottom: 8, borderWidth: 1, borderColor: '#991B1B' },
+  errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
+  confirmCard: { backgroundColor: '#1E293B', borderRadius: 10, padding: 12, borderWidth: 1.5, borderColor: '#334155', marginTop: 4 },
+  confirmText: { color: '#E2E8F0', fontSize: 12, lineHeight: 18, marginBottom: 10 },
+  confirmRow: { flexDirection: 'row', gap: 8 },
+  confirmNo: { flex: 1, borderWidth: 1.5, borderColor: '#334155', borderRadius: 8, padding: 8, alignItems: 'center' },
+  confirmNoText: { color: '#94A3B8', fontWeight: '700', fontSize: 12 },
+  confirmSi: { flex: 1, backgroundColor: Colors.orange, borderRadius: 8, padding: 8, alignItems: 'center' },
+  confirmSiText: { color: Colors.white, fontWeight: '800', fontSize: 12 },
 });

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, Alert, TextInput, RefreshControl, Modal,
+  SafeAreaView, ActivityIndicator, TextInput, RefreshControl, Modal,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { adminAPI } from '@/src/services/api';
@@ -15,9 +15,10 @@ export default function AdminVerificacionScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [procesando, setProcesando] = useState<string | null>(null);
+  const [confirmandoId, setConfirmandoId] = useState<string | null>(null);
   const [modalRechazo, setModalRechazo] = useState<{ id: string; nombre: string } | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
-  const [detalle, setDetalle] = useState<any | null>(null);
+  const [errores, setErrores] = useState<Record<string, string>>({});
 
   const cargar = useCallback(async () => {
     try {
@@ -31,36 +32,31 @@ export default function AdminVerificacionScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function aprobar(id: string, nombre: string) {
-    Alert.alert('Aprobar negocio', `¿Aprobar "${nombre}"? Se notificará al propietario y el negocio estará visible.`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Aprobar', style: 'default', onPress: async () => {
-          setProcesando(id);
-          try {
-            await adminAPI.aprobarNegocio(id);
-            setNegocios(prev => prev.filter(n => n.id !== id));
-            Alert.alert('✅ Aprobado', `${nombre} ya está activo en Bocara.`);
-          } catch (e: any) {
-            Alert.alert('Error', e.message);
-          } finally {
-            setProcesando(null);
-          }
-        },
-      },
-    ]);
+  async function confirmarAprobacion(id: string, nombre: string) {
+    setProcesando(id);
+    setConfirmandoId(null);
+    setErrores(prev => ({ ...prev, [id]: '' }));
+    try {
+      await adminAPI.aprobarNegocio(id);
+      setNegocios(prev => prev.filter(n => n.id !== id));
+    } catch (e: any) {
+      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al aprobar' }));
+    } finally {
+      setProcesando(null);
+    }
   }
 
   async function rechazar() {
     if (!modalRechazo) return;
     setProcesando(modalRechazo.id);
+    const { id, nombre } = modalRechazo;
     setModalRechazo(null);
+    setErrores(prev => ({ ...prev, [id]: '' }));
     try {
-      await adminAPI.rechazarNegocio(modalRechazo.id, motivoRechazo);
-      setNegocios(prev => prev.filter(n => n.id !== modalRechazo.id));
-      Alert.alert('Rechazado', 'El propietario fue notificado.');
+      await adminAPI.rechazarNegocio(id, motivoRechazo);
+      setNegocios(prev => prev.filter(n => n.id !== id));
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al rechazar' }));
     } finally {
       setProcesando(null);
       setMotivoRechazo('');
@@ -98,7 +94,7 @@ export default function AdminVerificacionScreen() {
         ) : (
           negocios.map((n) => (
             <View key={n.id} style={s.card}>
-              {/* Encabezado del card */}
+              {/* Encabezado */}
               <View style={s.cardHeader}>
                 {n.imagen_url ? (
                   <Image source={{ uri: n.imagen_url }} style={s.cardImg} contentFit="cover" />
@@ -116,7 +112,7 @@ export default function AdminVerificacionScreen() {
                 </View>
               </View>
 
-              {/* Info del propietario */}
+              {/* Propietario */}
               <View style={s.section}>
                 <Text style={s.sectionTitle}>👤 Propietario</Text>
                 <InfoRow label="Nombre" val={`${n.usuarios?.nombre || ''} ${n.usuarios?.apellido || ''}`.trim() || '—'} />
@@ -124,14 +120,14 @@ export default function AdminVerificacionScreen() {
                 <InfoRow label="Teléfono" val={n.telefono || '—'} />
               </View>
 
-              {/* Info legal */}
+              {/* Legal */}
               <View style={s.section}>
                 <Text style={s.sectionTitle}>📋 Datos legales</Text>
                 <InfoRow label="NIT" val={n.nit || 'No proporcionado'} />
                 <InfoRow label="DPI" val={n.dpi || 'No proporcionado'} />
                 {(n.dpi_foto_url || n.datos_bancarios?.dpi_foto_url) ? (
                   <View style={{ marginTop: 10 }}>
-                    <Text style={{ fontSize: 11, color: '#94A3B8', fontWeight: '700', marginBottom: 6 }}>FOTO DPI ESCANEADO</Text>
+                    <Text style={{ fontSize: 11, color: '#94A3B8', fontWeight: '700', marginBottom: 6 }}>FOTO DPI</Text>
                     <Image
                       source={{ uri: n.dpi_foto_url || n.datos_bancarios?.dpi_foto_url }}
                       style={{ width: '100%', height: 140, borderRadius: 8, backgroundColor: '#334155' }}
@@ -140,22 +136,21 @@ export default function AdminVerificacionScreen() {
                   </View>
                 ) : (
                   <View style={{ marginTop: 6, backgroundColor: '#451A03', borderRadius: 8, padding: 8 }}>
-                    <Text style={{ fontSize: 11, color: '#F59E0B', fontWeight: '700' }}>⚠ Sin foto de DPI — solicitar al propietario</Text>
+                    <Text style={{ fontSize: 11, color: '#F59E0B', fontWeight: '700' }}>⚠ Sin foto de DPI</Text>
                   </View>
                 )}
               </View>
 
-              {/* Info del negocio */}
+              {/* Negocio */}
               <View style={s.section}>
                 <Text style={s.sectionTitle}>🏪 Negocio</Text>
                 <InfoRow label="Dirección" val={n.direccion || '—'} />
                 <InfoRow label="Zona" val={n.zona || '—'} />
-                <InfoRow label="Ciudad" val={n.ciudad || '—'} />
                 <InfoRow label="Horario" val={n.horario_atencion || 'No especificado'} />
                 {n.descripcion ? <InfoRow label="Descripción" val={n.descripcion} /> : null}
               </View>
 
-              {/* Datos bancarios */}
+              {/* Bancarios */}
               {n.datos_bancarios && (
                 <View style={s.section}>
                   <Text style={s.sectionTitle}>🏦 Datos bancarios</Text>
@@ -166,34 +161,58 @@ export default function AdminVerificacionScreen() {
                 </View>
               )}
 
-              {/* Fecha de solicitud */}
               <Text style={s.fechaSolicitud}>
                 Solicitud: {n.created_at ? new Date(n.created_at).toLocaleDateString('es-GT', { day: '2-digit', month: 'long', year: 'numeric' }) : '—'}
               </Text>
 
-              {/* Acciones */}
-              <View style={s.cardActions}>
-                <TouchableOpacity
-                  style={[s.btnRechazar, procesando === n.id && s.btnDisabled]}
-                  onPress={() => { setModalRechazo({ id: n.id, nombre: n.nombre }); setMotivoRechazo(''); }}
-                  disabled={!!procesando}
-                >
-                  {procesando === n.id
-                    ? <ActivityIndicator color={Colors.error} size="small" />
-                    : <Text style={s.btnRechazarText}>✕ Rechazar</Text>
-                  }
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[s.btnAprobar, procesando === n.id && s.btnDisabled]}
-                  onPress={() => aprobar(n.id, n.nombre)}
-                  disabled={!!procesando}
-                >
-                  {procesando === n.id
-                    ? <ActivityIndicator color={Colors.white} size="small" />
-                    : <Text style={s.btnAprobarText}>✓ Aprobar</Text>
-                  }
-                </TouchableOpacity>
-              </View>
+              {/* Error inline */}
+              {errores[n.id] ? (
+                <View style={s.errorCard}>
+                  <Text style={s.errorText}>⚠️ {errores[n.id]}</Text>
+                </View>
+              ) : null}
+
+              {/* Confirmación inline de aprobación */}
+              {confirmandoId === n.id ? (
+                <View style={s.confirmCard}>
+                  <Text style={s.confirmText}>¿Aprobar "{n.nombre}"? Se notificará al propietario y el negocio quedará activo.</Text>
+                  <View style={s.confirmBtns}>
+                    <TouchableOpacity style={s.confirmNo} onPress={() => setConfirmandoId(null)}>
+                      <Text style={s.confirmNoText}>Cancelar</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[s.confirmSi, procesando === n.id && s.btnDisabled]}
+                      onPress={() => confirmarAprobacion(n.id, n.nombre)}
+                      disabled={!!procesando}
+                    >
+                      {procesando === n.id
+                        ? <ActivityIndicator color={Colors.white} size="small" />
+                        : <Text style={s.confirmSiText}>✓ Sí, aprobar</Text>
+                      }
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <View style={s.cardActions}>
+                  <TouchableOpacity
+                    style={[s.btnRechazar, !!procesando && s.btnDisabled]}
+                    onPress={() => { setModalRechazo({ id: n.id, nombre: n.nombre }); setMotivoRechazo(''); }}
+                    disabled={!!procesando}
+                  >
+                    <Text style={s.btnRechazarText}>✕ Rechazar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.btnAprobar, !!procesando && s.btnDisabled]}
+                    onPress={() => setConfirmandoId(n.id)}
+                    disabled={!!procesando}
+                  >
+                    {procesando === n.id
+                      ? <ActivityIndicator color={Colors.white} size="small" />
+                      : <Text style={s.btnAprobarText}>✓ Aprobar</Text>
+                    }
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           ))
         )}
@@ -220,7 +239,10 @@ export default function AdminVerificacionScreen() {
                 <Text style={s.modalCancelarText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.modalRechazar} onPress={rechazar}>
-                <Text style={s.modalRechazarText}>Rechazar y notificar</Text>
+                {procesando
+                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  : <Text style={s.modalRechazarText}>Rechazar y notificar</Text>
+                }
               </TouchableOpacity>
             </View>
           </View>
@@ -261,13 +283,22 @@ const s = StyleSheet.create({
   pendienteBadgeText: { fontSize: 10, color: '#F59E0B', fontWeight: '800' },
   section: { backgroundColor: '#1A2744', borderRadius: 12, padding: 12, marginBottom: 10 },
   sectionTitle: { fontSize: 12, color: '#94A3B8', fontWeight: '700', marginBottom: 8, textTransform: 'uppercase' },
-  fechaSolicitud: { fontSize: 11, color: '#475569', textAlign: 'center', marginBottom: 12 },
+  fechaSolicitud: { fontSize: 11, color: '#475569', textAlign: 'center', marginBottom: 10 },
+  errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
+  errorText: { color: '#FCA5A5', fontSize: 13, fontWeight: '600' },
+  confirmCard: { backgroundColor: '#1A2744', borderRadius: 12, padding: 14, borderWidth: 1.5, borderColor: Colors.green },
+  confirmText: { color: '#E2E8F0', fontSize: 13, lineHeight: 20, marginBottom: 12 },
+  confirmBtns: { flexDirection: 'row', gap: 10 },
+  confirmNo: { flex: 1, borderWidth: 1.5, borderColor: '#334155', borderRadius: 10, padding: 12, alignItems: 'center' },
+  confirmNoText: { color: '#94A3B8', fontWeight: '700', fontSize: 14 },
+  confirmSi: { flex: 1, backgroundColor: Colors.green, borderRadius: 10, padding: 12, alignItems: 'center' },
+  confirmSiText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
   cardActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
   btnAprobar: { flex: 1, backgroundColor: Colors.green, borderRadius: 12, padding: 14, alignItems: 'center' },
   btnAprobarText: { color: Colors.white, fontWeight: '800', fontSize: 15 },
   btnRechazar: { flex: 1, backgroundColor: '#1E293B', borderWidth: 1.5, borderColor: Colors.error, borderRadius: 12, padding: 14, alignItems: 'center' },
   btnRechazarText: { color: Colors.error, fontWeight: '800', fontSize: 15 },
-  btnDisabled: { opacity: 0.5 },
+  btnDisabled: { opacity: 0.4 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalCard: { backgroundColor: DARK, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, borderTopWidth: 1, borderTopColor: '#334155' },
   modalTitle: { fontSize: 18, fontWeight: '900', color: Colors.white, marginBottom: 6 },

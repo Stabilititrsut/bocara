@@ -15,14 +15,20 @@ export default function AdminDashboard() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const { logout, usuario } = useAuth();
   const router = useRouter();
 
   const cargar = useCallback(async () => {
+    setLoadError('');
     try {
       const res = await adminAPI.stats();
       setStats(res.data);
-    } catch { } finally { setLoading(false); setRefreshing(false); }
+      setLastUpdated(new Date());
+    } catch (e: any) {
+      setLoadError(e.message || 'Error al cargar estadísticas');
+    } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
@@ -53,6 +59,18 @@ export default function AdminDashboard() {
         contentContainerStyle={s.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
       >
+        {/* Indicador de datos en vivo / error */}
+        {loadError ? (
+          <TouchableOpacity style={s.errorBanner} onPress={() => { setRefreshing(true); cargar(); }}>
+            <Text style={s.errorBannerText}>⚠️ {loadError} — Toca para reintentar</Text>
+          </TouchableOpacity>
+        ) : lastUpdated ? (
+          <View style={s.liveBanner}>
+            <Text style={s.liveDot}>●</Text>
+            <Text style={s.liveText}>Datos en vivo · Actualizado {lastUpdated.toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' })}</Text>
+          </View>
+        ) : null}
+
         {/* Comisión destacada */}
         <View style={s.comisionCard}>
           <View>
@@ -154,4 +172,9 @@ const s = StyleSheet.create({
   impactBig: { fontSize: 52, fontWeight: '900', color: '#6EE7B7' },
   impactLabel: { fontSize: 16, fontWeight: '700', color: Colors.white, textAlign: 'center' },
   impactSub: { fontSize: 13, color: '#34D399', marginTop: 4 },
+  errorBanner: { backgroundColor: '#450A0A', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: '#991B1B' },
+  errorBannerText: { color: '#FCA5A5', fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  liveBanner: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 6 },
+  liveDot: { color: '#22C55E', fontSize: 10 },
+  liveText: { fontSize: 11, color: '#64748B', fontWeight: '600' },
 });

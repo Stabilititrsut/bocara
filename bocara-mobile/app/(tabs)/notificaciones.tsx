@@ -13,6 +13,10 @@ const TIPO_CONFIG: Record<string, { emoji: string; color: string }> = {
   bolsa_recogida:      { emoji: '⭐', color: '#F5A623' },
   recordatorio_recogida: { emoji: '⏰', color: '#3B82F6' },
   nueva_bolsa:         { emoji: '🥡', color: Colors.orange },
+  negocio_aprobado:    { emoji: '🎉', color: '#22C55E' },
+  negocio_rechazado:   { emoji: '❌', color: '#EF4444' },
+  bolsa_aprobada:      { emoji: '✅', color: '#22C55E' },
+  bolsa_rechazada:     { emoji: '❌', color: '#EF4444' },
   default:             { emoji: '📬', color: Colors.textSecondary },
 };
 
@@ -35,7 +39,7 @@ function NotifCard({ notif, onMarcar }: { notif: any; onMarcar: (id: string) => 
           <Text style={s.cardTitulo} numberOfLines={1}>{notif.titulo}</Text>
           {!notif.leida && <View style={s.unreadDot} />}
         </View>
-        <Text style={s.cardMensaje} numberOfLines={2}>{notif.mensaje}</Text>
+        <Text style={s.cardMensaje} numberOfLines={2}>{notif.cuerpo || notif.mensaje}</Text>
         <Text style={s.cardFecha}>{fechaStr}</Text>
       </View>
     </TouchableOpacity>

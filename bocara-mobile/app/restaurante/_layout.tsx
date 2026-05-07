@@ -20,13 +20,14 @@ export default function RestauranteLayout() {
       tabBarStyle: { backgroundColor: Colors.white, borderTopColor: Colors.border, height: 64, paddingBottom: 8 },
       tabBarShowLabel: false,
     }}>
-      <Tabs.Screen name="index"     options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
-      <Tabs.Screen name="bolsas"    options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🥡" label="Sabores" focused={focused} /> }} />
-      <Tabs.Screen name="pedidos"   options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Pedidos" focused={focused} /> }} />
-      <Tabs.Screen name="ganancias" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Ganancias" focused={focused} /> }} />
-      <Tabs.Screen name="cupones"   options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🎫" label="Cupones" focused={focused} /> }} />
-      <Tabs.Screen name="historial" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📈" label="Historial" focused={focused} /> }} />
-      <Tabs.Screen name="perfil"    options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />
+      <Tabs.Screen name="index"          options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
+      <Tabs.Screen name="bolsas"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🥡" label="Sabores" focused={focused} /> }} />
+      <Tabs.Screen name="pedidos"        options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Pedidos" focused={focused} /> }} />
+      <Tabs.Screen name="ganancias"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Ganancias" focused={focused} /> }} />
+      <Tabs.Screen name="notificaciones" options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🔔" label="Avisos" focused={focused} /> }} />
+      <Tabs.Screen name="perfil"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />
+      <Tabs.Screen name="cupones"        options={{ href: null }} />
+      <Tabs.Screen name="historial"      options={{ href: null }} />
     </Tabs>
   );
 }

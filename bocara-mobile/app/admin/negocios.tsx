@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl, Alert, TextInput, ActivityIndicator, Modal,
+  SafeAreaView, RefreshControl, TextInput, ActivityIndicator, Modal,
 } from 'react-native';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
@@ -18,6 +18,9 @@ export default function AdminNegociosScreen() {
   const [filtro, setFiltro] = useState<Filtro>('pendientes');
   const [rechazarModal, setRechazarModal] = useState<any>(null);
   const [motivo, setMotivo] = useState('');
+  const [confirmando, setConfirmando] = useState<{ id: string; accion: 'aprobar' | 'toggle'; activo?: boolean } | null>(null);
+  const [procesando, setProcesando] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<Record<string, string>>({});
 
   const cargar = useCallback(async () => {
     try {
@@ -28,31 +31,38 @@ export default function AdminNegociosScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function verificar(id: string, nombre: string) {
-    Alert.alert('Aprobar negocio', `¿Aprobar "${nombre}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Aprobar', onPress: async () => { await adminAPI.verificarNegocio(id); cargar(); } },
-    ]);
+  async function confirmarAccion() {
+    if (!confirmando) return;
+    const { id, accion } = confirmando;
+    setProcesando(id);
+    setConfirmando(null);
+    setErrorMsg(prev => ({ ...prev, [id]: '' }));
+    try {
+      if (accion === 'aprobar') {
+        await adminAPI.verificarNegocio(id);
+      } else {
+        await adminAPI.toggleNegocio(id);
+      }
+      cargar();
+    } catch (e: any) {
+      setErrorMsg(prev => ({ ...prev, [id]: e.message || 'Error al procesar' }));
+    } finally {
+      setProcesando(null);
+    }
   }
 
   async function rechazar(id: string) {
+    setProcesando(id);
     try {
       await adminAPI.rechazarNegocio(id, motivo.trim() || undefined);
       setRechazarModal(null);
       setMotivo('');
       cargar();
-    } catch (e: any) { Alert.alert('Error', e.message); }
-  }
-
-  async function toggle(id: string, activo: boolean, nombre: string) {
-    Alert.alert(
-      activo ? 'Suspender negocio' : 'Activar negocio',
-      `¿${activo ? 'Suspender' : 'Activar'} "${nombre}"?`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', style: activo ? 'destructive' : 'default', onPress: async () => { await adminAPI.toggleNegocio(id); cargar(); } },
-      ]
-    );
+    } catch (e: any) {
+      setErrorMsg(prev => ({ ...prev, [id]: e.message || 'Error al rechazar' }));
+    } finally {
+      setProcesando(null);
+    }
   }
 
   const filtrados = negocios.filter((n) => {
@@ -134,28 +144,58 @@ export default function AdminNegociosScreen() {
               </View>
             </View>
 
-            <View style={s.actions}>
-              {!n.verificado && (
-                <>
-                  <TouchableOpacity style={s.btnAprobar} onPress={() => verificar(n.id, n.nombre)}>
-                    <Text style={s.btnAprobarText}>✓ Aprobar</Text>
+            {errorMsg[n.id] ? (
+              <View style={s.errorCard}><Text style={s.errorText}>⚠️ {errorMsg[n.id]}</Text></View>
+            ) : null}
+
+            {confirmando?.id === n.id ? (
+              <View style={s.confirmCard}>
+                <Text style={s.confirmText}>
+                  {confirmando.accion === 'aprobar'
+                    ? `¿Aprobar "${n.nombre}"? El propietario será notificado.`
+                    : `¿${confirmando.activo ? 'Suspender' : 'Activar'} "${n.nombre}"?`}
+                </Text>
+                <View style={s.confirmRow}>
+                  <TouchableOpacity style={s.confirmNo} onPress={() => setConfirmando(null)}>
+                    <Text style={s.confirmNoText}>Cancelar</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={s.btnRechazar} onPress={() => { setRechazarModal(n); setMotivo(''); }}>
-                    <Text style={s.btnRechazarText}>✕ Rechazar</Text>
+                  <TouchableOpacity
+                    style={[s.confirmSi, confirmando.accion === 'aprobar' ? s.confirmSiGreen : s.confirmSiOrange, procesando === n.id && { opacity: 0.5 }]}
+                    onPress={confirmarAccion}
+                    disabled={procesando === n.id}
+                  >
+                    {procesando === n.id
+                      ? <ActivityIndicator color={Colors.white} size="small" />
+                      : <Text style={s.confirmSiText}>Confirmar</Text>
+                    }
                   </TouchableOpacity>
-                </>
-              )}
-              {n.verificado && (
-                <TouchableOpacity
-                  style={[s.btnToggle, n.activo === false && s.btnToggleActivar]}
-                  onPress={() => toggle(n.id, n.activo !== false, n.nombre)}
-                >
-                  <Text style={[s.btnToggleText, n.activo === false && s.btnToggleTextActivar]}>
-                    {n.activo === false ? '▶ Activar' : '⏸ Suspender'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+                </View>
+              </View>
+            ) : (
+              <View style={s.actions}>
+                {!n.verificado && (
+                  <>
+                    <TouchableOpacity style={s.btnAprobar} onPress={() => setConfirmando({ id: n.id, accion: 'aprobar' })} disabled={!!procesando}>
+                      {procesando === n.id ? <ActivityIndicator color='#6EE7B7' size="small" /> : <Text style={s.btnAprobarText}>✓ Aprobar</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity style={s.btnRechazar} onPress={() => { setRechazarModal(n); setMotivo(''); }} disabled={!!procesando}>
+                      <Text style={s.btnRechazarText}>✕ Rechazar</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+                {n.verificado && (
+                  <TouchableOpacity
+                    style={[s.btnToggle, n.activo === false && s.btnToggleActivar]}
+                    onPress={() => setConfirmando({ id: n.id, accion: 'toggle', activo: n.activo !== false })}
+                    disabled={!!procesando}
+                  >
+                    <Text style={[s.btnToggleText, n.activo === false && s.btnToggleTextActivar]}>
+                      {n.activo === false ? '▶ Activar' : '⏸ Suspender'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
           </View>
         ))}
         <View style={{ height: 24 }} />
@@ -220,6 +260,17 @@ const s = StyleSheet.create({
   badgePendText: { fontSize: 11, color: '#FCD34D', fontWeight: '700' },
   badgeInac: { backgroundColor: '#1E1E2E', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
   badgeInacText: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#991B1B' },
+  errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
+  confirmCard: { backgroundColor: '#1A2744', borderRadius: 10, padding: 12, marginBottom: 4, borderWidth: 1.5, borderColor: '#334155' },
+  confirmText: { color: '#E2E8F0', fontSize: 13, lineHeight: 18, marginBottom: 10 },
+  confirmRow: { flexDirection: 'row', gap: 8 },
+  confirmNo: { flex: 1, borderWidth: 1.5, borderColor: '#334155', borderRadius: 8, padding: 10, alignItems: 'center' },
+  confirmNoText: { color: '#94A3B8', fontWeight: '700', fontSize: 13 },
+  confirmSi: { flex: 1, borderRadius: 8, padding: 10, alignItems: 'center' },
+  confirmSiGreen: { backgroundColor: '#065F46' },
+  confirmSiOrange: { backgroundColor: Colors.orange },
+  confirmSiText: { color: Colors.white, fontWeight: '800', fontSize: 13 },
   actions: { flexDirection: 'row', gap: 8, borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 10 },
   btnAprobar: { flex: 1, backgroundColor: '#065F46', borderRadius: 10, padding: 10, alignItems: 'center' },
   btnAprobarText: { color: '#6EE7B7', fontWeight: '700', fontSize: 13 },

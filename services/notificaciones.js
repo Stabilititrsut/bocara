@@ -47,7 +47,7 @@ async function guardarNotificacion(supabase, usuarioId, tipo, titulo, mensaje, d
       usuario_id: usuarioId,
       tipo,
       titulo,
-      mensaje,
+      cuerpo: mensaje,   // columna en Supabase es 'cuerpo', no 'mensaje'
       data,
       leida: false,
     }]);
