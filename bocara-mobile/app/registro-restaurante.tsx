@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator,
+  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
@@ -46,6 +46,8 @@ export default function RegistroRestauranteScreen() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const { registroRestaurante } = useAuth();
   const router = useRouter();
 
@@ -176,6 +178,7 @@ export default function RegistroRestauranteScreen() {
   async function handleRegistro() {
     if (!validarPaso()) return;
     setLoading(true);
+    setSubmitError('');
     setUploadStatus('Creando cuenta...');
     try {
       const categoriaFinal = form.categoria === 'Otro' ? form.categoria_otro.trim() : form.categoria;
@@ -209,7 +212,7 @@ export default function RegistroRestauranteScreen() {
       try {
         const neg = await negociosAPI.miNegocio();
         negocioId = neg.data?.id || '';
-      } catch { /* continuar sin fotos si falla */ }
+      } catch { /* continuar sin fotos */ }
 
       let dpi_foto_url: string | null = null;
       let imagen_url:   string | null = null;
@@ -230,16 +233,14 @@ export default function RegistroRestauranteScreen() {
           if (dpi_foto_url) updates.dpi_foto_url = dpi_foto_url;
           if (imagen_url)   updates.imagen_url   = imagen_url;
           await negociosAPI.actualizar(negocioId, updates);
-        } catch { /* no bloquear el registro si falla la actualización de fotos */ }
+        } catch { /* no bloquear registro si falla subida de fotos */ }
       }
 
-      Alert.alert(
-        '¡Solicitud enviada! 🎉',
-        'Tu negocio está en revisión. El equipo de Bocara verificará tu DPI y datos, y te notificará cuando sea aprobado (normalmente en 24-48 horas).',
-        [{ text: 'Entendido', onPress: () => router.replace('/restaurante') }],
-      );
+      // Confirmación en pantalla — no usamos Alert.alert porque browsers bloquean
+      // window.alert() llamado desde contextos async largos
+      setSubmitted(true);
     } catch (e: any) {
-      Alert.alert('Error al registrar', e.message || 'Ocurrió un error inesperado. Intenta de nuevo.');
+      setSubmitError(e.message || 'Ocurrió un error inesperado. Intenta de nuevo.');
     } finally {
       setLoading(false);
       setUploadStatus('');
@@ -249,6 +250,76 @@ export default function RegistroRestauranteScreen() {
   const steps = ['Propietario', 'Negocio', 'Bancario', 'Documentos'];
   const nitLen = form.nit.length;
   const dpiLen = form.dpi.replace(/\s/g, '').length;
+
+  // ── Pantalla de confirmación (en lugar de Alert.alert que browsers bloquean) ─
+  if (submitted) {
+    const categoriaFinal = form.categoria === 'Otro' ? form.categoria_otro : form.categoria;
+    return (
+      <SafeAreaView style={s.root}>
+        <ScrollView contentContainerStyle={sc.scroll}>
+          <View style={sc.iconWrap}>
+            <Text style={sc.icon}>✅</Text>
+          </View>
+          <Text style={sc.title}>¡Solicitud enviada!</Text>
+          <Text style={sc.subtitle}>
+            Tu solicitud fue recibida exitosamente. El equipo de Bocara revisará tu DPI y datos bancarios.
+          </Text>
+
+          <View style={sc.timeCard}>
+            <Text style={sc.timeIcon}>⏳</Text>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={sc.timeTitle}>Tiempo de revisión: 24 – 48 horas</Text>
+              <Text style={sc.timeSub}>
+                Recibirás una notificación cuando tu negocio sea aprobado.
+              </Text>
+            </View>
+          </View>
+
+          <View style={sc.summaryCard}>
+            <Text style={sc.summaryTitle}>📋 Datos registrados</Text>
+            {[
+              { label: 'Propietario',  val: `${form.nombre} ${form.apellido}`.trim() },
+              { label: 'Email',        val: form.email },
+              { label: 'Teléfono',     val: form.telefono },
+              { label: 'Negocio',      val: form.nombre_negocio },
+              { label: 'Categoría',    val: categoriaFinal },
+              { label: 'Dirección',    val: `${form.direccion_negocio}, ${form.zona}` },
+              { label: 'Horario',      val: form.horario_atencion },
+              { label: 'NIT',          val: form.nit },
+              { label: 'Banco',        val: form.banco === 'Otro' ? form.banco_otro : form.banco },
+              { label: 'Cuenta',       val: form.numero_cuenta },
+              { label: 'Titular',      val: form.titular_cuenta },
+              { label: 'Foto negocio', val: form.foto_negocio_uri ? '✓ Adjunta' : '—' },
+              { label: 'DPI',          val: form.dpi_foto_uri ? '✓ Adjunto' : '—' },
+            ].map(({ label, val }) =>
+              val && val !== '—' ? (
+                <View key={label} style={sc.row}>
+                  <Text style={sc.rowLabel}>{label}</Text>
+                  <Text style={sc.rowVal} numberOfLines={1}>{val}</Text>
+                </View>
+              ) : null
+            )}
+          </View>
+
+          <View style={sc.stepsCard}>
+            <Text style={sc.stepsTitle}>¿Qué sigue?</Text>
+            {[
+              '1. Revisamos tu DPI y datos bancarios',
+              '2. Verificamos la información del negocio',
+              '3. Activamos tu cuenta (24-48 h)',
+              '4. Empiezas a publicar tus bolsas sorpresa',
+            ].map((s) => (
+              <Text key={s} style={sc.stepsItem}>{s}</Text>
+            ))}
+          </View>
+
+          <TouchableOpacity style={sc.btn} onPress={() => router.replace('/restaurante')}>
+            <Text style={sc.btnText}>Ir a mi panel →</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -563,20 +634,27 @@ export default function RegistroRestauranteScreen() {
               <Text style={s.btnNextText}>Siguiente →</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity
-              style={[s.btnSubmit, (!form.dpi_foto_uri || loading) && s.btnDisabled]}
-              onPress={handleRegistro}
-              disabled={loading || !form.dpi_foto_uri}
-            >
-              {loading ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <ActivityIndicator color={Colors.white} />
-                  <Text style={s.btnSubmitText}>{uploadStatus || 'Enviando...'}</Text>
+            <>
+              {submitError ? (
+                <View style={s.errorCard}>
+                  <Text style={s.errorCardText}>⚠️ {submitError}</Text>
                 </View>
-              ) : (
-                <Text style={s.btnSubmitText}>🚀 Enviar solicitud</Text>
-              )}
-            </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={[s.btnSubmit, (!form.dpi_foto_uri || loading) && s.btnDisabled]}
+                onPress={handleRegistro}
+                disabled={loading || !form.dpi_foto_uri}
+              >
+                {loading ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ActivityIndicator color={Colors.white} />
+                    <Text style={s.btnSubmitText}>{uploadStatus || 'Enviando...'}</Text>
+                  </View>
+                ) : (
+                  <Text style={s.btnSubmitText}>🚀 Enviar solicitud</Text>
+                )}
+              </TouchableOpacity>
+            </>
           )}
         </View>
 
@@ -678,4 +756,28 @@ const s = StyleSheet.create({
   btnSubmit:       { backgroundColor: Colors.green,  borderRadius: 14, padding: 16, alignItems: 'center' },
   btnSubmitText:   { color: Colors.white, fontWeight: '800', fontSize: 16 },
   btnDisabled:     { backgroundColor: Colors.textLight },
+  errorCard:       { backgroundColor: '#FEE2E2', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#FCA5A5' },
+  errorCardText:   { fontSize: 13, color: '#DC2626', fontWeight: '600', lineHeight: 20 },
+});
+
+const sc = StyleSheet.create({
+  scroll:       { padding: 24, alignItems: 'center' },
+  iconWrap:     { width: 96, height: 96, borderRadius: 48, backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center', marginBottom: 20, marginTop: 20 },
+  icon:         { fontSize: 48 },
+  title:        { fontSize: 26, fontWeight: '900', color: Colors.brown, textAlign: 'center', marginBottom: 12 },
+  subtitle:     { fontSize: 15, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: 24, paddingHorizontal: 8 },
+  timeCard:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF3C7', borderRadius: 14, padding: 16, marginBottom: 24, width: '100%', borderWidth: 1, borderColor: '#F59E0B40' },
+  timeIcon:     { fontSize: 28 },
+  timeTitle:    { fontSize: 14, fontWeight: '800', color: '#92400E', marginBottom: 4 },
+  timeSub:      { fontSize: 12, color: '#B45309', lineHeight: 18 },
+  summaryCard:  { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 1.5, borderColor: Colors.border },
+  summaryTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
+  row:          { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  rowLabel:     { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  rowVal:       { fontSize: 12, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
+  stepsCard:    { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 24, width: '100%', borderWidth: 1.5, borderColor: Colors.border },
+  stepsTitle:   { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 10 },
+  stepsItem:    { fontSize: 13, color: Colors.textSecondary, paddingVertical: 5, lineHeight: 20 },
+  btn:          { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center', width: '100%', marginBottom: 20 },
+  btnText:      { color: Colors.white, fontWeight: '900', fontSize: 16 },
 });
