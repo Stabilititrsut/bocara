@@ -337,13 +337,13 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   }
 
   // Enriquecer con push token del propietario
-  const propIds = [...new Set(Object.values(mapa).map((r: any) => r.propietario_id).filter(Boolean))];
+  const propIds = [...new Set(Object.values(mapa).map((r) => r.propietario_id).filter(Boolean))];
   if (propIds.length > 0) {
     const { data: propUsers } = await supabase
       .from('usuarios').select('id,expo_push_token').in('id', propIds);
-    const tokenMap: any = {};
+    const tokenMap = {};
     for (const u of (propUsers || [])) tokenMap[u.id] = u.expo_push_token;
-    for (const r of Object.values(mapa) as any[]) {
+    for (const r of Object.values(mapa)) {
       r.push_token = tokenMap[r.propietario_id] || null;
     }
   }
