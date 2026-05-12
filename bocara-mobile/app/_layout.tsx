@@ -73,7 +73,7 @@ function AuthGuard() {
       setOnboardingDone(val === 'true');
       setOnboardingChecked(true);
     });
-  }, []);
+  }, [segments]);
 
   useEffect(() => {
     if (usuario && !pushRegistered.current) {
