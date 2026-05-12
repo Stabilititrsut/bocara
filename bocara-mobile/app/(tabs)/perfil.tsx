@@ -112,7 +112,7 @@ export default function PerfilScreen() {
           {[
             { emoji: '📦', label: 'Mis pedidos',           onPress: () => router.push('/(tabs)/pedidos') },
             { emoji: '❤️', label: 'Mis favoritos',         onPress: () => router.push('/(tabs)/explore' as any) },
-            { emoji: '🔔', label: 'Notificaciones',        onPress: () => router.push('/(tabs)/explore' as any) },
+            { emoji: '🔔', label: 'Notificaciones',        onPress: () => router.push('/(tabs)/notificaciones' as any) },
             { emoji: '📞', label: 'Contacto y soporte',    onPress: () => router.push('/soporte' as any) },
             { emoji: '⚙️', label: 'Configuración',         onPress: () => router.push('/configuracion' as any) },
           ].map(({ emoji, label, onPress }) => (

@@ -222,7 +222,7 @@ export default function HomeScreen() {
             <Text style={s.logo}>Boca<Text style={s.logoAccent}>ra</Text></Text>
           </TouchableOpacity>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/explore' as any)} style={s.avatar}>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/notificaciones' as any)} style={s.avatar}>
               <Text style={{ fontSize: 20 }}>🔔</Text>
               {sinLeerCount > 0 && (
                 <View style={s.notifDot}>

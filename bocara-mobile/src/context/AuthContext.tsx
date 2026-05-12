@@ -65,9 +65,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function logout() {
-    await AsyncStorage.removeItem('bocara_token');
-    setToken(null);
-    setUsuario(null);
+    try {
+      await AsyncStorage.removeItem('bocara_token');
+    } finally {
+      setToken(null);
+      setUsuario(null);
+    }
   }
 
   function actualizarUsuario(data: Partial<Usuario>) {

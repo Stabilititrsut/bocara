@@ -1,39 +1,28 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  View, Text, ScrollView, StyleSheet,
   SafeAreaView, RefreshControl, ActivityIndicator,
 } from 'react-native';
-import { notificacionesAPI } from '@/src/services/api';
+import { Image } from 'expo-image';
+import { favoritosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
-interface Notificacion {
-  id: string;
-  titulo: string;
-  mensaje: string;
-  leida: boolean;
-  tipo: string;
-  created_at: string;
-}
-
-const TIPO_EMOJI: Record<string, string> = {
-  nuevo_pedido: '📦',
-  pedido_listo: '🔔',
-  promo: '🎫',
-  sistema: '⚙️',
-  bienvenida: '🌱',
+const EMOJI_MAP: Record<string, string> = {
+  Panadería: '🥐', Restaurante: '🍽️', Cafetería: '☕', Supermercado: '🛒',
+  Sushi: '🍣', Pizza: '🍕', 'Comida Típica': '🫕', Otro: '🍱',
 };
 
-export default function NotificacionesScreen() {
-  const [notifs, setNotifs] = useState<Notificacion[]>([]);
+export default function FavoritosScreen() {
+  const [favoritos, setFavoritos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
-      const res = await notificacionesAPI.listar();
-      setNotifs(res.data || []);
+      const res = await favoritosAPI.listar();
+      setFavoritos(res.data || []);
     } catch {
-      setNotifs([]);
+      setFavoritos([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -42,15 +31,6 @@ export default function NotificacionesScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function marcarLeida(id: string) {
-    try {
-      await notificacionesAPI.marcarLeida(id);
-      setNotifs((prev) => prev.map((n) => n.id === id ? { ...n, leida: true } : n));
-    } catch {}
-  }
-
-  const sinLeer = notifs.filter((n) => !n.leida).length;
-
   if (loading) {
     return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
   }
@@ -58,43 +38,44 @@ export default function NotificacionesScreen() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>Notificaciones</Text>
-        {sinLeer > 0 && (
-          <View style={s.badge}>
-            <Text style={s.badgeText}>{sinLeer}</Text>
-          </View>
-        )}
+        <Text style={s.headerTitle}>❤️ Mis favoritos</Text>
       </View>
 
-      {notifs.length === 0 ? (
+      {favoritos.length === 0 ? (
         <View style={s.empty}>
-          <Text style={{ fontSize: 52 }}>🔔</Text>
-          <Text style={s.emptyTitle}>Sin notificaciones</Text>
-          <Text style={s.emptyText}>Aquí aparecerán avisos sobre tus pedidos, bolsas disponibles y ofertas especiales</Text>
+          <Text style={{ fontSize: 52 }}>❤️</Text>
+          <Text style={s.emptyTitle}>Sin favoritos aún</Text>
+          <Text style={s.emptyText}>Guarda tus negocios favoritos tocando el corazón en cada bolsa</Text>
         </View>
       ) : (
         <ScrollView
           contentContainerStyle={s.scroll}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
         >
-          {notifs.map((n) => (
-            <TouchableOpacity
-              key={n.id}
-              style={[s.card, !n.leida && s.cardUnread]}
-              onPress={() => !n.leida && marcarLeida(n.id)}
-              activeOpacity={0.85}
-            >
-              <View style={[s.iconBox, !n.leida && s.iconBoxUnread]}>
-                <Text style={{ fontSize: 22 }}>{TIPO_EMOJI[n.tipo] || '🔔'}</Text>
+          {favoritos.map((fav) => {
+            const negocio = fav.negocios || fav;
+            const emoji = EMOJI_MAP[negocio.categoria] || '🍱';
+            return (
+              <View key={fav.id} style={s.card}>
+                <View style={s.cardImg}>
+                  {negocio.imagen_url ? (
+                    <Image source={{ uri: negocio.imagen_url }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+                  ) : (
+                    <Text style={{ fontSize: 36 }}>{emoji}</Text>
+                  )}
+                </View>
+                <View style={s.cardBody}>
+                  <Text style={s.cardNombre}>{negocio.nombre}</Text>
+                  <Text style={s.cardMeta}>{emoji} {negocio.categoria}</Text>
+                  <Text style={s.cardZona}>📍 {negocio.zona}</Text>
+                  {(negocio.calificacion_promedio || 0) > 0 && (
+                    <Text style={s.cardRating}>⭐ {Number(negocio.calificacion_promedio).toFixed(1)}</Text>
+                  )}
+                </View>
+                <Text style={s.heart}>❤️</Text>
               </View>
-              <View style={s.content}>
-                <Text style={[s.titulo, !n.leida && s.tituloUnread]}>{n.titulo}</Text>
-                <Text style={s.mensaje} numberOfLines={2}>{n.mensaje}</Text>
-                <Text style={s.fecha}>{new Date(n.created_at).toLocaleDateString('es-GT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
-              </View>
-              {!n.leida && <View style={s.dot} />}
-            </TouchableOpacity>
-          ))}
+            );
+          })}
           <View style={{ height: 20 }} />
         </ScrollView>
       )}
@@ -106,33 +87,26 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    flexDirection: 'row', alignItems: 'center', padding: 20, paddingTop: 16,
-    backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border,
+    padding: 20, paddingTop: 16, backgroundColor: Colors.white,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
   },
-  headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown, flex: 1 },
-  badge: {
-    backgroundColor: Colors.orange, borderRadius: 12, minWidth: 24, height: 24,
-    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6,
-  },
-  badgeText: { color: Colors.white, fontSize: 12, fontWeight: '800' },
+  headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown },
   scroll: { padding: 16 },
   card: {
-    flexDirection: 'row', backgroundColor: Colors.white, borderRadius: 14,
-    padding: 14, marginBottom: 10, alignItems: 'center', elevation: 1,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4,
+    flexDirection: 'row', backgroundColor: Colors.white, borderRadius: 16,
+    marginBottom: 12, elevation: 2, overflow: 'hidden', alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4,
   },
-  cardUnread: { borderLeftWidth: 3, borderLeftColor: Colors.orange },
-  iconBox: {
-    backgroundColor: Colors.brownLight, borderRadius: 10,
-    width: 46, height: 46, alignItems: 'center', justifyContent: 'center', marginRight: 12,
+  cardImg: {
+    width: 80, height: 80, backgroundColor: Colors.brownLight,
+    justifyContent: 'center', alignItems: 'center',
   },
-  iconBoxUnread: { backgroundColor: Colors.orangeLight },
-  content: { flex: 1 },
-  titulo: { fontSize: 14, fontWeight: '600', color: Colors.textPrimary },
-  tituloUnread: { fontWeight: '800', color: Colors.brown },
-  mensaje: { fontSize: 13, color: Colors.textSecondary, marginTop: 2, lineHeight: 18 },
-  fecha: { fontSize: 11, color: Colors.textLight, marginTop: 4 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.orange, marginLeft: 8 },
+  cardBody: { flex: 1, padding: 12 },
+  cardNombre: { fontSize: 15, fontWeight: '800', color: Colors.brown, marginBottom: 4 },
+  cardMeta: { fontSize: 12, color: Colors.textSecondary, marginBottom: 2 },
+  cardZona: { fontSize: 12, color: Colors.textSecondary, marginBottom: 2 },
+  cardRating: { fontSize: 12, color: Colors.orange, fontWeight: '700' },
+  heart: { fontSize: 20, paddingRight: 14 },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, padding: 32 },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: Colors.brown },
   emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
