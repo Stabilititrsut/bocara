@@ -65,15 +65,7 @@ function AuthGuard() {
   const router = useRouter();
   const segments = useSegments();
   const pushRegistered = useRef(false);
-  const [onboardingChecked, setOnboardingChecked] = useState(false);
-  const [onboardingDone, setOnboardingDone] = useState(true);
-
-  useEffect(() => {
-    AsyncStorage.getItem('bocara_onboarding_done').then((val) => {
-      setOnboardingDone(val === 'true');
-      setOnboardingChecked(true);
-    });
-  }, [segments]);
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     if (usuario && !pushRegistered.current) {
@@ -84,36 +76,37 @@ function AuthGuard() {
   }, [usuario]);
 
   useEffect(() => {
-    if (loading || !onboardingChecked) return;
-    const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante';
-    const inOnboarding = segments[0] === 'onboarding';
+    if (loading) return;
 
-    if (!usuario && !inAuth && !inOnboarding) {
-      router.replace('/login');
-      return;
-    }
+    AsyncStorage.getItem('bocara_onboarding_done').then((val) => {
+      const onboardingDone = val === 'true';
+      const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante';
+      const inOnboarding = segments[0] === 'onboarding';
 
-    if (usuario) {
-      // Mostrar onboarding a clientes nuevos que no lo han visto
-      if (usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
-        router.replace('/onboarding');
-        return;
+      if (!usuario && !inAuth && !inOnboarding) {
+        router.replace('/login');
+      } else if (usuario) {
+        if (usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
+          router.replace('/onboarding');
+        } else {
+          const inCorrectSection =
+            (usuario.rol === 'cliente' && segments[0] === '(tabs)') ||
+            (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
+            (usuario.rol === 'admin' && segments[0] === 'admin');
+
+          if (!inCorrectSection && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
+            if (usuario.rol === 'restaurante') router.replace('/restaurante');
+            else if (usuario.rol === 'admin') router.replace('/admin');
+            else router.replace('/(tabs)/');
+          }
+        }
       }
 
-      const inCorrectSection =
-        (usuario.rol === 'cliente' && segments[0] === '(tabs)') ||
-        (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
-        (usuario.rol === 'admin' && segments[0] === 'admin');
+      setReady(true);
+    });
+  }, [usuario, loading, segments]);
 
-      if (!inCorrectSection && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
-        if (usuario.rol === 'restaurante') router.replace('/restaurante');
-        else if (usuario.rol === 'admin') router.replace('/admin');
-        else router.replace('/(tabs)/');
-      }
-    }
-  }, [usuario, loading, segments, onboardingChecked, onboardingDone]);
-
-  if (loading || !onboardingChecked) {
+  if (loading || !ready) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background }}>
         <Text style={{ fontSize: 40, marginBottom: 12 }}>🛍️</Text>
