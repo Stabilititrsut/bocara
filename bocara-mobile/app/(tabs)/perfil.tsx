@@ -43,10 +43,7 @@ export default function PerfilScreen() {
       {
         text: 'Salir',
         style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/login');
-        },
+        onPress: () => { logout(); },
       },
     ]);
   }

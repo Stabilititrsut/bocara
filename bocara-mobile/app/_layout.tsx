@@ -94,7 +94,7 @@ function AuthGuard() {
             (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
             (usuario.rol === 'admin' && segments[0] === 'admin');
 
-          if (!inCorrectSection && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
+          if (!inCorrectSection && !inAuth && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
             if (usuario.rol === 'restaurante') router.replace('/restaurante');
             else if (usuario.rol === 'admin') router.replace('/admin');
             else router.replace('/(tabs)/');
