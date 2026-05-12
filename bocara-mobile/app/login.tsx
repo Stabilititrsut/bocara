@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
@@ -20,6 +20,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [logoTaps, setLogoTaps] = useState(0);
   const { login } = useAuth();
   const router = useRouter();
@@ -38,12 +39,16 @@ export default function LoginScreen() {
   }
 
   async function handleLogin() {
-    if (!email || !password) return Alert.alert('Error', 'Ingresa email y contraseña');
+    setErrorMsg('');
+    if (!email || !password) {
+      setErrorMsg('Ingresa tu correo y contraseña.');
+      return;
+    }
     setLoading(true);
     try {
       await login(email.toLowerCase().trim(), password);
     } catch (e: any) {
-      Alert.alert('Error al ingresar', e.message || 'Credenciales incorrectas');
+      setErrorMsg(e.message || 'Credenciales incorrectas. Intenta de nuevo.');
     } finally {
       setLoading(false);
     }
@@ -80,13 +85,13 @@ export default function LoginScreen() {
           <View style={s.modoRow}>
             <TouchableOpacity
               style={[s.modoBtn, !esRest && s.modoBtnActive]}
-              onPress={() => setModo('cliente')}
+              onPress={() => { setModo('cliente'); setErrorMsg(''); }}
             >
               <Text style={[s.modoBtnText, !esRest && s.modoBtnTextActive]}>👤 Soy cliente</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[s.modoBtn, esRest && s.modoBtnActive]}
-              onPress={() => setModo('restaurante')}
+              onPress={() => { setModo('restaurante'); setErrorMsg(''); }}
             >
               <Text style={[s.modoBtnText, esRest && s.modoBtnTextActive]}>🏪 Tengo un negocio</Text>
             </TouchableOpacity>
@@ -110,7 +115,7 @@ export default function LoginScreen() {
             keyboardType="email-address"
             autoCapitalize="none"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(v) => { setEmail(v); setErrorMsg(''); }}
           />
 
           <Text style={[s.label, esAdmin && { color: '#64748B' }]}>Contraseña</Text>
@@ -120,8 +125,14 @@ export default function LoginScreen() {
             placeholderTextColor={Colors.textLight}
             secureTextEntry
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(v) => { setPassword(v); setErrorMsg(''); }}
           />
+
+          {errorMsg ? (
+            <View style={s.errorBox}>
+              <Text style={s.errorText}>⚠️ {errorMsg}</Text>
+            </View>
+          ) : null}
 
           <TouchableOpacity
             style={[s.btn, esRest && s.btnRest, esAdmin && s.btnAdmin]}
@@ -132,7 +143,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
 
           {esAdmin && (
-            <TouchableOpacity style={s.backLink} onPress={() => setModo('cliente')}>
+            <TouchableOpacity style={s.backLink} onPress={() => { setModo('cliente'); setErrorMsg(''); }}>
               <Text style={s.backLinkText}>← Volver al login de clientes</Text>
             </TouchableOpacity>
           )}
@@ -194,6 +205,8 @@ const s = StyleSheet.create({
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   input: { backgroundColor: Colors.inputBg, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 16 },
   inputAdmin: { backgroundColor: '#334155', color: Colors.white },
+  errorBox: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 12, marginBottom: 12 },
+  errorText: { color: '#B91C1C', fontSize: 13, fontWeight: '600', lineHeight: 18 },
   btn: { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
   btnRest: { backgroundColor: Colors.brown },
   btnAdmin: { backgroundColor: '#4F46E5' },

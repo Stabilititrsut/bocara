@@ -7,7 +7,9 @@ const DEV_URL  = Platform.OS === 'web'
   ? 'http://localhost:3000/api'
   : 'http://192.168.1.34:3000/api';
 
-export const API_BASE_URL = __DEV__ ? DEV_URL : PROD_URL;
+// EXPO_PUBLIC_API_URL (definida en vercel.json) tiene prioridad sobre __DEV__
+export const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ?? (__DEV__ ? DEV_URL : PROD_URL);
 
 const api = axios.create({
   baseURL: API_BASE_URL,
