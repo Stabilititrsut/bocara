@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, SafeAreaView, ActivityIndicator,
+  SafeAreaView, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
@@ -29,24 +29,13 @@ function StatCard({ emoji, value, label, color }: any) {
 export default function PerfilScreen() {
   const { usuario, logout, actualizarUsuario } = useAuth();
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  const [showConfirmacion, setShowConfirmacion] = useState(false);
 
   useEffect(() => {
     authAPI.perfil()
       .then((res) => actualizarUsuario(res.data))
       .catch(() => {});
   }, []);
-
-  async function handleLogout() {
-    Alert.alert('Cerrar sesión', '¿Seguro que quieres salir?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Salir',
-        style: 'destructive',
-        onPress: () => { logout(); },
-      },
-    ]);
-  }
 
   if (!usuario) return <View style={s.loading}><ActivityIndicator color={Colors.orange} /></View>;
 
@@ -128,9 +117,27 @@ export default function PerfilScreen() {
           ))}
         </View>
 
-        <TouchableOpacity style={s.logoutBtn} onPress={handleLogout}>
+        <TouchableOpacity style={s.logoutBtn} onPress={() => setShowConfirmacion(true)}>
           <Text style={s.logoutText}>Cerrar sesión</Text>
         </TouchableOpacity>
+
+        {showConfirmacion && (
+          <View style={s.confirmCard}>
+            <Text style={s.confirmTitulo}>¿Cerrar sesión?</Text>
+            <Text style={s.confirmTexto}>¿Seguro que quieres salir de tu cuenta?</Text>
+            <View style={s.confirmBtns}>
+              <TouchableOpacity style={s.btnCancelar} onPress={() => setShowConfirmacion(false)}>
+                <Text style={s.btnCancelarText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.btnSalir}
+                onPress={() => { logout(); router.replace('/login'); }}
+              >
+                <Text style={s.btnSalirText}>Salir</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <Text style={s.version}>Bocara Food v2.0 · Guatemala</Text>
         <View style={{ height: 20 }} />
@@ -173,5 +180,18 @@ const s = StyleSheet.create({
   menuArrow: { fontSize: 20, color: Colors.textLight },
   logoutBtn: { borderWidth: 1.5, borderColor: Colors.error, borderRadius: 14, padding: 14, alignItems: 'center', marginBottom: 16 },
   logoutText: { color: Colors.error, fontWeight: '700', fontSize: 15 },
+  confirmCard: {
+    backgroundColor: Colors.white, borderRadius: 16, padding: 20, marginBottom: 16,
+    borderWidth: 1.5, borderColor: Colors.error + '40',
+    elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 6,
+  },
+  confirmTitulo: { fontSize: 16, fontWeight: '800', color: Colors.brown, marginBottom: 6 },
+  confirmTexto: { fontSize: 14, color: Colors.textSecondary, marginBottom: 16, lineHeight: 20 },
+  confirmBtns: { flexDirection: 'row', gap: 10 },
+  btnCancelar: { flex: 1, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  btnCancelarText: { color: Colors.textPrimary, fontWeight: '600', fontSize: 14 },
+  btnSalir: { flex: 1, backgroundColor: Colors.error, borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  btnSalirText: { color: Colors.white, fontWeight: '700', fontSize: 14 },
   version: { textAlign: 'center', fontSize: 12, color: Colors.textLight },
 });
