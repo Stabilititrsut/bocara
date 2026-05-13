@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, SafeAreaView, ActivityIndicator,
+  StyleSheet, SafeAreaView, ActivityIndicator, Platform,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { negociosAPI, uploadsAPI } from '@/src/services/api';
@@ -20,6 +20,7 @@ export default function PerfilRestauranteScreen() {
   const [imgError, setImgError] = useState('');
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const { logout } = useAuth();
+  const fileInputRef = useRef<any>(null);
   const set = (k: string) => (v: string) => setForm((f: any) => ({ ...f, [k]: v }));
 
   const showToast = (msg: string, ok = true) => {
@@ -44,11 +45,32 @@ export default function PerfilRestauranteScreen() {
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  async function seleccionarImagen() {
+  // Web: leer el archivo seleccionado y subirlo
+  function handleWebFileChange(e: any) {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      subirImagen(base64, file.type || 'image/jpeg');
+    };
+    reader.onerror = () => setImgError('No se pudo leer la imagen');
+    reader.readAsDataURL(file);
+    e.target.value = ''; // permite volver a seleccionar el mismo archivo
+  }
+
+  function seleccionarImagen() {
     setImgError('');
-    const picked = await pickImage();
-    if (!picked) return;
-    await subirImagen(picked.base64, picked.mimeType);
+    if (Platform.OS === 'web') {
+      // Activar el input oculto directamente — sincrónico dentro del gesto del usuario
+      fileInputRef.current?.click();
+      return;
+    }
+    // Nativo: usar pickImage (expo-image-picker)
+    pickImage().then((picked) => {
+      if (!picked) return;
+      subirImagen(picked.base64, picked.mimeType);
+    });
   }
 
   async function subirImagen(base64: string, mimeType: string) {
@@ -115,6 +137,15 @@ export default function PerfilRestauranteScreen() {
 
   return (
     <SafeAreaView style={s.root}>
+      {/* Input de archivo oculto — solo web, activado via ref desde seleccionarImagen() */}
+      {Platform.OS === 'web' && React.createElement('input', {
+        ref: fileInputRef,
+        type: 'file',
+        accept: 'image/*',
+        style: { display: 'none' },
+        onChange: handleWebFileChange,
+      })}
+
       <View style={s.header}>
         <Text style={s.headerTitle}>Mi negocio</Text>
         <TouchableOpacity style={s.saveBtn} onPress={guardar} disabled={saving}>

@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
-  Modal, TextInput, Alert, RefreshControl, Switch, Image, ActivityIndicator,
+  Modal, TextInput, Alert, RefreshControl, Switch, Image, ActivityIndicator, Platform,
 } from 'react-native';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
@@ -25,25 +25,60 @@ export default function BolsasRestauranteScreen() {
   const [negocioId, setNegocioId] = useState('');
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [uploadFotoError, setUploadFotoError] = useState('');
+  const fileInputRef = useRef<any>(null);
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
-  async function seleccionarFotoBolsa() {
-    setUploadFotoError('');
-    const picked = await pickImage();
-    if (!picked) return;
-    setUploadingFoto(true);
-    try {
-      const ext = picked.mimeType.split('/')[1] || 'jpg';
-      const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
-      const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
-      if (data?.publicUrl) {
-        setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+  // Web: leer el archivo seleccionado y subirlo
+  function handleWebFileChange(e: any) {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(',')[1];
+      setUploadingFoto(true);
+      setUploadFotoError('');
+      try {
+        const ext = file.type.split('/')[1] || 'jpg';
+        const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
+        const { data } = await uploadsAPI.uploadBase64(base64, path, file.type || 'image/jpeg');
+        if (data?.publicUrl) {
+          setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+        }
+      } catch (err: any) {
+        setUploadFotoError(err.message || 'No se pudo subir la foto');
+      } finally {
+        setUploadingFoto(false);
       }
-    } catch (e: any) {
-      setUploadFotoError(e.message || 'No se pudo subir la foto');
-    } finally {
-      setUploadingFoto(false);
+    };
+    reader.onerror = () => setUploadFotoError('No se pudo leer la imagen');
+    reader.readAsDataURL(file);
+    e.target.value = ''; // permite volver a seleccionar el mismo archivo
+  }
+
+  function seleccionarFotoBolsa() {
+    setUploadFotoError('');
+    if (Platform.OS === 'web') {
+      // Activar el input oculto directamente — sincrónico dentro del gesto del usuario
+      fileInputRef.current?.click();
+      return;
     }
+    // Nativo: usar pickImage (expo-image-picker)
+    pickImage().then(async (picked) => {
+      if (!picked) return;
+      setUploadingFoto(true);
+      try {
+        const ext = picked.mimeType.split('/')[1] || 'jpg';
+        const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
+        const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
+        if (data?.publicUrl) {
+          setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+        }
+      } catch (e: any) {
+        setUploadFotoError(e.message || 'No se pudo subir la foto');
+      } finally {
+        setUploadingFoto(false);
+      }
+    });
   }
 
   const cargar = useCallback(async () => {
@@ -203,6 +238,15 @@ export default function BolsasRestauranteScreen() {
       {/* Modal */}
       <Modal visible={modal} animationType="slide" presentationStyle="pageSheet">
         <SafeAreaView style={s.modal}>
+          {/* Input de archivo oculto — solo web, activado via ref desde seleccionarFotoBolsa() */}
+          {Platform.OS === 'web' && React.createElement('input', {
+            ref: fileInputRef,
+            type: 'file',
+            accept: 'image/*',
+            style: { display: 'none' },
+            onChange: handleWebFileChange,
+          })}
+
           <View style={s.modalHeader}>
             <TouchableOpacity onPress={() => setModal(false)}>
               <Text style={s.cancelText}>Cancelar</Text>
