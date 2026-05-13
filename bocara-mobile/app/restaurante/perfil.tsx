@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, SafeAreaView, Alert, ActivityIndicator, Platform,
+  StyleSheet, SafeAreaView, ActivityIndicator,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
-
-// expo-image-picker cargado dinámicamente — no disponible en web sin config adicional
-let ImagePicker: any = null;
-try { ImagePicker = require('expo-image-picker'); } catch { }
+import { pickImage } from '@/src/utils/pickImage';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otro'];
 
@@ -20,8 +17,15 @@ export default function PerfilRestauranteScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingImg, setUploadingImg] = useState(false);
+  const [imgError, setImgError] = useState('');
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const { logout } = useAuth();
   const set = (k: string) => (v: string) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const showToast = (msg: string, ok = true) => {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
+  };
 
   useEffect(() => {
     negociosAPI.miNegocio().then((res) => {
@@ -41,51 +45,25 @@ export default function PerfilRestauranteScreen() {
   }, []);
 
   async function seleccionarImagen() {
-    if (!ImagePicker) {
-      Alert.alert('No disponible', 'La subida de imágenes no está disponible en esta plataforma.');
-      return;
-    }
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería para cambiar la foto.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
-    if (result.canceled || !result.assets?.length) return;
-    const asset = result.assets[0];
-    await subirImagen(asset.uri);
+    setImgError('');
+    const picked = await pickImage();
+    if (!picked) return;
+    await subirImagen(picked.base64, picked.mimeType);
   }
 
-  async function subirImagen(uri: string) {
+  async function subirImagen(base64: string, mimeType: string) {
     if (!negocio?.id) return;
     setUploadingImg(true);
     try {
-      const ext = uri.split('.').pop()?.split('?')[0] || 'jpg';
+      const ext = mimeType.split('/')[1] || 'jpg';
       const path = `negocios/${negocio.id}/imagen_${Date.now()}.${ext}`;
-
-      // 1. Obtener URL firmada del backend
-      const { data } = await uploadsAPI.getSignedUrl(path);
-
-      // 2. Subir directo a Supabase Storage
-      const blob = await fetch(uri).then((r) => r.blob());
-      const uploadRes = await fetch(data.signedUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': blob.type || 'image/jpeg' },
-        body: blob,
-      });
-      if (!uploadRes.ok) throw new Error('Error al subir la imagen');
-
-      // 3. Guardar URL pública en el negocio
-      await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
-      setNegocio((n: any) => ({ ...n, imagen_url: data.publicUrl }));
-      Alert.alert('¡Foto actualizada!', 'La imagen del negocio fue guardada.');
+      const { data } = await uploadsAPI.uploadBase64(base64, path, mimeType);
+      if (data?.publicUrl) {
+        await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
+        setNegocio((n: any) => ({ ...n, imagen_url: data.publicUrl }));
+      }
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo subir la imagen');
+      setImgError(e.message || 'No se pudo subir la imagen');
     } finally {
       setUploadingImg(false);
     }
@@ -93,6 +71,7 @@ export default function PerfilRestauranteScreen() {
 
   async function guardar() {
     setSaving(true);
+    setToast(null);
     try {
       const payload: any = { ...form };
       const lat = parseFloat(form.latitud);
@@ -100,14 +79,15 @@ export default function PerfilRestauranteScreen() {
       payload.latitud  = isNaN(lat) ? null : lat;
       payload.longitud = isNaN(lng) ? null : lng;
       await negociosAPI.actualizar(negocio.id, payload);
-      Alert.alert('¡Guardado!', 'Datos del negocio actualizados.');
-    } catch (e: any) { Alert.alert('Error', e.message); }
+      showToast('¡Datos del negocio actualizados!');
+    } catch (e: any) { showToast(e.message || 'Error al guardar', false); }
     finally { setSaving(false); }
   }
 
   async function geocodificarAhora() {
-    if (!form.direccion) return Alert.alert('Sin dirección', 'Ingresa una dirección primero');
+    if (!form.direccion) { showToast('Ingresa una dirección primero', false); return; }
     setSaving(true);
+    setToast(null);
     try {
       await negociosAPI.actualizar(negocio.id, {
         direccion: form.direccion, zona: form.zona, ciudad: form.ciudad,
@@ -121,11 +101,11 @@ export default function PerfilRestauranteScreen() {
         longitud: res.data.longitud != null ? String(res.data.longitud) : '',
       }));
       if (res.data.latitud) {
-        Alert.alert('✅ Ubicación obtenida', `Lat: ${res.data.latitud.toFixed(6)}\nLng: ${res.data.longitud?.toFixed(6)}`);
+        showToast(`✅ Lat: ${res.data.latitud.toFixed(6)}, Lng: ${res.data.longitud?.toFixed(6)}`);
       } else {
-        Alert.alert('Sin resultado', 'No se encontró la dirección. Ingresa coordenadas manualmente.');
+        showToast('No se encontró la dirección. Ingresa coordenadas manualmente.', false);
       }
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) { showToast(e.message || 'Error al geocodificar', false); }
     finally { setSaving(false); }
   }
 
@@ -143,6 +123,12 @@ export default function PerfilRestauranteScreen() {
       </View>
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+        {toast && (
+          <View style={[s.toast, toast.ok ? s.toastOk : s.toastErr]}>
+            <Text style={s.toastText}>{toast.msg}</Text>
+          </View>
+        )}
+
         {/* Foto del negocio */}
         <TouchableOpacity style={s.imgContainer} onPress={seleccionarImagen} disabled={uploadingImg}>
           {negocio?.imagen_url ? (
@@ -160,6 +146,11 @@ export default function PerfilRestauranteScreen() {
             }
           </View>
         </TouchableOpacity>
+        {imgError ? (
+          <View style={s.errorInline}>
+            <Text style={s.errorInlineText}>⚠️ {imgError}</Text>
+          </View>
+        ) : null}
 
         {/* Stats rápidos */}
         <View style={s.statsRow}>
@@ -265,12 +256,18 @@ const s = StyleSheet.create({
   saveBtn: { backgroundColor: Colors.orange, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
   saveBtnText: { color: Colors.white, fontWeight: '700', fontSize: 14 },
   scroll: { padding: 16 },
-  imgContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 20, height: 160 },
+  toast: { borderRadius: 12, padding: 12, marginBottom: 14 },
+  toastOk: { backgroundColor: '#DCFCE7' },
+  toastErr: { backgroundColor: '#FEE2E2' },
+  toastText: { fontSize: 13, fontWeight: '600', color: Colors.brown },
+  imgContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 160 },
   imgNegocio: { width: '100%', height: '100%' },
   imgPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, justifyContent: 'center', alignItems: 'center', gap: 8 },
   imgPlaceholderText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
   imgEditBtn: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.55)', paddingVertical: 10, alignItems: 'center' },
   imgEditText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
+  errorInline: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12 },
+  errorInlineText: { color: '#B91C1C', fontSize: 13, fontWeight: '600' },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
   stat: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 12, alignItems: 'center', elevation: 1 },
   statVal: { fontSize: 22, fontWeight: '900', color: Colors.orange },

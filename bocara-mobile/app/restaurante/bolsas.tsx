@@ -5,9 +5,7 @@ import {
 } from 'react-native';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
-
-let ImagePicker: any = null;
-try { ImagePicker = require('expo-image-picker'); } catch { }
+import { pickImage } from '@/src/utils/pickImage';
 
 const FORM_INIT = {
   nombre: '', descripcion: '', contenido: '',
@@ -26,33 +24,23 @@ export default function BolsasRestauranteScreen() {
   const [editId, setEditId] = useState<string | null>(null);
   const [negocioId, setNegocioId] = useState('');
   const [uploadingFoto, setUploadingFoto] = useState(false);
+  const [uploadFotoError, setUploadFotoError] = useState('');
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
   async function seleccionarFotoBolsa() {
-    if (!ImagePicker) {
-      Alert.alert('No disponible', 'Usa una URL de imagen en su lugar.');
-      return;
-    }
-    try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (perm.status !== 'granted') return Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería.');
-    } catch { }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true, aspect: [1, 1], quality: 0.7, base64: true,
-    });
-    if (result.canceled || !result.assets?.length) return;
-    const asset = result.assets[0];
-    if (!asset.base64) return Alert.alert('Error', 'No se pudo leer la imagen.');
+    setUploadFotoError('');
+    const picked = await pickImage();
+    if (!picked) return;
     setUploadingFoto(true);
     try {
-      const path = `bolsas/${negocioId}_${Date.now()}.jpg`;
-      const { data } = await uploadsAPI.uploadBase64(asset.base64, path);
+      const ext = picked.mimeType.split('/')[1] || 'jpg';
+      const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
+      const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
       if (data?.publicUrl) {
         setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
       }
     } catch (e: any) {
-      Alert.alert('Error al subir foto', e.message);
+      setUploadFotoError(e.message || 'No se pudo subir la foto');
     } finally {
       setUploadingFoto(false);
     }
@@ -69,6 +57,7 @@ export default function BolsasRestauranteScreen() {
   useEffect(() => { cargar(); }, [cargar]);
 
   function abrir(b?: any) {
+    setUploadFotoError('');
     if (b) {
       setEditId(b.id);
       setForm({
@@ -262,6 +251,11 @@ export default function BolsasRestauranteScreen() {
                 }
               </View>
             </TouchableOpacity>
+            {uploadFotoError ? (
+              <View style={s.uploadError}>
+                <Text style={s.uploadErrorText}>⚠️ {uploadFotoError}</Text>
+              </View>
+            ) : null}
 
             <Text style={s.sectionLabel}>📝 Información</Text>
             <Field label="Nombre *" value={form.nombre} onChange={set('nombre')} placeholder="Bolsa Sorpresa de Panadería" />
@@ -379,6 +373,8 @@ const s = StyleSheet.create({
   priceRow: { flexDirection: 'row' },
   descInfo: { backgroundColor: Colors.greenLight, borderRadius: 10, padding: 10, marginBottom: 12 },
   descInfoText: { fontSize: 13, color: Colors.green, fontWeight: '600' },
+  uploadError: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12, marginTop: -8 },
+  uploadErrorText: { color: '#B91C1C', fontSize: 13, fontWeight: '600' },
   fotoBtn: { borderRadius: 12, overflow: 'hidden', height: 150, marginBottom: 16 },
   fotoPreview: { width: '100%', height: '100%' },
   fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', gap: 6 },
