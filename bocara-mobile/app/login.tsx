@@ -4,8 +4,15 @@ import {
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 import { useAuth } from '@/src/context/AuthContext';
+import { supabase } from '@/src/services/supabase';
+import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+
+// Necesario para que expo-web-browser cierre la sesión del browser en iOS
+WebBrowser.maybeCompleteAuthSession();
 
 type Modo = 'cliente' | 'restaurante' | 'admin';
 
@@ -20,9 +27,10 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [logoTaps, setLogoTaps] = useState(0);
-  const { login } = useAuth();
+  const { login, setSession } = useAuth();
   const router = useRouter();
 
   const cfg = MODO_CONFIG[modo];
@@ -51,6 +59,59 @@ export default function LoginScreen() {
       setErrorMsg(e.message || 'Credenciales incorrectas. Intenta de nuevo.');
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleGoogleLogin() {
+    setErrorMsg('');
+    setGoogleLoading(true);
+    try {
+      const redirectTo = Platform.OS === 'web'
+        ? `${window.location.origin}/auth/callback`
+        : Linking.createURL('/auth/callback');
+
+      if (Platform.OS === 'web') {
+        // En web, Supabase redirige directamente al callback
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo },
+        });
+        if (error) setErrorMsg('No se pudo iniciar el login con Google.');
+        // La redirección ocurre automáticamente, el callback.tsx completa el flujo
+        return;
+      }
+
+      // En nativo: abrir browser y esperar callback deep link
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo, skipBrowserRedirect: true },
+      });
+      if (error || !data?.url) {
+        setErrorMsg('No se pudo iniciar el login con Google.');
+        return;
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type !== 'success') return;
+
+      // Extraer tokens de la URL del callback
+      const url = result.url;
+      const params = new URLSearchParams(url.includes('#') ? url.split('#')[1] : url.split('?')[1]);
+      const access_token = params.get('access_token');
+      const refresh_token = params.get('refresh_token');
+
+      if (!access_token) {
+        setErrorMsg('No se pudo obtener la sesión de Google.');
+        return;
+      }
+
+      await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
+      const res = await authAPI.oauthComplete(access_token);
+      await setSession(res.data.token, res.data.usuario);
+    } catch (e: any) {
+      setErrorMsg(e.message || 'Error al iniciar sesión con Google.');
+    } finally {
+      setGoogleLoading(false);
     }
   }
 
@@ -107,6 +168,28 @@ export default function LoginScreen() {
             </View>
           )}
 
+          {/* Botón Google — solo para clientes */}
+          {!esAdmin && !esRest && (
+            <>
+              <TouchableOpacity
+                style={s.googleBtn}
+                onPress={handleGoogleLogin}
+                disabled={googleLoading}
+              >
+                <Text style={s.googleIcon}>G</Text>
+                <Text style={s.googleText}>
+                  {googleLoading ? 'Conectando...' : 'Continuar con Google'}
+                </Text>
+              </TouchableOpacity>
+
+              <View style={s.dividerOr}>
+                <View style={s.dividerLine} />
+                <Text style={s.dividerText}>o ingresa con tu correo</Text>
+                <View style={s.dividerLine} />
+              </View>
+            </>
+          )}
+
           <Text style={[s.label, esAdmin && { color: '#64748B' }]}>Correo electrónico</Text>
           <TextInput
             style={[s.input, esAdmin && s.inputAdmin]}
@@ -157,9 +240,19 @@ export default function LoginScreen() {
               </View>
 
               {!esRest && (
-                <TouchableOpacity style={s.btnOutline} onPress={() => router.push('/registro-cliente')}>
-                  <Text style={s.btnOutlineText}>Registrarme como cliente</Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity style={s.btnOutline} onPress={() => router.push('/registro-cliente')}>
+                    <Text style={s.btnOutlineText}>Registrarme como cliente</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[s.btnOutline, { marginTop: 10, borderColor: Colors.textLight }]}
+                    onPress={() => router.push('/registro-telefono')}
+                  >
+                    <Text style={[s.btnOutlineText, { color: Colors.textSecondary }]}>
+                      📱 Ingresar con teléfono
+                    </Text>
+                  </TouchableOpacity>
+                </>
               )}
               <TouchableOpacity
                 style={[s.btnOutline, { marginTop: esRest ? 0 : 10, borderColor: esRest ? Colors.orange : Colors.brown }]}
@@ -202,6 +295,14 @@ const s = StyleSheet.create({
   restBanner: { backgroundColor: Colors.brownLight, borderRadius: 12, padding: 12, marginBottom: 16 },
   adminBanner: { backgroundColor: '#312E81', borderColor: '#4338CA', borderWidth: 1 },
   restBannerText: { fontSize: 13, color: Colors.brown, lineHeight: 20 },
+  googleBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: Colors.border, borderRadius: 14,
+    padding: 14, marginBottom: 4, gap: 10, backgroundColor: Colors.white,
+  },
+  googleIcon: { fontSize: 18, fontWeight: '900', color: '#4285F4' },
+  googleText: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
+  dividerOr: { flexDirection: 'row', alignItems: 'center', marginVertical: 16 },
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   input: { backgroundColor: Colors.inputBg, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 16 },
   inputAdmin: { backgroundColor: '#334155', color: Colors.white },

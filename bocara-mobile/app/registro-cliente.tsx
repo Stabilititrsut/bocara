@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '@/src/context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from '@/src/services/supabase';
 import { Colors } from '@/constants/Colors';
 
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
@@ -14,7 +15,7 @@ function validatePhone(raw: string): string | null {
   if (!raw) return null;
   const digits = raw.replace(/\D/g, '');
   if (!GT_PHONE_REGEX.test(digits))
-    return 'Ingresa un número guatemalteco válido (8 dígitos, inicia con 2, 3, 4, 5, 6 o 7)';
+    return 'Número guatemalteco inválido (8 dígitos, inicia con 2, 3, 4, 5, 6 o 7)';
   return null;
 }
 
@@ -29,7 +30,6 @@ export default function RegistroClienteScreen() {
   const [form, setForm] = useState({ nombre: '', apellido: '', email: '', password: '', telefono: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const { registroCliente } = useAuth();
   const router = useRouter();
 
   const set = (k: string) => (v: string) => {
@@ -64,9 +64,24 @@ export default function RegistroClienteScreen() {
     if (!validate()) return;
     setLoading(true);
     try {
-      await registroCliente(form);
+      // Guardar datos del formulario para usarlos después de la verificación
+      await AsyncStorage.setItem('bocara_pending_registro', JSON.stringify(form));
+
+      // Enviar OTP al email vía Supabase Auth
+      const { error } = await supabase.auth.signInWithOtp({
+        email: form.email.trim().toLowerCase(),
+        options: { shouldCreateUser: true },
+      });
+
+      if (error) {
+        setErrors({ email: 'No se pudo enviar el código. Verifica el correo e intenta de nuevo.' });
+        return;
+      }
+
+      // Navegar a pantalla de verificación
+      router.push(`/verificar-email?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      setErrors({ email: e.message || 'Error inesperado. Intenta de nuevo.' });
     } finally {
       setLoading(false);
     }
@@ -106,9 +121,13 @@ export default function RegistroClienteScreen() {
           </View>
         ))}
 
-        <TouchableOpacity style={s.btn} onPress={handleRegistro} disabled={loading}>
-          <Text style={s.btnText}>{loading ? 'Creando cuenta...' : '🎉 Crear cuenta gratis'}</Text>
+        <TouchableOpacity style={[s.btn, loading && s.btnLoading]} onPress={handleRegistro} disabled={loading}>
+          <Text style={s.btnText}>{loading ? 'Enviando código...' : 'Continuar →'}</Text>
         </TouchableOpacity>
+
+        <Text style={s.info}>
+          Te enviaremos un código de verificación a tu correo para confirmar que es válido.
+        </Text>
 
         <Text style={s.terms}>
           Al registrarte aceptas nuestros{' '}
@@ -137,6 +156,8 @@ const s = StyleSheet.create({
     backgroundColor: Colors.orange, borderRadius: 14, padding: 16,
     alignItems: 'center', marginTop: 8,
   },
+  btnLoading: { opacity: 0.7 },
   btnText: { color: Colors.white, fontWeight: '800', fontSize: 16 },
-  terms: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 16 },
+  info: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 12, lineHeight: 18 },
+  terms: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 8 },
 });

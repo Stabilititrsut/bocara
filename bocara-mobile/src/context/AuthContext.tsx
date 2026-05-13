@@ -10,6 +10,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   registroCliente: (data: any) => Promise<void>;
   registroRestaurante: (data: any) => Promise<void>;
+  setSession: (token: string, usuario: Usuario) => Promise<void>;
   logout: () => Promise<void>;
   actualizarUsuario: (data: Partial<Usuario>) => void;
 }
@@ -64,6 +65,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUsuario(u);
   }
 
+  // Usado por flujos de OAuth (Google) y teléfono después de verificación exitosa
+  async function setSession(t: string, u: Usuario) {
+    await AsyncStorage.setItem('bocara_token', t);
+    setToken(t);
+    setUsuario(u);
+  }
+
   async function logout() {
     try {
       await AsyncStorage.removeItem('bocara_token');
@@ -79,7 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ usuario, token, loading, login, registroCliente, registroRestaurante, logout, actualizarUsuario }}
+      value={{ usuario, token, loading, login, registroCliente, registroRestaurante, setSession, logout, actualizarUsuario }}
     >
       {children}
     </AuthContext.Provider>

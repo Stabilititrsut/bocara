@@ -39,10 +39,18 @@ export const authAPI = {
     api.post('/auth/login', { email, password }),
   registroCliente: (data: any) =>
     api.post('/auth/registro', { ...data, rol: 'cliente' }),
+  registroCompleto: (data: any) =>
+    api.post('/auth/registro-completo', data),
   registroRestaurante: (data: any) =>
     api.post('/auth/registro', { ...data, rol: 'restaurante' }),
   perfil: () => api.get('/auth/perfil'),
   actualizarPerfil: (data: any) => api.put('/auth/perfil', data),
+  sendPhoneOtp: (telefono: string) =>
+    api.post('/auth/send-phone-otp', { telefono }),
+  verifyPhoneOtp: (data: { telefono: string; codigo: string; nombre?: string; apellido?: string }) =>
+    api.post('/auth/verify-phone-otp', data),
+  oauthComplete: (supabase_access_token: string) =>
+    api.post('/auth/oauth-complete', { supabase_access_token }),
 };
 
 export const negociosAPI = {
