@@ -8,8 +8,8 @@ const axios = require('axios');
 const BASE_URL = process.env.VISALINK_API_URL || 'https://api.cubo.com';
 
 async function generarLinkPago({ referencia, titulo, monto, urlRedireccion, cliente }) {
-  const apiKey = process.env.VISALINK_API_KEY;
-  if (!apiKey) throw new Error('VISALINK_API_KEY no configurada en el servidor');
+  const apiKey = process.env.CUBOPAGO_API_KEY;
+  if (!apiKey) throw new Error('CUBOPAGO_API_KEY no configurada en el servidor');
 
   // Cubo Pago recibe el monto en centavos (entero)
   const montoCentavos = Math.round(parseFloat(monto) * 100);

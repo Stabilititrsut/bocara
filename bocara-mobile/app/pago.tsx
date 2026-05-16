@@ -26,6 +26,7 @@ export default function PagoScreen() {
 
   const costoEnvio = tipo === 'envio' ? 25 : 0;
   const totalFinal = total + costoEnvio;
+  const comisionCubo = totalFinal * 0.035;
 
   const distanciaRestaurante = useMemo(() => {
     if (!items[0]) return null;
@@ -55,21 +56,23 @@ export default function PagoScreen() {
     setLoading(true);
     try {
       const item = items[0];
-      const res = await pagosAPI.crearIntent({
+
+      // 1. Crear pedido + obtener link de Cubo Pago
+      const res = await pagosAPI.cubopago({
         bolsa_id: item.bolsa.id,
         tipo_entrega: tipo,
         direccion_envio: tipo === 'envio' ? direccion : undefined,
       });
-      const { pedidoId, codigoRecogida, payuUrl } = res.data;
+      const { pedidoId, codigoRecogida, visaLinkUrl } = res.data;
 
-      // Abrir checkout PayU en el navegador del sistema
-      await WebBrowser.openBrowserAsync(payuUrl, {
+      // 2. Abrir el link de pago de Cubo Pago en el navegador del sistema
+      await WebBrowser.openBrowserAsync(visaLinkUrl, {
         showTitle: true,
         toolbarColor: '#F97316',
         secondaryToolbarColor: '#fff',
       });
 
-      // Después de que el usuario cierra el browser, verificar estado
+      // 3. Cuando el usuario cierra el browser, verificar estado cada 2s
       setVerificando(true);
       let intentos = 0;
       const MAX_INTENTOS = 20; // 40 segundos máximo
@@ -102,10 +105,11 @@ export default function PagoScreen() {
                { text: 'Quedarse', style: 'cancel' }]
             );
           }
-        } catch { /* ignorar errores de red al polling */ }
+        } catch { /* ignorar errores de red transitorios al hacer polling */ }
       }, 2000);
+
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      Alert.alert('Error al procesar el pago', e.message);
     } finally {
       setLoading(false);
     }
@@ -115,9 +119,11 @@ export default function PagoScreen() {
     return (
       <SafeAreaView style={[s.root, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator color={Colors.orange} size="large" />
-        <Text style={{ marginTop: 16, fontSize: 16, fontWeight: '700', color: Colors.brown }}>Verificando pago...</Text>
+        <Text style={{ marginTop: 16, fontSize: 16, fontWeight: '700', color: Colors.brown }}>
+          Verificando pago...
+        </Text>
         <Text style={{ marginTop: 8, fontSize: 13, color: Colors.textSecondary, textAlign: 'center', paddingHorizontal: 32 }}>
-          Espera mientras confirmamos tu transacción con PayU
+          Espera mientras confirmamos tu transacción con Cubo Pago
         </Text>
         <TouchableOpacity
           style={{ marginTop: 24, padding: 12 }}
@@ -136,6 +142,7 @@ export default function PagoScreen() {
   return (
     <SafeAreaView style={s.root}>
       <ScrollView contentContainerStyle={s.scroll}>
+
         {/* Resumen */}
         <View style={s.section}>
           <Text style={s.sectionTitle}>📋 Resumen del pedido</Text>
@@ -161,7 +168,10 @@ export default function PagoScreen() {
             </View>
           )}
           <View style={s.tipoRow}>
-            <TouchableOpacity style={[s.tipoBtn, tipo === 'recogida' && s.tipoBtnActive]} onPress={() => setTipo('recogida')}>
+            <TouchableOpacity
+              style={[s.tipoBtn, tipo === 'recogida' && s.tipoBtnActive]}
+              onPress={() => setTipo('recogida')}
+            >
               <Text style={s.tipoEmoji}>🏪</Text>
               <Text style={[s.tipoLabel, tipo === 'recogida' && s.tipoLabelActive]}>Recoger</Text>
               <Text style={[s.tipoPrecio, tipo === 'recogida' && s.tipoPrecioActive]}>Gratis</Text>
@@ -177,7 +187,9 @@ export default function PagoScreen() {
               }}
             >
               <Text style={s.tipoEmoji}>🏍️</Text>
-              <Text style={[s.tipoLabel, tipo === 'envio' && s.tipoLabelActive, !envioDisponible && { color: Colors.textLight }]}>Envío</Text>
+              <Text style={[s.tipoLabel, tipo === 'envio' && s.tipoLabelActive, !envioDisponible && { color: Colors.textLight }]}>
+                Envío
+              </Text>
               <Text style={[s.tipoPrecio, tipo === 'envio' && s.tipoPrecioActive, !envioDisponible && { color: Colors.textLight }]}>
                 {envioDisponible ? 'Q25' : 'No disponible'}
               </Text>
@@ -191,15 +203,18 @@ export default function PagoScreen() {
             <Text style={s.sectionTitle}>📍 Dirección de entrega</Text>
             {[
               { key: 'calle', label: 'Calle y número *', placeholder: '5a Calle 10-35' },
-              { key: 'zona', label: 'Zona *', placeholder: 'Zona 10' },
-              { key: 'ciudad', label: 'Ciudad', placeholder: 'Guatemala' },
-              { key: 'referencia', label: 'Referencia', placeholder: 'Frente al banco...' },
+              { key: 'zona',  label: 'Zona *',           placeholder: 'Zona 10' },
+              { key: 'ciudad', label: 'Ciudad',          placeholder: 'Guatemala' },
+              { key: 'referencia', label: 'Referencia',  placeholder: 'Frente al banco...' },
             ].map(({ key, label, placeholder }) => (
               <View key={key}>
                 <Text style={s.label}>{label}</Text>
                 <TextInput
-                  style={s.input} placeholder={placeholder} placeholderTextColor={Colors.textLight}
-                  value={(direccion as any)[key]} onChangeText={set(key)}
+                  style={s.input}
+                  placeholder={placeholder}
+                  placeholderTextColor={Colors.textLight}
+                  value={(direccion as any)[key]}
+                  onChangeText={set(key)}
                 />
               </View>
             ))}
@@ -210,15 +225,18 @@ export default function PagoScreen() {
         <View style={s.section}>
           <Text style={s.sectionTitle}>💳 Método de pago</Text>
           <View style={s.payMethod}>
-            <Text style={{ fontSize: 28 }}>🏦</Text>
+            <Text style={{ fontSize: 28 }}>💳</Text>
             <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={s.payLabel}>Tarjeta de crédito/débito</Text>
-              <Text style={s.paySubLabel}>Procesado de forma segura con PayU</Text>
+              <Text style={s.payLabel}>Tarjeta de crédito / débito</Text>
+              <Text style={s.paySubLabel}>Procesado de forma segura con Cubo Pago</Text>
             </View>
-            <View style={s.payCheck}><Text style={{ color: Colors.white, fontSize: 12 }}>✓</Text></View>
+            <View style={s.payCheck}>
+              <Text style={{ color: Colors.white, fontSize: 12 }}>✓</Text>
+            </View>
           </View>
-          <Text style={s.payuInfo}>
-            Serás redirigido al portal seguro de PayU para completar el pago. Aceptamos Visa, Mastercard y más.
+          <Text style={s.cuboInfo}>
+            Serás redirigido al portal seguro de Cubo Pago para completar el pago.
+            Aceptamos Visa y Mastercard.
           </Text>
         </View>
 
@@ -235,8 +253,8 @@ export default function PagoScreen() {
             </View>
           )}
           <View style={s.totalLine}>
-            <Text style={s.totalKey}>Comisión plataforma (≈3.6%)</Text>
-            <Text style={s.totalVal}>Q{(totalFinal * 0.036).toFixed(2)}</Text>
+            <Text style={s.totalKey}>Comisión pasarela (≈3.5%)</Text>
+            <Text style={s.totalVal}>Q{comisionCubo.toFixed(2)}</Text>
           </View>
           <View style={[s.totalLine, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border }]}>
             <Text style={s.totalFinalKey}>Total a pagar</Text>
@@ -248,13 +266,17 @@ export default function PagoScreen() {
       </ScrollView>
 
       <View style={s.footer}>
-        <TouchableOpacity style={[s.btnPagar, loading && s.btnDisabled]} onPress={iniciarPago} disabled={loading}>
+        <TouchableOpacity
+          style={[s.btnPagar, loading && s.btnDisabled]}
+          onPress={iniciarPago}
+          disabled={loading}
+        >
           {loading
             ? <ActivityIndicator color={Colors.white} />
-            : <Text style={s.btnPagarText}>Pagar Q{totalFinal.toFixed(2)} con PayU</Text>
+            : <Text style={s.btnPagarText}>Pagar Q{totalFinal.toFixed(2)} con Cubo Pago</Text>
           }
         </TouchableOpacity>
-        <Text style={s.seguro}>🔒 Pago seguro · SSL · PayU Latam</Text>
+        <Text style={s.seguro}>🔒 Pago seguro · SSL · Cubo Pago Guatemala</Text>
       </View>
     </SafeAreaView>
   );
@@ -286,7 +308,7 @@ const s = StyleSheet.create({
   payLabel: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
   paySubLabel: { fontSize: 11, color: Colors.textLight, marginTop: 2 },
   payCheck: { backgroundColor: Colors.green, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
-  payuInfo: { fontSize: 12, color: Colors.textSecondary, marginTop: 10, lineHeight: 18 },
+  cuboInfo: { fontSize: 12, color: Colors.textSecondary, marginTop: 10, lineHeight: 18 },
   totalBox: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 12 },
   totalLine: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   totalKey: { fontSize: 13, color: Colors.textSecondary },

@@ -236,14 +236,14 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
-// POST /api/pagos/visa-link — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
-router.post('/visa-link', authMiddleware, async (req, res) => {
+// POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
+router.post('/cubopago', authMiddleware, async (req, res) => {
   try {
     const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
     if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
 
-    if (!process.env.VISALINK_API_KEY) {
-      return res.status(500).json({ error: 'VISALINK_API_KEY no configurada en el servidor' });
+    if (!process.env.CUBOPAGO_API_KEY) {
+      return res.status(500).json({ error: 'CUBOPAGO_API_KEY no configurada en el servidor' });
     }
 
     const { data: bolsa, error: bolsaErr } = await supabase
@@ -319,7 +319,7 @@ router.post('/visa-link', authMiddleware, async (req, res) => {
       visaLinkUrl,
     });
   } catch (err) {
-    console.error('visa-link error:', err.message);
+    console.error('cubopago error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -338,7 +338,7 @@ router.post('/cubo-webhook', async (req, res) => {
 
     const { data: pedido } = await supabase
       .from('pedidos')
-      .select('id, usuarios(id,expo_push_token), negocios(propietario_id), codigo_recogida, total, tipo_entrega, bolsas(nombre,cantidad_disponible)')
+      .select('id, bolsa_id, usuarios(id,expo_push_token), negocios(propietario_id), codigo_recogida, total, tipo_entrega, bolsas(nombre,cantidad_disponible)')
       .eq('payu_reference_code', referencia)
       .single();
 

@@ -62,5 +62,5 @@ services:
         value: "50"
 
       # Cubo Pago Guatemala — https://developers.cubopago.com
-      - key: VISALINK_API_KEY
+      - key: CUBOPAGO_API_KEY
         sync: false
