@@ -1,74 +1,51 @@
+/**
+ * Cubo Pago Guatemala — https://developers.cubopago.com
+ * Autenticación: X-API-KEY header (no requiere login previo)
+ * Monto: en centavos (integer)
+ */
 const axios = require('axios');
 
-const BASE_URL = process.env.VISALINK_API_URL || 'https://admlink.ebi.com.gt/api';
+const BASE_URL = process.env.VISALINK_API_URL || 'https://api.cubo.com';
 
-// Token en memoria — en ebi Pay nunca expira (solo se invalida al generar uno nuevo)
-let _cachedToken = null;
+async function generarLinkPago({ referencia, titulo, monto, urlRedireccion, cliente }) {
+  const apiKey = process.env.VISALINK_API_KEY;
+  if (!apiKey) throw new Error('VISALINK_API_KEY no configurada en el servidor');
 
-async function obtenerToken() {
-  if (_cachedToken) return _cachedToken;
-
-  const key  = process.env.VISALINK_API_KEY;
-  const user = process.env.VISALINK_USUARIO;
-  const pass = process.env.VISALINK_CLAVE;
-
-  if (!user || !pass) {
-    // Si no hay credenciales de login, usar la API key directamente como token
-    return key;
-  }
-
-  const { data } = await axios.post(`${BASE_URL}/login`, {
-    llave: key,
-    usuario: user,
-    clave: pass,
-  });
-
-  if (data.result !== 'success') {
-    throw new Error(`Visa Link login fallido: ${data.message}`);
-  }
-
-  _cachedToken = data.data.token;
-  return _cachedToken;
-}
-
-async function generarLinkPago({ referencia, titulo, descripcion, monto, urlExito, urlFalla }) {
-  const key   = process.env.VISALINK_API_KEY;
-  const token = await obtenerToken();
+  // Cubo Pago recibe el monto en centavos (entero)
+  const montoCentavos = Math.round(parseFloat(monto) * 100);
 
   const body = {
-    nombre_interno: referencia,
-    codigo_interno: referencia,
-    titulo,
-    descripcion,
-    monto:          parseFloat(monto).toFixed(2),
-    estado:         1,
-    cuotas:         'VC00',
-    redes_sociales: process.env.VISALINK_REDES || '1',
+    description: titulo,
+    amount:      montoCentavos,
+    redirectUri: urlRedireccion,
+    metadata:    { referencia },
   };
 
-  if (urlExito) body.url_exito = urlExito;
-  if (urlFalla) body.url_falla = urlFalla;
+  if (cliente?.nombre)   body.clientName  = cliente.nombre;
+  if (cliente?.email)    body.clientEmail  = cliente.email;
+  if (cliente?.telefono) body.clientPhone  = cliente.telefono;
 
   let data;
   try {
-    ({ data } = await axios.post(`${BASE_URL}/link/maintenance`, body, {
-      headers: { llave: key, token },
+    ({ data } = await axios.post(`${BASE_URL}/api/v1/links/one-use`, body, {
+      headers: {
+        'X-API-KEY':    apiKey,
+        'Content-Type': 'application/json',
+      },
     }));
   } catch (err) {
-    throw new Error(`Visa Link HTTP error: ${err.message}`);
+    const msg = err.response?.data?.message ?? err.message;
+    throw new Error(`Cubo Pago error: ${Array.isArray(msg) ? msg.join(', ') : msg}`);
   }
 
-  if (data.result !== 'success') {
-    // El token pudo haberse invalidado — resetear para que el próximo intento re-autentique
-    _cachedToken = null;
-    throw new Error(`Visa Link: ${data.message}`);
+  if (!data?.cuboRedirectUri) {
+    throw new Error(`Cubo Pago: respuesta inesperada — ${JSON.stringify(data)}`);
   }
 
-  const link = data.data?.[0];
-  // La API devuelve "URL" (mayúsculas) en algunos endpoints y "url" en otros
-  const url = link?.URL || link?.url;
-  if (!url) throw new Error('Visa Link no devolvió una URL de pago');
-  return url;
+  return {
+    url:   data.cuboRedirectUri,
+    token: data.paymentIntentToken,
+  };
 }
 
 module.exports = { generarLinkPago };

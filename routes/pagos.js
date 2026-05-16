@@ -236,7 +236,7 @@ router.post('/webhook', async (req, res) => {
   }
 });
 
-// POST /api/pagos/visa-link — genera link de pago Visa Link Guatemala y lo devuelve al frontend
+// POST /api/pagos/visa-link — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/visa-link', authMiddleware, async (req, res) => {
   try {
     const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
@@ -254,13 +254,13 @@ router.post('/visa-link', authMiddleware, async (req, res) => {
     if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
     if (bolsa.cantidad_disponible < 1) return res.status(400).json({ error: 'Bolsa agotada' });
 
-    const costoEnvio   = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
-    const precioBolsa  = bolsa.precio_descuento;
-    const total        = precioBolsa + costoEnvio;
+    const costoEnvio  = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
+    const precioBolsa = bolsa.precio_descuento;
+    const total       = precioBolsa + costoEnvio;
 
-    const COMISION_VISALINK     = 0.035; // ~3.5% tarifa Visa Link Guatemala
+    const COMISION_CUBO         = 0.035; // ~3.5% tarifa Cubo Pago Guatemala
     const comisionBocara        = Math.round(precioBolsa * COMISION_BOCARA * 100) / 100;
-    const comisionPasarela      = Math.round(total * COMISION_VISALINK * 100) / 100;
+    const comisionPasarela      = Math.round(total * COMISION_CUBO * 100) / 100;
     const montoNetoRestaurante  = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -291,15 +291,21 @@ router.post('/visa-link', authMiddleware, async (req, res) => {
       }]).select().single();
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
 
+    const { data: usuario } = await supabase
+      .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
+
     const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
 
-    const visaLinkUrl = await generarLinkPago({
-      referencia:  referenceCode,
-      titulo:      `Bocara - ${bolsa.nombre}`,
-      descripcion: `Bolsa de ${bolsa.negocios.nombre}. Recogida ${bolsa.hora_recogida_inicio}–${bolsa.hora_recogida_fin}`,
-      monto:       total,
-      urlExito:    `${baseUrl}/api/pagos/respuesta?transactionState=4`,
-      urlFalla:    `${baseUrl}/api/pagos/respuesta?transactionState=6`,
+    const { url: visaLinkUrl } = await generarLinkPago({
+      referencia:    referenceCode,
+      titulo:        `Bocara - ${bolsa.nombre}`,
+      monto:         total,
+      urlRedireccion: `${baseUrl}/api/pagos/respuesta?transactionState=4`,
+      cliente: {
+        nombre:   `${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim() || undefined,
+        email:    usuario?.email    || undefined,
+        telefono: usuario?.telefono ? `+502${usuario.telefono.replace(/\D/g, '')}` : undefined,
+      },
     });
 
     res.json({
@@ -315,6 +321,76 @@ router.post('/visa-link', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('visa-link error:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/pagos/cubo-webhook — Cubo Pago notifica aquí el resultado de cada pago
+// Configurar en Cubo Admin → Developers → Webhooks
+router.post('/cubo-webhook', async (req, res) => {
+  try {
+    const { paymentIntentToken, status, metadata } = req.body;
+    const referencia = metadata?.referencia;
+
+    if (!referencia) {
+      console.warn('cubo-webhook: sin referencia en metadata', req.body);
+      return res.status(200).send('OK');
+    }
+
+    const { data: pedido } = await supabase
+      .from('pedidos')
+      .select('id, usuarios(id,expo_push_token), negocios(propietario_id), codigo_recogida, total, tipo_entrega, bolsas(nombre,cantidad_disponible)')
+      .eq('payu_reference_code', referencia)
+      .single();
+
+    if (!pedido) {
+      console.warn('cubo-webhook: pedido no encontrado para referencia', referencia);
+      return res.status(200).send('OK');
+    }
+
+    if (status === 'PAID' || status === 'APPROVED' || status === 'success') {
+      await supabase.from('pedidos')
+        .update({ estado_pago: 'pagado', estado: 'confirmado' })
+        .eq('id', pedido.id);
+
+      // Decrementar stock
+      const cantDisp = pedido.bolsas?.cantidad_disponible ?? 0;
+      if (cantDisp > 0) {
+        await supabase.from('bolsas')
+          .update({ cantidad_disponible: cantDisp - 1 })
+          .eq('id', pedido.bolsa_id);
+      }
+
+      // Sumar puntos al cliente
+      try {
+        const { data: cfg } = await supabase.from('configuracion').select('valor').eq('clave', 'puntos_por_pedido').single();
+        const puntos = cfg ? parseInt(cfg.valor) : 10;
+        await supabase.rpc('sumar_puntos', { user_id: pedido.usuarios.id, puntos });
+      } catch { }
+
+      // Push al cliente
+      const mensajeCliente = pedido.tipo_entrega === 'recogida'
+        ? `Código de recogida: ${pedido.codigo_recogida} — ¡Ya puedes ir!`
+        : 'Tu pedido está siendo preparado. Te avisamos cuando salga.';
+      await enviarNotificacionPush(pedido.usuarios?.expo_push_token, '✅ ¡Pago confirmado!', mensajeCliente, { pedidoId: pedido.id, screen: 'pedidos' });
+      await guardarNotificacion(supabase, pedido.usuarios.id, 'pago_confirmado', '✅ Pago confirmado', mensajeCliente, { pedidoId: pedido.id });
+
+      // Push al restaurante
+      const { data: propietario } = await supabase
+        .from('usuarios').select('expo_push_token').eq('id', pedido.negocios.propietario_id).single();
+      const mensajeRest = `Pedido ${pedido.codigo_recogida} — Q${pedido.total}`;
+      await enviarNotificacionPush(propietario?.expo_push_token, '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id, screen: 'restaurante' });
+      await guardarNotificacion(supabase, pedido.negocios.propietario_id, 'nuevo_pedido', '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id });
+
+    } else {
+      await supabase.from('pedidos')
+        .update({ estado_pago: 'fallido', estado: 'cancelado' })
+        .eq('id', pedido.id);
+    }
+
+    res.status(200).send('OK');
+  } catch (err) {
+    console.error('cubo-webhook error:', err.message);
+    res.status(200).send('OK'); // Siempre 200 para que Cubo no reintente indefinidamente
   }
 });
 
