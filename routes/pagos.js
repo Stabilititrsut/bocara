@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
+const { generarLinkPago } = require('../services/visaLink');
 const router = express.Router();
 
 const SANDBOX = process.env.PAYU_SANDBOX !== 'false';
@@ -232,6 +233,88 @@ router.post('/webhook', async (req, res) => {
   } catch (err) {
     console.error('Webhook PayU error:', err.message);
     res.status(200).send('OK'); // Siempre 200 para que PayU no reintente
+  }
+});
+
+// POST /api/pagos/visa-link — genera link de pago Visa Link Guatemala y lo devuelve al frontend
+router.post('/visa-link', authMiddleware, async (req, res) => {
+  try {
+    const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
+    if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
+
+    if (!process.env.VISALINK_API_KEY) {
+      return res.status(500).json({ error: 'VISALINK_API_KEY no configurada en el servidor' });
+    }
+
+    const { data: bolsa, error: bolsaErr } = await supabase
+      .from('bolsas')
+      .select('*, negocios(id,nombre,propietario_id)')
+      .eq('id', bolsa_id)
+      .single();
+    if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+    if (bolsa.cantidad_disponible < 1) return res.status(400).json({ error: 'Bolsa agotada' });
+
+    const costoEnvio   = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
+    const precioBolsa  = bolsa.precio_descuento;
+    const total        = precioBolsa + costoEnvio;
+
+    const COMISION_VISALINK     = 0.035; // ~3.5% tarifa Visa Link Guatemala
+    const comisionBocara        = Math.round(precioBolsa * COMISION_BOCARA * 100) / 100;
+    const comisionPasarela      = Math.round(total * COMISION_VISALINK * 100) / 100;
+    const montoNetoRestaurante  = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
+
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
+      chars[Math.floor(Math.random() * chars.length)]
+    ).join('');
+    const referenceCode = `BOC-${Date.now()}-${req.usuario.id.slice(0, 8)}`;
+
+    const { data: pedido, error: pedidoErr } = await supabase
+      .from('pedidos').insert([{
+        usuario_id:             req.usuario.id,
+        bolsa_id,
+        negocio_id:             bolsa.negocios.id,
+        tipo_entrega,
+        direccion_envio:        tipo_entrega === 'envio' ? direccion_envio : null,
+        precio_bolsa:           precioBolsa,
+        costo_envio:            costoEnvio,
+        comision_bocara:        comisionBocara,
+        comision_pasarela:      comisionPasarela,
+        monto_neto_restaurante: montoNetoRestaurante,
+        total,
+        estado:                 'pendiente',
+        estado_pago:            'pendiente',
+        codigo_recogida:        codigoRecogida,
+        payu_reference_code:    referenceCode,
+        hora_recogida_inicio:   bolsa.hora_recogida_inicio,
+        hora_recogida_fin:      bolsa.hora_recogida_fin,
+      }]).select().single();
+    if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
+
+    const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+
+    const visaLinkUrl = await generarLinkPago({
+      referencia:  referenceCode,
+      titulo:      `Bocara - ${bolsa.nombre}`,
+      descripcion: `Bolsa de ${bolsa.negocios.nombre}. Recogida ${bolsa.hora_recogida_inicio}–${bolsa.hora_recogida_fin}`,
+      monto:       total,
+      urlExito:    `${baseUrl}/api/pagos/respuesta?transactionState=4`,
+      urlFalla:    `${baseUrl}/api/pagos/respuesta?transactionState=6`,
+    });
+
+    res.json({
+      pedidoId:              pedido.id,
+      codigoRecogida,
+      total,
+      costoEnvio,
+      comisionBocara,
+      comisionPasarela,
+      montoNetoRestaurante,
+      visaLinkUrl,
+    });
+  } catch (err) {
+    console.error('visa-link error:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

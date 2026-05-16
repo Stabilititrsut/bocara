@@ -60,3 +60,13 @@ services:
         value: "25"
       - key: DELIVERY_BASE_FEE_INTERIOR
         value: "50"
+
+      # Visa Link Guatemala (ebi Pay / Visa en Link)
+      - key: VISALINK_API_KEY
+        sync: false
+      - key: VISALINK_USUARIO
+        sync: false
+      - key: VISALINK_CLAVE
+        sync: false
+      - key: VISALINK_REDES
+        sync: false
