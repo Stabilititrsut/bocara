@@ -407,6 +407,46 @@ router.put('/perfil', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// POST /api/auth/setup-demo — crea o resetea el usuario demo@bocara.gt (rol: cliente)
+router.post('/setup-demo', async (req, res) => {
+  const { secret } = req.body;
+  const expectedSecret = process.env.ADMIN_SETUP_SECRET || 'bocara-setup-2025';
+  if (secret !== expectedSecret) return res.status(403).json({ error: 'Secret incorrecto' });
+
+  const demoEmail = 'demo@bocara.gt';
+  const demoPassword = 'Demo1234!';
+
+  try {
+    const hash = await bcrypt.hash(demoPassword, 10);
+    const { data: existing } = await supabase
+      .from('usuarios')
+      .select('id,email,rol')
+      .eq('email', demoEmail)
+      .maybeSingle();
+
+    if (existing) {
+      const { data, error } = await supabase
+        .from('usuarios')
+        .update({ password_hash: hash, rol: 'cliente', nombre: 'Usuario Demo' })
+        .eq('email', demoEmail)
+        .select('id,email,rol')
+        .single();
+      if (error) return res.status(400).json({ error: error.message });
+      return res.json({ ok: true, action: 'updated', usuario: data, password: demoPassword });
+    }
+
+    const { data, error } = await supabase
+      .from('usuarios')
+      .insert([{ email: demoEmail, password_hash: hash, nombre: 'Usuario Demo', rol: 'cliente' }])
+      .select('id,email,rol')
+      .single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true, action: 'created', usuario: data, password: demoPassword });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/auth/setup-admin
 router.post('/setup-admin', async (req, res) => {
   const { secret, email, password } = req.body;

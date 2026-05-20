@@ -63,7 +63,7 @@ export default function LoginScreen() {
 
       if (Platform.OS === 'web') {
         const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
-        if (error) setErrorMsg('No se pudo iniciar el login con Google.');
+        if (error) setErrorMsg(error.message || 'No se pudo iniciar el login con Google.');
         return;
       }
 
