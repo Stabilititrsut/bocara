@@ -1,17 +1,17 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, SafeAreaView, Share,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { bolsasAPI, resenasAPI, favoritosAPI } from '@/src/services/api';
 import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useCart } from '@/src/context/CartContext';
 import { useAuth } from '@/src/context/AuthContext';
 
-// Estado del horario de recogida
 function calcularEstadoHorario(inicio: string, fin: string) {
   if (!inicio || !fin) return { estado: 'desconocido', mensaje: '', color: Colors.textLight };
   const now = new Date();
@@ -44,39 +44,60 @@ export default function ProductoScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [bolsa, setBolsa] = useState<Bolsa | null>(null);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
   const [resenas, setResenas] = useState<any[]>([]);
   const [esFavorito, setEsFavorito] = useState(false);
   const [toggleandoFav, setToggleandoFav] = useState(false);
   const [horario, setHorario] = useState<ReturnType<typeof calcularEstadoHorario> | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const { agregar, items } = useCart();
   const { usuario } = useAuth();
   const router = useRouter();
   const timerRef = useRef<any>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const [bRes] = await Promise.all([bolsasAPI.detalle(id)]);
-        const data: Bolsa = bRes.data;
-        setBolsa(data);
-        setHorario(calcularEstadoHorario(data.hora_recogida_inicio, data.hora_recogida_fin));
-        if (data.negocio_id) {
-          const rRes = await resenasAPI.listarPorNegocio(data.negocio_id);
-          setResenas(rRes.data || []);
-        }
-        if (usuario) {
-          const fRes = await favoritosAPI.check(data.negocio_id).catch(() => ({ data: { esFavorito: false } }));
-          setEsFavorito(fRes.data.esFavorito);
-        }
-      } catch {
-        Alert.alert('Error', 'No se pudo cargar el producto. Verifica tu conexión.');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [id, usuario]);
+  const cargarBolsa = useCallback(async () => {
+    const bolsaId = Array.isArray(id) ? id[0] : id;
+    if (!bolsaId) {
+      setErrorMsg('ID de producto no válido.');
+      setLoading(false);
+      return;
+    }
 
-  // Actualizar horario cada minuto
+    setBolsa(null);
+    setErrorMsg('');
+    setLoading(true);
+
+    try {
+      const bRes = await bolsasAPI.detalle(bolsaId);
+      const data: Bolsa = bRes.data;
+      if (!data || !data.id) throw new Error('Bolsa no encontrada');
+      setBolsa(data);
+      setHorario(calcularEstadoHorario(data.hora_recogida_inicio, data.hora_recogida_fin));
+
+      // Cargar reseñas y favorito en paralelo sin bloquear el render
+      if (data.negocio_id) {
+        resenasAPI.listarPorNegocio(data.negocio_id)
+          .then(r => setResenas(r.data || []))
+          .catch(() => {});
+        if (usuario) {
+          favoritosAPI.check(data.negocio_id)
+            .then(r => setEsFavorito(r.data.esFavorito))
+            .catch(() => {});
+        }
+      }
+    } catch (e: any) {
+      const msg = e.message || 'No se pudo cargar el producto.';
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, [id, retryCount]);
+
+  useEffect(() => {
+    cargarBolsa();
+  }, [cargarBolsa]);
+
+  // Actualizar horario cada 30 s
   useEffect(() => {
     if (!bolsa) return;
     timerRef.current = setInterval(() => {
@@ -85,10 +106,48 @@ export default function ProductoScreen() {
     return () => clearInterval(timerRef.current);
   }, [bolsa]);
 
-  if (loading || !bolsa) {
-    return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
+  // ── Loading ──────────────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <SafeAreaView style={s.root}>
+        <View style={s.loadingCenter}>
+          <ActivityIndicator color={Colors.orange} size="large" />
+          <Text style={s.loadingText}>Cargando producto...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
+  // ── Error / no data ───────────────────────────────────────────────────────────
+  if (errorMsg || !bolsa) {
+    return (
+      <SafeAreaView style={s.root}>
+        <TouchableOpacity style={s.backRow} onPress={() => router.back()}>
+          <Ionicons name="arrow-back" size={20} color={Colors.orange} />
+          <Text style={s.backRowText}>Volver</Text>
+        </TouchableOpacity>
+        <View style={s.errorCenter}>
+          <Text style={s.errorIcon}>😕</Text>
+          <Text style={s.errorTitle}>No se pudo cargar</Text>
+          <Text style={s.errorSub}>
+            {errorMsg || 'Bolsa no encontrada.'}
+          </Text>
+          <Text style={s.errorHint}>
+            Si el servidor está despertando puede tardar unos segundos.
+          </Text>
+          <TouchableOpacity
+            style={s.retryBtn}
+            onPress={() => setRetryCount(c => c + 1)}
+          >
+            <Ionicons name="refresh" size={16} color={Colors.white} />
+            <Text style={s.retryText}>Reintentar</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Producto cargado ──────────────────────────────────────────────────────────
   const desc = bolsa.precio_original > 0 ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const enCarrito = items.find((i) => i.bolsa.id === bolsa.id);
   const agotada = bolsa.cantidad_disponible === 0;
@@ -149,7 +208,6 @@ export default function ProductoScreen() {
           <View style={s.imgOverlay} />
           <View style={s.badge}><Text style={s.badgeText}>-{desc}% OFF</Text></View>
           {bolsa.tipo === 'cupon' && <View style={s.cuponBadge}><Text style={s.cuponText}>🎫 Cupón</Text></View>}
-          {/* Botones flotantes */}
           <View style={s.imgBtns}>
             <TouchableOpacity style={s.imgBtn} onPress={compartir}>
               <Text style={{ fontSize: 18 }}>↗️</Text>
@@ -167,7 +225,6 @@ export default function ProductoScreen() {
           <Text style={s.nombre}>{bolsa.nombre}</Text>
           <Text style={s.zona}>📍 {bolsa.negocios?.zona} · {bolsa.negocios?.ciudad}</Text>
 
-          {/* Calificación del negocio */}
           {(bolsa.negocios?.calificacion_promedio || 0) > 0 && (
             <View style={s.ratingRow}>
               <Text style={s.ratingStars}>{'⭐'.repeat(Math.round(bolsa.negocios!.calificacion_promedio))}</Text>
@@ -176,7 +233,6 @@ export default function ProductoScreen() {
             </View>
           )}
 
-          {/* Estado del horario */}
           {horario && (
             <View style={[s.horarioBadge, { backgroundColor: horario.color + '20', borderColor: horario.color + '40' }]}>
               <Text style={[s.horarioText, { color: horario.color }]}>
@@ -185,7 +241,6 @@ export default function ProductoScreen() {
             </View>
           )}
 
-          {/* Precio */}
           <View style={s.priceRow}>
             <View>
               <Text style={s.original}>Q{bolsa.precio_original}</Text>
@@ -196,7 +251,6 @@ export default function ProductoScreen() {
             </View>
           </View>
 
-          {/* Info en grid */}
           <View style={s.infoRow}>
             <View style={s.infoItem}>
               <Text style={s.infoIcon}>⏰</Text>
@@ -231,18 +285,15 @@ export default function ProductoScreen() {
             </View>
           )}
 
-          {/* Impacto ambiental */}
           <View style={s.impact}>
             <Text style={s.impactTitle}>🌱 Tu impacto ambiental</Text>
             <Text style={s.impactText}>Al rescatar esta bolsa evitas {bolsa.co2_salvado_kg} kg de CO₂ y salvas comida de buena calidad.</Text>
           </View>
 
-          {/* Compartir */}
           <TouchableOpacity style={s.shareRow} onPress={compartir}>
             <Text style={s.shareText}>↗️  Compartir por WhatsApp</Text>
           </TouchableOpacity>
 
-          {/* Reseñas */}
           {resenas.length > 0 && (
             <View style={s.section}>
               <Text style={s.sectionTitle}>⭐ Reseñas del restaurante ({resenas.length})</Text>
@@ -289,7 +340,23 @@ export default function ProductoScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
-  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // Loading
+  loadingCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16, paddingVertical: 80 },
+  loadingText: { color: Colors.textSecondary, fontSize: 14 },
+
+  // Error
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 20 },
+  backRowText: { color: Colors.orange, fontWeight: '700', fontSize: 15 },
+  errorCenter: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, gap: 12 },
+  errorIcon: { fontSize: 56 },
+  errorTitle: { fontSize: 20, fontWeight: '800', color: Colors.brown },
+  errorSub: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  errorHint: { fontSize: 12, color: Colors.textLight, textAlign: 'center', lineHeight: 18 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.orange, borderRadius: 14, paddingHorizontal: 28, paddingVertical: 14, marginTop: 8 },
+  retryText: { color: Colors.white, fontWeight: '800', fontSize: 15 },
+
+  // Product
   imgBox: { backgroundColor: Colors.brownLight, height: 240, justifyContent: 'center', alignItems: 'center' },
   imgOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.15)' },
   badge: { position: 'absolute', top: 16, right: 16, backgroundColor: Colors.orange, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
