@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   TextInput, Alert, ActivityIndicator, SafeAreaView,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { pagosAPI } from '@/src/services/api';
@@ -11,7 +12,6 @@ import { useLocation } from '@/src/context/LocationContext';
 import { Colors } from '@/constants/Colors';
 
 const ENVIO_MAX_KM = 10;
-
 type TipoEntrega = 'recogida' | 'envio';
 
 export default function PagoScreen() {
@@ -37,79 +37,49 @@ export default function PagoScreen() {
 
   const envioDisponible = distanciaRestaurante === null || distanciaRestaurante <= ENVIO_MAX_KM;
   const distStr = formatDistancia(distanciaRestaurante);
-
   const set = (k: string) => (v: string) => setDireccion((d) => ({ ...d, [k]: v }));
 
   function limpiarPolling() {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
   }
 
   async function iniciarPago() {
     if (tipo === 'envio' && (!direccion.calle || !direccion.zona)) {
-      return Alert.alert('Error', 'Ingresa tu dirección de entrega');
+      return Alert.alert('Campos requeridos', 'Ingresa tu dirección de entrega');
     }
     if (items.length === 0) return;
-
     setLoading(true);
     try {
       const item = items[0];
-
-      // 1. Crear pedido + obtener link de Cubo Pago
       const res = await pagosAPI.cubopago({
         bolsa_id: item.bolsa.id,
         tipo_entrega: tipo,
         direccion_envio: tipo === 'envio' ? direccion : undefined,
       });
       const { pedidoId, codigoRecogida, visaLinkUrl } = res.data;
-
-      // 2. Abrir el link de pago de Cubo Pago en el navegador del sistema
-      await WebBrowser.openBrowserAsync(visaLinkUrl, {
-        showTitle: true,
-        toolbarColor: '#F97316',
-        secondaryToolbarColor: '#fff',
-      });
-
-      // 3. Cuando el usuario cierra el browser, verificar estado cada 2s
+      await WebBrowser.openBrowserAsync(visaLinkUrl, { showTitle: true, toolbarColor: Colors.primary });
       setVerificando(true);
       let intentos = 0;
-      const MAX_INTENTOS = 20; // 40 segundos máximo
-
       pollingRef.current = setInterval(async () => {
         intentos++;
         try {
           const estadoRes = await pagosAPI.estado(pedidoId);
           const { estado_pago, estado } = estadoRes.data;
-
           if (estado_pago === 'pagado' && estado === 'confirmado') {
-            limpiarPolling();
-            setVerificando(false);
-            limpiar();
-            router.replace({
-              pathname: '/qr-recogida',
-              params: { codigo: codigoRecogida, pedidoId, tipo },
-            } as any);
+            limpiarPolling(); setVerificando(false); limpiar();
+            router.replace({ pathname: '/qr-recogida', params: { codigo: codigoRecogida, pedidoId, tipo } } as any);
           } else if (estado_pago === 'fallido' || estado === 'cancelado') {
-            limpiarPolling();
-            setVerificando(false);
+            limpiarPolling(); setVerificando(false);
             Alert.alert('Pago no completado', 'El pago fue rechazado o cancelado. Intenta de nuevo.');
-          } else if (intentos >= MAX_INTENTOS) {
-            limpiarPolling();
-            setVerificando(false);
-            Alert.alert(
-              'Verificando pago',
-              'No pudimos confirmar tu pago aún. Revisa "Mis pedidos" en unos minutos.',
-              [{ text: 'Ver pedidos', onPress: () => router.replace('/(tabs)/pedidos' as any) },
-               { text: 'Quedarse', style: 'cancel' }]
-            );
+          } else if (intentos >= 20) {
+            limpiarPolling(); setVerificando(false);
+            Alert.alert('Verificando pago', 'No pudimos confirmar tu pago aún. Revisa "Mis pedidos" en unos minutos.',
+              [{ text: 'Ver pedidos', onPress: () => router.replace('/(tabs)/pedidos' as any) }, { text: 'Quedarse', style: 'cancel' }]);
           }
-        } catch { /* ignorar errores de red transitorios al hacer polling */ }
+        } catch {}
       }, 2000);
-
     } catch (e: any) {
-      Alert.alert('Error al procesar el pago', e.message);
+      Alert.alert('Error', e.message);
     } finally {
       setLoading(false);
     }
@@ -117,23 +87,15 @@ export default function PagoScreen() {
 
   if (verificando) {
     return (
-      <SafeAreaView style={[s.root, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator color={Colors.orange} size="large" />
-        <Text style={{ marginTop: 16, fontSize: 16, fontWeight: '700', color: Colors.brown }}>
-          Verificando pago...
-        </Text>
-        <Text style={{ marginTop: 8, fontSize: 13, color: Colors.textSecondary, textAlign: 'center', paddingHorizontal: 32 }}>
-          Espera mientras confirmamos tu transacción con Cubo Pago
-        </Text>
-        <TouchableOpacity
-          style={{ marginTop: 24, padding: 12 }}
-          onPress={() => {
-            limpiarPolling();
-            setVerificando(false);
-            router.replace('/(tabs)/pedidos' as any);
-          }}
-        >
-          <Text style={{ color: Colors.orange, fontWeight: '700' }}>Ver mis pedidos →</Text>
+      <SafeAreaView style={[s.root, s.centerBox]}>
+        <View style={s.verificandoIcon}>
+          <ActivityIndicator color={Colors.primary} size="large" />
+        </View>
+        <Text style={s.verificandoTitle}>Verificando pago...</Text>
+        <Text style={s.verificandoText}>Espera mientras confirmamos tu transacción con PayU</Text>
+        <TouchableOpacity style={s.verificandoLink} onPress={() => { limpiarPolling(); setVerificando(false); router.replace('/(tabs)/pedidos' as any); }}>
+          <Text style={s.verificandoLinkText}>Ver mis pedidos</Text>
+          <Ionicons name="arrow-forward" size={14} color={Colors.primary} />
         </TouchableOpacity>
       </SafeAreaView>
     );
@@ -141,15 +103,30 @@ export default function PagoScreen() {
 
   return (
     <SafeAreaView style={s.root}>
-      <ScrollView contentContainerStyle={s.scroll}>
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+          <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={s.headerTitle}>Confirmar pedido</Text>
+      </View>
+
+      <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
 
         {/* Resumen */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>📋 Resumen del pedido</Text>
+          <View style={s.sectionHeader}>
+            <Ionicons name="receipt-outline" size={18} color={Colors.primary} />
+            <Text style={s.sectionTitle}>Resumen del pedido</Text>
+          </View>
           {items.map(({ bolsa, cantidad }) => (
             <View key={bolsa.id} style={s.orderItem}>
-              <Text style={s.orderName}>{bolsa.nombre}</Text>
-              <Text style={s.orderNegocio}>{bolsa.negocios?.nombre} × {cantidad}</Text>
+              <View style={s.orderThumb}>
+                <Ionicons name="restaurant-outline" size={16} color={Colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.orderName} numberOfLines={1}>{bolsa.nombre}</Text>
+                <Text style={s.orderNegocio}>{bolsa.negocios?.nombre} × {cantidad}</Text>
+              </View>
               <Text style={s.orderPrice}>Q{(bolsa.precio_descuento * cantidad).toFixed(0)}</Text>
             </View>
           ))}
@@ -157,58 +134,54 @@ export default function PagoScreen() {
 
         {/* Tipo entrega */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>🚗 Tipo de entrega</Text>
+          <View style={s.sectionHeader}>
+            <Ionicons name="car-outline" size={18} color={Colors.primary} />
+            <Text style={s.sectionTitle}>Tipo de entrega</Text>
+          </View>
           {distStr && (
-            <View style={s.distInfo}>
-              <Text style={s.distInfoText}>
-                {envioDisponible
-                  ? `📍 El restaurante está a ${distStr} de tu ubicación`
-                  : `⚠️ El restaurante está a ${distStr} — fuera del radio de envío (máx. ${ENVIO_MAX_KM} km)`}
+            <View style={[s.distInfo, !envioDisponible && s.distInfoWarn]}>
+              <Ionicons name={envioDisponible ? 'location-outline' : 'warning-outline'} size={14} color={envioDisponible ? Colors.primary : Colors.error} />
+              <Text style={[s.distInfoText, !envioDisponible && { color: Colors.error }]}>
+                {envioDisponible ? `Restaurante a ${distStr}` : `Fuera del radio de envío (${distStr} — máx. ${ENVIO_MAX_KM} km)`}
               </Text>
             </View>
           )}
           <View style={s.tipoRow}>
-            <TouchableOpacity
-              style={[s.tipoBtn, tipo === 'recogida' && s.tipoBtnActive]}
-              onPress={() => setTipo('recogida')}
-            >
-              <Text style={s.tipoEmoji}>🏪</Text>
-              <Text style={[s.tipoLabel, tipo === 'recogida' && s.tipoLabelActive]}>Recoger</Text>
-              <Text style={[s.tipoPrecio, tipo === 'recogida' && s.tipoPrecioActive]}>Gratis</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[s.tipoBtn, tipo === 'envio' && s.tipoBtnActive, !envioDisponible && s.tipoBtnDisabled]}
-              onPress={() => {
-                if (!envioDisponible) {
-                  Alert.alert('Envío no disponible', `Este restaurante está a ${distStr}, fuera del radio de ${ENVIO_MAX_KM} km.`);
-                  return;
-                }
-                setTipo('envio');
-              }}
-            >
-              <Text style={s.tipoEmoji}>🏍️</Text>
-              <Text style={[s.tipoLabel, tipo === 'envio' && s.tipoLabelActive, !envioDisponible && { color: Colors.textLight }]}>
-                Envío
-              </Text>
-              <Text style={[s.tipoPrecio, tipo === 'envio' && s.tipoPrecioActive, !envioDisponible && { color: Colors.textLight }]}>
-                {envioDisponible ? 'Q25' : 'No disponible'}
-              </Text>
-            </TouchableOpacity>
+            {[
+              { key: 'recogida', icon: 'storefront-outline', label: 'Recoger en tienda', precio: 'Gratis', available: true },
+              { key: 'envio', icon: 'bicycle-outline', label: 'Envío a domicilio', precio: envioDisponible ? 'Q25' : 'No disponible', available: envioDisponible },
+            ].map(({ key, icon, label, precio, available }) => (
+              <TouchableOpacity
+                key={key}
+                style={[s.tipoBtn, tipo === key && s.tipoBtnActive, !available && s.tipoBtnDisabled]}
+                onPress={() => {
+                  if (!available) { Alert.alert('Envío no disponible', `El restaurante está a ${distStr}, fuera del radio de ${ENVIO_MAX_KM} km.`); return; }
+                  setTipo(key as TipoEntrega);
+                }}
+              >
+                <Ionicons name={icon as any} size={24} color={tipo === key ? Colors.primary : Colors.textSecondary} />
+                <Text style={[s.tipoLabel, tipo === key && s.tipoLabelActive]}>{label}</Text>
+                <Text style={[s.tipoPrecio, tipo === key && s.tipoPrecioActive]}>{precio}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
 
-        {/* Dirección si es envío */}
+        {/* Dirección */}
         {tipo === 'envio' && (
           <View style={s.section}>
-            <Text style={s.sectionTitle}>📍 Dirección de entrega</Text>
+            <View style={s.sectionHeader}>
+              <Ionicons name="location-outline" size={18} color={Colors.primary} />
+              <Text style={s.sectionTitle}>Dirección de entrega</Text>
+            </View>
             {[
               { key: 'calle', label: 'Calle y número *', placeholder: '5a Calle 10-35' },
-              { key: 'zona',  label: 'Zona *',           placeholder: 'Zona 10' },
-              { key: 'ciudad', label: 'Ciudad',          placeholder: 'Guatemala' },
-              { key: 'referencia', label: 'Referencia',  placeholder: 'Frente al banco...' },
+              { key: 'zona', label: 'Zona *', placeholder: 'Zona 10' },
+              { key: 'ciudad', label: 'Ciudad', placeholder: 'Guatemala' },
+              { key: 'referencia', label: 'Referencia', placeholder: 'Frente al banco...' },
             ].map(({ key, label, placeholder }) => (
               <View key={key}>
-                <Text style={s.label}>{label}</Text>
+                <Text style={s.inputLabel}>{label}</Text>
                 <TextInput
                   style={s.input}
                   placeholder={placeholder}
@@ -221,42 +194,41 @@ export default function PagoScreen() {
           </View>
         )}
 
-        {/* Método de pago */}
+        {/* Pago */}
         <View style={s.section}>
-          <Text style={s.sectionTitle}>💳 Método de pago</Text>
-          <View style={s.payMethod}>
-            <Text style={{ fontSize: 28 }}>💳</Text>
-            <View style={{ flex: 1, marginLeft: 12 }}>
+          <View style={s.sectionHeader}>
+            <Ionicons name="card-outline" size={18} color={Colors.primary} />
+            <Text style={s.sectionTitle}>Método de pago</Text>
+          </View>
+          <View style={s.payMethodRow}>
+            <View style={s.payIconBox}>
+              <Ionicons name="card" size={22} color={Colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
               <Text style={s.payLabel}>Tarjeta de crédito / débito</Text>
-              <Text style={s.paySubLabel}>Procesado de forma segura con Cubo Pago</Text>
+              <Text style={s.paySubLabel}>Procesado con PayU · Pago seguro</Text>
             </View>
             <View style={s.payCheck}>
-              <Text style={{ color: Colors.white, fontSize: 12 }}>✓</Text>
+              <Ionicons name="checkmark" size={14} color={Colors.white} />
             </View>
           </View>
-          <Text style={s.cuboInfo}>
-            Serás redirigido al portal seguro de Cubo Pago para completar el pago.
-            Aceptamos Visa y Mastercard.
-          </Text>
+          <Text style={s.payuNote}>Serás redirigido al portal seguro de PayU. Aceptamos Visa, Mastercard y más.</Text>
         </View>
 
-        {/* Desglose financiero */}
+        {/* Total */}
         <View style={s.totalBox}>
-          <View style={s.totalLine}>
-            <Text style={s.totalKey}>Subtotal bolsa</Text>
-            <Text style={s.totalVal}>Q{total.toFixed(2)}</Text>
-          </View>
-          {tipo === 'envio' && (
-            <View style={s.totalLine}>
-              <Text style={s.totalKey}>Costo de envío</Text>
-              <Text style={s.totalVal}>Q{costoEnvio}</Text>
+          {[
+            { key: 'Subtotal bolsa', val: `Q${total.toFixed(2)}` },
+            ...(tipo === 'envio' ? [{ key: 'Envío a domicilio', val: `Q${costoEnvio}` }] : []),
+            { key: 'Comisión plataforma (≈3.5%)', val: `Q${comisionCubo.toFixed(2)}` },
+          ].map(({ key, val }) => (
+            <View key={key} style={s.totalLine}>
+              <Text style={s.totalKey}>{key}</Text>
+              <Text style={s.totalLineVal}>{val}</Text>
             </View>
-          )}
+          ))}
+          <View style={s.totalDivider} />
           <View style={s.totalLine}>
-            <Text style={s.totalKey}>Comisión pasarela (≈3.5%)</Text>
-            <Text style={s.totalVal}>Q{comisionCubo.toFixed(2)}</Text>
-          </View>
-          <View style={[s.totalLine, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border }]}>
             <Text style={s.totalFinalKey}>Total a pagar</Text>
             <Text style={s.totalFinalVal}>Q{totalFinal.toFixed(2)}</Text>
           </View>
@@ -266,58 +238,84 @@ export default function PagoScreen() {
       </ScrollView>
 
       <View style={s.footer}>
-        <TouchableOpacity
-          style={[s.btnPagar, loading && s.btnDisabled]}
-          onPress={iniciarPago}
-          disabled={loading}
-        >
+        <TouchableOpacity style={[s.btnPagar, loading && s.btnDisabled]} onPress={iniciarPago} disabled={loading}>
           {loading
             ? <ActivityIndicator color={Colors.white} />
-            : <Text style={s.btnPagarText}>Pagar Q{totalFinal.toFixed(2)} con Cubo Pago</Text>
+            : <>
+                <Ionicons name="lock-closed" size={16} color={Colors.white} />
+                <Text style={s.btnPagarText}>Pagar Q{totalFinal.toFixed(2)} con PayU</Text>
+              </>
           }
         </TouchableOpacity>
-        <Text style={s.seguro}>🔒 Pago seguro · SSL · Cubo Pago Guatemala</Text>
+        <View style={s.securoRow}>
+          <Ionicons name="shield-checkmark-outline" size={13} color={Colors.textLight} />
+          <Text style={s.seguroText}>Pago seguro · SSL · PayU Latam</Text>
+        </View>
       </View>
     </SafeAreaView>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.background },
+  root: { flex: 1, backgroundColor: Colors.surface },
+  centerBox: { justifyContent: 'center', alignItems: 'center', padding: 32 },
+
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, gap: 12 },
+  backBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.textPrimary },
+
   scroll: { padding: 16 },
-  section: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 12 },
-  sectionTitle: { fontSize: 15, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
-  orderItem: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
-  orderName: { flex: 1, fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
-  orderNegocio: { fontSize: 12, color: Colors.textSecondary, marginRight: 8 },
-  orderPrice: { fontSize: 14, fontWeight: '800', color: Colors.orange },
-  distInfo: { backgroundColor: Colors.brownLight, borderRadius: 10, padding: 10, marginBottom: 12 },
-  distInfoText: { fontSize: 12, color: Colors.brown, fontWeight: '600' },
-  tipoBtnDisabled: { opacity: 0.45, borderColor: Colors.border },
+  section: { backgroundColor: Colors.white, borderRadius: 20, padding: 18, marginBottom: 12 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
+  sectionTitle: { fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
+
+  orderItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+  orderThumb: { width: 38, height: 38, borderRadius: 10, backgroundColor: Colors.accentLight, alignItems: 'center', justifyContent: 'center' },
+  orderName: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
+  orderNegocio: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
+  orderPrice: { fontSize: 15, fontWeight: '800', color: Colors.primary },
+
+  distInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.accentLight, borderRadius: 12, padding: 10, marginBottom: 14 },
+  distInfoWarn: { backgroundColor: Colors.errorLight },
+  distInfoText: { fontSize: 12, color: Colors.primary, fontWeight: '600', flex: 1 },
+
   tipoRow: { flexDirection: 'row', gap: 10 },
-  tipoBtn: { flex: 1, borderWidth: 2, borderColor: Colors.border, borderRadius: 14, padding: 14, alignItems: 'center', gap: 4 },
-  tipoBtnActive: { borderColor: Colors.orange, backgroundColor: Colors.orangeLight },
-  tipoEmoji: { fontSize: 24 },
-  tipoLabel: { fontSize: 14, fontWeight: '700', color: Colors.textSecondary },
-  tipoLabelActive: { color: Colors.brown },
-  tipoPrecio: { fontSize: 13, color: Colors.textLight },
-  tipoPrecioActive: { color: Colors.orange, fontWeight: '700' },
-  label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
-  input: { backgroundColor: Colors.inputBg, borderRadius: 12, padding: 12, fontSize: 14, color: Colors.textPrimary, marginBottom: 12 },
-  payMethod: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.inputBg, borderRadius: 12, padding: 14 },
+  tipoBtn: { flex: 1, borderWidth: 2, borderColor: Colors.border, borderRadius: 16, padding: 14, alignItems: 'center', gap: 6 },
+  tipoBtnActive: { borderColor: Colors.primary, backgroundColor: Colors.accentLight },
+  tipoBtnDisabled: { opacity: 0.45 },
+  tipoLabel: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, textAlign: 'center' },
+  tipoLabelActive: { color: Colors.primary },
+  tipoPrecio: { fontSize: 13, color: Colors.textLight, fontWeight: '500' },
+  tipoPrecioActive: { color: Colors.primary, fontWeight: '700' },
+
+  inputLabel: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
+  input: { backgroundColor: Colors.surface, borderRadius: 12, padding: 13, fontSize: 14, color: Colors.textPrimary, marginBottom: 12 },
+
+  payMethodRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 14, padding: 14, gap: 12 },
+  payIconBox: { width: 42, height: 42, borderRadius: 12, backgroundColor: Colors.accentLight, alignItems: 'center', justifyContent: 'center' },
   payLabel: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
-  paySubLabel: { fontSize: 11, color: Colors.textLight, marginTop: 2 },
-  payCheck: { backgroundColor: Colors.green, borderRadius: 12, width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
-  cuboInfo: { fontSize: 12, color: Colors.textSecondary, marginTop: 10, lineHeight: 18 },
-  totalBox: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 12 },
-  totalLine: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  paySubLabel: { fontSize: 11, color: Colors.textSecondary, marginTop: 2 },
+  payCheck: { backgroundColor: Colors.primary, borderRadius: 12, width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+  payuNote: { fontSize: 12, color: Colors.textSecondary, marginTop: 12, lineHeight: 18 },
+
+  totalBox: { backgroundColor: Colors.white, borderRadius: 20, padding: 18, marginBottom: 12 },
+  totalLine: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   totalKey: { fontSize: 13, color: Colors.textSecondary },
-  totalVal: { fontSize: 13, color: Colors.textPrimary, fontWeight: '600' },
-  totalFinalKey: { fontSize: 17, fontWeight: '800', color: Colors.brown },
-  totalFinalVal: { fontSize: 22, fontWeight: '900', color: Colors.orange },
-  footer: { backgroundColor: Colors.white, padding: 16, borderTopWidth: 1, borderTopColor: Colors.border },
-  btnPagar: { backgroundColor: Colors.orange, borderRadius: 16, padding: 16, alignItems: 'center' },
+  totalLineVal: { fontSize: 13, color: Colors.textPrimary, fontWeight: '600' },
+  totalDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 10 },
+  totalFinalKey: { fontSize: 16, fontWeight: '800', color: Colors.textPrimary },
+  totalFinalVal: { fontSize: 24, fontWeight: '900', color: Colors.primary },
+
+  footer: { backgroundColor: Colors.white, padding: 16, paddingBottom: 24, borderTopWidth: 1, borderTopColor: Colors.border },
+  btnPagar: { backgroundColor: Colors.primary, borderRadius: 18, padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   btnDisabled: { backgroundColor: Colors.textLight },
   btnPagarText: { color: Colors.white, fontWeight: '900', fontSize: 16 },
-  seguro: { textAlign: 'center', fontSize: 12, color: Colors.textLight, marginTop: 8 },
+  securoRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10 },
+  seguroText: { textAlign: 'center', fontSize: 12, color: Colors.textLight },
+
+  verificandoIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: Colors.accentLight, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
+  verificandoTitle: { fontSize: 20, fontWeight: '800', color: Colors.textPrimary, marginBottom: 8 },
+  verificandoText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
+  verificandoLink: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  verificandoLinkText: { color: Colors.primary, fontWeight: '700', fontSize: 14 },
 });

@@ -65,7 +65,15 @@ function AuthGuard() {
   const router = useRouter();
   const segments = useSegments();
   const pushRegistered = useRef(false);
-  const [ready, setReady] = useState(false);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [onboardingDone, setOnboardingDone] = useState(true);
+
+  useEffect(() => {
+    AsyncStorage.getItem('bocara_onboarding_done').then((val) => {
+      setOnboardingDone(val === 'true');
+      setOnboardingChecked(true);
+    });
+  }, []);
 
   useEffect(() => {
     if (usuario && !pushRegistered.current) {
@@ -76,41 +84,40 @@ function AuthGuard() {
   }, [usuario]);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading || !onboardingChecked) return;
+    const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante';
+    const inOnboarding = segments[0] === 'onboarding';
 
-    AsyncStorage.getItem('bocara_onboarding_done').then((val) => {
-      const onboardingDone = val === 'true';
-      const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'verificar-email' || segments[0] === 'auth' || segments[0] === 'registro-telefono';
-      const inOnboarding = segments[0] === 'onboarding';
+    if (!usuario && !inAuth && !inOnboarding) {
+      router.replace('/login');
+      return;
+    }
 
-      if (!usuario && !inAuth && !inOnboarding) {
-        router.replace('/login');
-      } else if (usuario) {
-        if (usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
-          router.replace('/onboarding');
-        } else {
-          const inCorrectSection =
-            (usuario.rol === 'cliente' && segments[0] === '(tabs)') ||
-            (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
-            (usuario.rol === 'admin' && segments[0] === 'admin');
-
-          if (!inCorrectSection && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
-            if (usuario.rol === 'restaurante') router.replace('/restaurante');
-            else if (usuario.rol === 'admin') router.replace('/admin');
-            else router.replace('/(tabs)/');
-          }
-        }
+    if (usuario) {
+      // Mostrar onboarding a clientes nuevos que no lo han visto
+      if (usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
+        router.replace('/onboarding');
+        return;
       }
 
-      setReady(true);
-    });
-  }, [usuario, loading, segments]);
+      const inCorrectSection =
+        (usuario.rol === 'cliente' && segments[0] === '(tabs)') ||
+        (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
+        (usuario.rol === 'admin' && segments[0] === 'admin');
 
-  if (loading || !ready) {
+      if (!inCorrectSection && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
+        if (usuario.rol === 'restaurante') router.replace('/restaurante');
+        else if (usuario.rol === 'admin') router.replace('/admin');
+        else router.replace('/(tabs)/');
+      }
+    }
+  }, [usuario, loading, segments, onboardingChecked, onboardingDone]);
+
+  if (loading || !onboardingChecked) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background }}>
         <Text style={{ fontSize: 40, marginBottom: 12 }}>🛍️</Text>
-        <ActivityIndicator color={Colors.orange} size="large" />
+        <ActivityIndicator color={Colors.primary} size="large" />
       </View>
     );
   }
@@ -124,14 +131,11 @@ function AuthGuard() {
       <Stack.Screen name="login" options={{ animation: 'fade' }} />
       <Stack.Screen name="registro-cliente" />
       <Stack.Screen name="registro-restaurante" />
-      <Stack.Screen name="verificar-email" />
-      <Stack.Screen name="registro-telefono" />
-      <Stack.Screen name="auth" />
-      <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.orange, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="pago" options={{ headerShown: true, headerTitle: 'Confirmar pedido', headerTintColor: Colors.brown, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="qr-recogida" options={{ headerShown: true, headerTitle: '¡Pedido listo!', headerTintColor: Colors.brown, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.brown, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="soporte" options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.brown, headerStyle: { backgroundColor: Colors.background } }} />
+      <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+      <Stack.Screen name="pago" options={{ headerShown: false }} />
+      <Stack.Screen name="qr-recogida" options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+      <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+      <Stack.Screen name="soporte" options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
     </Stack>
   );
 }
