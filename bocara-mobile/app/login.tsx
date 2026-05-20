@@ -96,53 +96,55 @@ export default function LoginScreen() {
   if (esAdmin) {
     return (
       <KeyboardAvoidingView style={s.rootDark} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity style={s.logoArea} onPress={handleLogoTap} activeOpacity={1}>
-            <Text style={[s.logo, { color: '#818CF8' }]}>Boca<Text style={{ color: '#fff' }}>ra</Text></Text>
-            <View style={s.adminPill}>
-              <Ionicons name="lock-closed" size={12} color="#A5B4FC" />
-              <Text style={s.adminPillText}>ADMINISTRADOR</Text>
-            </View>
-          </TouchableOpacity>
-
-          <View style={s.darkCard}>
-            <Text style={s.darkCardTitle}>Acceso restringido</Text>
-            <Text style={s.darkCardSub}>Solo para administradores de plataforma.</Text>
-
-            {errorMsg ? (
-              <View style={s.errorBox}>
-                <Ionicons name="warning-outline" size={15} color="#B91C1C" />
-                <Text style={s.errorText}>{errorMsg}</Text>
+        <ScrollView contentContainerStyle={s.scrollDark} keyboardShouldPersistTaps="handled">
+          <View style={s.inner}>
+            <TouchableOpacity style={s.logoArea} onPress={handleLogoTap} activeOpacity={1}>
+              <Text style={[s.logo, { color: '#818CF8' }]}>Boca<Text style={{ color: '#fff' }}>ra</Text></Text>
+              <View style={s.adminPill}>
+                <Ionicons name="lock-closed" size={12} color="#A5B4FC" />
+                <Text style={s.adminPillText}>ADMINISTRADOR</Text>
               </View>
-            ) : null}
+            </TouchableOpacity>
 
-            <Text style={s.darkLabel}>Correo electrónico</Text>
-            <View style={[s.inputWrap, { backgroundColor: '#334155' }]}>
-              <Ionicons name="mail-outline" size={18} color="#64748B" />
-              <TextInput style={[s.input, { color: '#fff' }]} placeholder="admin@bocara.gt"
-                placeholderTextColor="#475569" keyboardType="email-address" autoCapitalize="none"
-                value={email} onChangeText={(v) => { setEmail(v); setErrorMsg(''); }} />
-            </View>
+            <View style={s.darkCard}>
+              <Text style={s.darkCardTitle}>Acceso restringido</Text>
+              <Text style={s.darkCardSub}>Solo para administradores de plataforma.</Text>
 
-            <Text style={s.darkLabel}>Contraseña</Text>
-            <View style={[s.inputWrap, { backgroundColor: '#334155' }]}>
-              <Ionicons name="lock-closed-outline" size={18} color="#64748B" />
-              <TextInput style={[s.input, { color: '#fff' }]} placeholder="••••••••"
-                placeholderTextColor="#475569" secureTextEntry={!showPass}
-                value={password} onChangeText={(v) => { setPassword(v); setErrorMsg(''); }} />
-              <TouchableOpacity onPress={() => setShowPass(!showPass)}>
-                <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color="#64748B" />
+              {errorMsg ? (
+                <View style={s.errorBox}>
+                  <Ionicons name="warning-outline" size={15} color="#B91C1C" />
+                  <Text style={s.errorText}>{errorMsg}</Text>
+                </View>
+              ) : null}
+
+              <Text style={s.darkLabel}>Correo electrónico</Text>
+              <View style={[s.inputWrap, { backgroundColor: '#334155' }]}>
+                <Ionicons name="mail-outline" size={18} color="#64748B" />
+                <TextInput style={[s.input, { color: '#fff' }]} placeholder="admin@bocara.gt"
+                  placeholderTextColor="#475569" keyboardType="email-address" autoCapitalize="none"
+                  value={email} onChangeText={(v) => { setEmail(v); setErrorMsg(''); }} />
+              </View>
+
+              <Text style={s.darkLabel}>Contraseña</Text>
+              <View style={[s.inputWrap, { backgroundColor: '#334155' }]}>
+                <Ionicons name="lock-closed-outline" size={18} color="#64748B" />
+                <TextInput style={[s.input, { color: '#fff' }]} placeholder="••••••••"
+                  placeholderTextColor="#475569" secureTextEntry={!showPass}
+                  value={password} onChangeText={(v) => { setPassword(v); setErrorMsg(''); }} />
+                <TouchableOpacity onPress={() => setShowPass(!showPass)}>
+                  <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity style={[s.btnPill, { backgroundColor: '#4F46E5' }]} onPress={handleLogin} disabled={loading}>
+                <Text style={s.btnPillText}>{loading ? 'Verificando...' : 'Ingresar'}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.linkBtn} onPress={() => setModoLimpio('cliente')}>
+                <Ionicons name="arrow-back" size={14} color="#64748B" />
+                <Text style={[s.linkBtnText, { color: '#64748B' }]}>Volver al login de clientes</Text>
               </TouchableOpacity>
             </View>
-
-            <TouchableOpacity style={[s.btnPill, { backgroundColor: '#4F46E5' }]} onPress={handleLogin} disabled={loading}>
-              <Text style={s.btnPillText}>{loading ? 'Verificando...' : 'Ingresar'}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.linkBtn} onPress={() => setModoLimpio('cliente')}>
-              <Ionicons name="arrow-back" size={14} color="#64748B" />
-              <Text style={[s.linkBtnText, { color: '#64748B' }]}>Volver al login de clientes</Text>
-            </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -153,127 +155,131 @@ export default function LoginScreen() {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <View style={s.inner}>
 
-        <TouchableOpacity style={s.logoArea} onPress={handleLogoTap} activeOpacity={1}>
-          <View style={s.logoCircle}>
-            <Image
-              source={require('@/assets/images/logo.png')}
-              style={s.logoImg}
-              contentFit="contain"
-            />
-          </View>
-          <Text style={s.tagline}>
-            {esRest ? 'Panel para negocios' : 'Rescata comida · Ahorra dinero'}
-          </Text>
-        </TouchableOpacity>
-
-        {/* Toggle cliente / restaurante */}
-        <View style={s.modeToggle}>
-          <TouchableOpacity style={[s.modeBtn, !esRest && s.modeBtnActive]} onPress={() => setModoLimpio('cliente')}>
-            <Ionicons name="person-outline" size={15} color={!esRest ? Colors.white : Colors.textSecondary} />
-            <Text style={[s.modeBtnText, !esRest && s.modeBtnTextActive]}>Soy cliente</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[s.modeBtn, esRest && s.modeBtnActive]} onPress={() => setModoLimpio('restaurante')}>
-            <Ionicons name="storefront-outline" size={15} color={esRest ? Colors.white : Colors.textSecondary} />
-            <Text style={[s.modeBtnText, esRest && s.modeBtnTextActive]}>Tengo un negocio</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={s.formCard}>
-          {esRest && (
-            <View style={s.restBanner}>
-              <Ionicons name="storefront" size={16} color={Colors.primary} />
-              <Text style={s.restBannerText}>Administra tus bolsas, cupones, pedidos y ganancias desde aquí.</Text>
+          <TouchableOpacity style={s.logoArea} onPress={handleLogoTap} activeOpacity={1}>
+            <View style={s.logoCircle}>
+              <Image
+                source={require('@/assets/images/logo.png')}
+                style={s.logoImg}
+                contentFit="contain"
+              />
             </View>
-          )}
+            <Text style={s.tagline}>
+              {esRest ? 'Panel para negocios' : 'Rescata comida · Ahorra dinero'}
+            </Text>
+          </TouchableOpacity>
 
-          {!esRest && (
-            <>
-              <TouchableOpacity style={s.googleBtn} onPress={handleGoogleLogin} disabled={googleLoading}>
-                <Text style={s.googleG}>G</Text>
-                <Text style={s.googleText}>{googleLoading ? 'Conectando...' : 'Continuar con Google'}</Text>
-              </TouchableOpacity>
-              <View style={s.orRow}>
-                <View style={s.orLine} />
-                <Text style={s.orText}>o ingresa con tu correo</Text>
-                <View style={s.orLine} />
-              </View>
-            </>
-          )}
-
-          {errorMsg ? (
-            <View style={s.errorBox}>
-              <Ionicons name="warning-outline" size={15} color="#B91C1C" />
-              <Text style={s.errorText}>{errorMsg}</Text>
-            </View>
-          ) : null}
-
-          <Text style={s.inputLabel}>Correo electrónico</Text>
-          <View style={s.inputWrap}>
-            <Ionicons name="mail-outline" size={18} color={Colors.textSecondary} />
-            <TextInput style={s.input} placeholder="tu@correo.com" placeholderTextColor={Colors.textLight}
-              keyboardType="email-address" autoCapitalize="none"
-              value={email} onChangeText={(v) => { setEmail(v); setErrorMsg(''); }} />
-          </View>
-
-          <Text style={s.inputLabel}>Contraseña</Text>
-          <View style={s.inputWrap}>
-            <Ionicons name="lock-closed-outline" size={18} color={Colors.textSecondary} />
-            <TextInput style={s.input} placeholder="••••••••" placeholderTextColor={Colors.textLight}
-              secureTextEntry={!showPass}
-              value={password} onChangeText={(v) => { setPassword(v); setErrorMsg(''); }} />
-            <TouchableOpacity onPress={() => setShowPass(!showPass)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={Colors.textSecondary} />
+          {/* Toggle cliente / restaurante */}
+          <View style={s.modeToggle}>
+            <TouchableOpacity style={[s.modeBtn, !esRest && s.modeBtnActive]} onPress={() => setModoLimpio('cliente')}>
+              <Ionicons name="person-outline" size={15} color={!esRest ? Colors.white : Colors.textSecondary} />
+              <Text style={[s.modeBtnText, !esRest && s.modeBtnTextActive]}>Soy cliente</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[s.modeBtn, esRest && s.modeBtnActive]} onPress={() => setModoLimpio('restaurante')}>
+              <Ionicons name="storefront-outline" size={15} color={esRest ? Colors.white : Colors.textSecondary} />
+              <Text style={[s.modeBtnText, esRest && s.modeBtnTextActive]}>Tengo un negocio</Text>
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity style={s.btnPill} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
-            <Text style={s.btnPillText}>{loading ? 'Verificando...' : 'Ingresar'}</Text>
-          </TouchableOpacity>
+          <View style={s.formCard}>
+            {esRest && (
+              <View style={s.restBanner}>
+                <Ionicons name="storefront" size={16} color={Colors.primary} />
+                <Text style={s.restBannerText}>Administra tus bolsas, cupones, pedidos y ganancias desde aquí.</Text>
+              </View>
+            )}
 
-          <View style={s.divider}>
-            <View style={s.dividerLine} />
-            <Text style={s.dividerText}>¿No tienes cuenta?</Text>
-            <View style={s.dividerLine} />
+            {!esRest && (
+              <>
+                <TouchableOpacity style={s.googleBtn} onPress={handleGoogleLogin} disabled={googleLoading}>
+                  <Text style={s.googleG}>G</Text>
+                  <Text style={s.googleText}>{googleLoading ? 'Conectando...' : 'Continuar con Google'}</Text>
+                </TouchableOpacity>
+                <View style={s.orRow}>
+                  <View style={s.orLine} />
+                  <Text style={s.orText}>o ingresa con tu correo</Text>
+                  <View style={s.orLine} />
+                </View>
+              </>
+            )}
+
+            {errorMsg ? (
+              <View style={s.errorBox}>
+                <Ionicons name="warning-outline" size={15} color="#B91C1C" />
+                <Text style={s.errorText}>{errorMsg}</Text>
+              </View>
+            ) : null}
+
+            <Text style={s.inputLabel}>Correo electrónico</Text>
+            <View style={s.inputWrap}>
+              <Ionicons name="mail-outline" size={18} color={Colors.textSecondary} />
+              <TextInput style={s.input} placeholder="tu@correo.com" placeholderTextColor={Colors.textLight}
+                keyboardType="email-address" autoCapitalize="none"
+                value={email} onChangeText={(v) => { setEmail(v); setErrorMsg(''); }} />
+            </View>
+
+            <Text style={s.inputLabel}>Contraseña</Text>
+            <View style={s.inputWrap}>
+              <Ionicons name="lock-closed-outline" size={18} color={Colors.textSecondary} />
+              <TextInput style={s.input} placeholder="••••••••" placeholderTextColor={Colors.textLight}
+                secureTextEntry={!showPass}
+                value={password} onChangeText={(v) => { setPassword(v); setErrorMsg(''); }} />
+              <TouchableOpacity onPress={() => setShowPass(!showPass)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name={showPass ? 'eye-off-outline' : 'eye-outline'} size={18} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={s.btnPill} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
+              <Text style={s.btnPillText}>{loading ? 'Verificando...' : 'Ingresar'}</Text>
+            </TouchableOpacity>
+
+            <View style={s.divider}>
+              <View style={s.dividerLine} />
+              <Text style={s.dividerText}>¿No tienes cuenta?</Text>
+              <View style={s.dividerLine} />
+            </View>
+
+            {!esRest && (
+              <>
+                <TouchableOpacity style={s.btnOutline} onPress={() => router.push('/registro-cliente')}>
+                  <Ionicons name="person-add-outline" size={16} color={Colors.primary} />
+                  <Text style={s.btnOutlineText}>Crear cuenta gratis</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.btnOutline, { marginTop: 10, borderColor: Colors.border }]} onPress={() => router.push('/registro-telefono')}>
+                  <Ionicons name="phone-portrait-outline" size={16} color={Colors.textSecondary} />
+                  <Text style={[s.btnOutlineText, { color: Colors.textSecondary }]}>Ingresar con teléfono</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            <TouchableOpacity
+              style={[s.btnOutline, { marginTop: 10, borderColor: esRest ? Colors.primary : Colors.border }]}
+              onPress={() => router.push('/registro-restaurante')}
+            >
+              <Ionicons name="storefront-outline" size={16} color={esRest ? Colors.primary : Colors.textSecondary} />
+              <Text style={[s.btnOutlineText, { color: esRest ? Colors.primary : Colors.textSecondary }]}>
+                Registrar mi negocio
+              </Text>
+            </TouchableOpacity>
           </View>
 
-          {!esRest && (
-            <>
-              <TouchableOpacity style={s.btnOutline} onPress={() => router.push('/registro-cliente')}>
-                <Ionicons name="person-add-outline" size={16} color={Colors.primary} />
-                <Text style={s.btnOutlineText}>Crear cuenta gratis</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.btnOutline, { marginTop: 10, borderColor: Colors.border }]} onPress={() => router.push('/registro-telefono')}>
-                <Ionicons name="phone-portrait-outline" size={16} color={Colors.textSecondary} />
-                <Text style={[s.btnOutlineText, { color: Colors.textSecondary }]}>Ingresar con teléfono</Text>
-              </TouchableOpacity>
-            </>
+          {logoTaps > 0 && (
+            <Text style={s.tapHint}>{5 - logoTaps} taps más para acceso admin</Text>
           )}
-
-          <TouchableOpacity
-            style={[s.btnOutline, { marginTop: 10, borderColor: esRest ? Colors.primary : Colors.border }]}
-            onPress={() => router.push('/registro-restaurante')}
-          >
-            <Ionicons name="storefront-outline" size={16} color={esRest ? Colors.primary : Colors.textSecondary} />
-            <Text style={[s.btnOutlineText, { color: esRest ? Colors.primary : Colors.textSecondary }]}>
-              Registrar mi negocio
-            </Text>
-          </TouchableOpacity>
+          <View style={{ height: 40 }} />
         </View>
-
-        {logoTaps > 0 && (
-          <Text style={s.tapHint}>{5 - logoTaps} taps más para acceso admin</Text>
-        )}
-        <View style={{ height: 40 }} />
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: Colors.background },
+  root: { flex: 1, backgroundColor: Colors.surface },
   rootDark: { flex: 1, backgroundColor: '#0F172A' },
-  scroll: { flexGrow: 1, padding: 24, paddingTop: 16 },
+  scroll: { flexGrow: 1, alignItems: 'center', backgroundColor: Colors.surface },
+  scrollDark: { flexGrow: 1, alignItems: 'center', backgroundColor: '#0F172A' },
+  inner: { width: '100%', maxWidth: 480, paddingHorizontal: 24, paddingTop: 16 } as any,
 
   logoArea: { alignItems: 'center', paddingTop: 28, paddingBottom: 24 },
   logoCircle: {
