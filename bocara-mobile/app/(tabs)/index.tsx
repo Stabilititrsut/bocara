@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  TextInput, RefreshControl, ActivityIndicator, SafeAreaView, Share, Dimensions,
+  RefreshControl, ActivityIndicator, SafeAreaView, Dimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,170 +11,95 @@ import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
+import { useCart } from '@/src/context/CartContext';
 
 const { width: SW } = Dimensions.get('window');
-const CARD_IMG_H = Math.round(SW * 0.58);
-const MINI_W = 160;
+const CARD_W = Math.floor((SW - 52) / 2);
+const CARD_IMG_H = Math.round(CARD_W * 0.68);
 
 const CATEGORIAS = [
-  { label: 'Todos',         emoji: '✨' },
-  { label: 'Panadería',    emoji: '🥐' },
-  { label: 'Restaurante',  emoji: '🍽️' },
-  { label: 'Cafetería',    emoji: '☕' },
-  { label: 'Supermercado', emoji: '🛒' },
-  { label: 'Sushi',        emoji: '🍣' },
-  { label: 'Pizza',        emoji: '🍕' },
-  { label: 'Comida Típica',emoji: '🫕' },
+  { label: 'Todos',          emoji: '✨', bg: '#F5F0EB' },
+  { label: 'Panadería',     emoji: '🥐', bg: '#FFF3E0' },
+  { label: 'Restaurante',   emoji: '🍽️', bg: '#FCE4EC' },
+  { label: 'Cafetería',     emoji: '☕', bg: '#EDE7F6' },
+  { label: 'Supermercado',  emoji: '🛒', bg: '#F1F8E9' },
+  { label: 'Sushi',         emoji: '🍣', bg: '#E3F2FD' },
+  { label: 'Pizza',         emoji: '🍕', bg: '#FFF8E1' },
+  { label: 'Comida Típica', emoji: '🫕', bg: '#F3E5F5' },
 ];
 
-const ZONAS_GT = ['Todas', 'Zona 1', 'Zona 2', 'Zona 4', 'Zona 9', 'Zona 10', 'Zona 11', 'Zona 12', 'Zona 13', 'Zona 14', 'Zona 15', 'Mixco', 'Villa Nueva'];
-
-type DistFiltro = 1 | 3 | 5 | 10 | null;
-const DIST_OPCIONES: Array<{ label: string; km: DistFiltro }> = [
-  { label: '1 km', km: 1 }, { label: '3 km', km: 3 },
-  { label: '5 km', km: 5 }, { label: '10 km', km: 10 }, { label: 'Todos', km: null },
-];
-
-function formatDist(km: number | null | undefined): string | null {
-  if (km === null || km === undefined) return null;
-  if (km < 1) return `${Math.round(km * 1000)} m`;
-  return `${km.toFixed(1)} km`;
-}
-
-function getTimeTag(inicio: string, fin: string): { texto: string; urgent: boolean } | null {
-  if (!inicio || !fin) return null;
-  const now = new Date();
-  const [ih, im] = inicio.split(':').map(Number);
-  const [fh, fm] = fin.split(':').map(Number);
-  const ini = new Date(now); ini.setHours(ih, im, 0, 0);
-  const end = new Date(now); end.setHours(fh, fm, 0, 0);
-  if (now > end) return { texto: 'Vencida', urgent: false };
-  if (now < ini) {
-    const mins = Math.round((ini.getTime() - now.getTime()) / 60000);
-    if (mins <= 60) return { texto: `Abre en ${mins}m`, urgent: false };
-    return null;
-  }
-  const mins = Math.round((end.getTime() - now.getTime()) / 60000);
-  if (mins <= 30) return { texto: `${mins}m restantes`, urgent: true };
-  return null;
-}
-
-function BolsaCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
+function ProductCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
+  const imgUri = bolsa.imagen_url || bolsa.negocios?.imagen_url;
+  const catEntry = CATEGORIAS.find(c => c.label === bolsa.negocios?.categoria);
+  const catEmoji = catEntry?.emoji || '🍱';
+  const catBg = catEntry?.bg || '#F5F0EB';
   const agotada = bolsa.cantidad_disponible === 0;
-  const distStr = formatDist(bolsa.distancia_km);
-  const timeTag = getTimeTag(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin);
-  const imgUri = bolsa.imagen_url || bolsa.negocios?.imagen_url;
-  const catEmoji = CATEGORIAS.find(c => c.label === bolsa.negocios?.categoria)?.emoji || '🍱';
-
-  async function compartir() {
-    await Share.share({
-      message: `Mira esta oferta en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocarafood.com`,
-    });
-  }
 
   return (
-    <TouchableOpacity style={[s.card, agotada && s.cardAgotada]} onPress={onPress} disabled={agotada} activeOpacity={0.92}>
-      {/* Image */}
-      <View style={s.cardImgWrap}>
+    <TouchableOpacity
+      style={[s.productCard, { width: CARD_W }, agotada && s.productAgotada]}
+      onPress={onPress}
+      activeOpacity={0.88}
+      disabled={agotada}
+    >
+      <View style={[s.productImgWrap, { height: CARD_IMG_H }]}>
         {imgUri ? (
-          <Image source={{ uri: imgUri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
+          <Image source={{ uri: imgUri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
         ) : (
-          <View style={s.cardImgPlaceholder}>
-            <Text style={{ fontSize: 64 }}>{catEmoji}</Text>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: catBg, justifyContent: 'center', alignItems: 'center' }]}>
+            <Text style={{ fontSize: 42 }}>{catEmoji}</Text>
           </View>
         )}
-
-        {/* Gradient overlay */}
-        <View style={s.cardGradient} />
-
-        {/* Discount pill top-left */}
-        <View style={[s.discPill, agotada && { backgroundColor: Colors.textSecondary }]}>
-          <Text style={s.discPillText}>{agotada ? 'Agotado' : `-${desc}%`}</Text>
+        <View style={[s.productDiscBadge, agotada && { backgroundColor: Colors.textSecondary }]}>
+          <Text style={s.productDiscText}>{agotada ? 'Agotado' : `-${desc}%`}</Text>
         </View>
-
-        {/* Coupon pill */}
         {bolsa.tipo === 'cupon' && (
-          <View style={s.cuponPill}><Text style={s.cuponPillText}>Cupón</Text></View>
+          <View style={s.cuponBadge}><Text style={s.cuponBadgeText}>Cupón</Text></View>
         )}
-
-        {/* Time badge */}
-        {timeTag && (
-          <View style={[s.timePill, timeTag.urgent && { backgroundColor: Colors.error }]}>
-            <Text style={s.timePillText}>{timeTag.texto}</Text>
-          </View>
-        )}
-
-        {/* Share */}
-        <TouchableOpacity style={s.shareBtn} onPress={compartir} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="share-social-outline" size={15} color="#fff" />
-        </TouchableOpacity>
-
-        {/* Name + price overlaid */}
-        <View style={s.imgFooter}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text style={s.imgNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
-            <Text style={s.imgNombre} numberOfLines={1}>{bolsa.nombre}</Text>
-          </View>
-          <View style={s.imgPriceBox}>
-            <Text style={s.imgOriginal}>Q{bolsa.precio_original}</Text>
-            <Text style={s.imgPrice}>Q{bolsa.precio_descuento}</Text>
-          </View>
-        </View>
       </View>
-
-      {/* Meta row */}
-      <View style={s.cardMeta}>
-        {distStr && (
-          <View style={s.metaChip}>
-            <Ionicons name="location-outline" size={11} color={Colors.textSecondary} />
-            <Text style={s.metaText}>{distStr}</Text>
+      <View style={s.productInfo}>
+        <Text style={s.productNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
+        <Text style={s.productNombre} numberOfLines={2}>{bolsa.nombre}</Text>
+        <View style={s.productBottom}>
+          <View>
+            <Text style={s.productOriginal}>Q{bolsa.precio_original}</Text>
+            <Text style={s.productPrice}>Q{bolsa.precio_descuento}</Text>
           </View>
-        )}
-        <View style={s.metaChip}>
-          <Ionicons name="time-outline" size={11} color={Colors.textSecondary} />
-          <Text style={s.metaText}>{bolsa.hora_recogida_inicio?.slice(0, 5)}–{bolsa.hora_recogida_fin?.slice(0, 5)}</Text>
-        </View>
-        <View style={s.metaChip}>
-          <Ionicons name="layers-outline" size={11} color={Colors.textSecondary} />
-          <Text style={s.metaText}>{bolsa.cantidad_disponible} disp.</Text>
+          {!agotada && (
+            <TouchableOpacity style={s.addBtn} onPress={onPress}>
+              <Ionicons name="add" size={18} color={Colors.white} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </TouchableOpacity>
   );
 }
 
-function MiniCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
-  const desc = bolsa.precio_original > 0 ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
-  const imgUri = bolsa.imagen_url || bolsa.negocios?.imagen_url;
-  const catEmoji = CATEGORIAS.find(c => c.label === bolsa.negocios?.categoria)?.emoji || '🍱';
+function RestCard({ negocio, count, onPress }: { negocio: any; count: number; onPress: () => void }) {
+  const rating = negocio.calificacion_promedio || 0;
   return (
-    <TouchableOpacity style={s.miniCard} onPress={onPress} activeOpacity={0.9}>
-      <View style={s.miniImgWrap}>
-        {imgUri
-          ? <Image source={{ uri: imgUri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
-          : <View style={s.miniImgWrap}><Text style={{ fontSize: 32 }}>{catEmoji}</Text></View>
-        }
-        <View style={s.miniDisc}><Text style={s.miniDiscText}>-{desc}%</Text></View>
+    <TouchableOpacity style={s.restCard} onPress={onPress} activeOpacity={0.88}>
+      <View style={s.restImgWrap}>
+        {negocio.imagen_url ? (
+          <Image source={{ uri: negocio.imagen_url }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' }]}>
+            <Text style={{ fontSize: 30 }}>🏪</Text>
+          </View>
+        )}
       </View>
-      <View style={s.miniBody}>
-        <Text style={s.miniNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
-        <Text style={s.miniPrice}>Q{bolsa.precio_descuento}</Text>
+      <View style={s.restInfo}>
+        <Text style={s.restNombre} numberOfLines={1}>{negocio.nombre}</Text>
+        <View style={s.restRatingRow}>
+          <Ionicons name="star" size={11} color={Colors.accent} />
+          <Text style={s.restRating}>{rating > 0 ? rating.toFixed(1) : 'Nuevo'}</Text>
+        </View>
+        <Text style={s.restCount}>{count} bolsa{count !== 1 ? 's' : ''}</Text>
       </View>
     </TouchableOpacity>
-  );
-}
-
-function SeccionHome({ titulo, bolsas, onPress }: { titulo: string; bolsas: Bolsa[]; onPress: (b: Bolsa) => void }) {
-  if (bolsas.length === 0) return null;
-  return (
-    <View style={s.seccion}>
-      <Text style={s.seccionTitulo}>{titulo}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 14, paddingRight: 20 }}>
-        {bolsas.map((b) => <MiniCard key={b.id} bolsa={b} onPress={() => onPress(b)} />)}
-      </ScrollView>
-    </View>
   );
 }
 
@@ -185,13 +110,11 @@ export default function HomeScreen() {
   const [errorNet, setErrorNet] = useState('');
   const [tab, setTab] = useState<'bolsa' | 'cupon'>('bolsa');
   const [catSelected, setCatSelected] = useState('Todos');
-  const [zonaSelected, setZonaSelected] = useState('Todas');
-  const [busqueda, setBusqueda] = useState('');
-  const [distFiltro, setDistFiltro] = useState<DistFiltro>(null);
   const [sinLeerCount, setSinLeerCount] = useState(0);
   const router = useRouter();
   const { usuario } = useAuth();
   const { coords, locationName, permissionStatus, requestPermission, loading: locLoading } = useLocation();
+  const { cantidad: cantidadCarrito } = useCart();
 
   useEffect(() => {
     notificacionesAPI.listar().then((r) => {
@@ -208,233 +131,220 @@ export default function HomeScreen() {
       setBolsas(res.data || []);
     } catch (e: any) {
       setBolsas([]);
-      if (e.message?.includes('internet') || e.message?.includes('Network')) {
-        setErrorNet('Sin conexión a internet. Revisa tu red.');
-      }
+      if (e.message?.includes('internet') || e.message?.includes('Network')) setErrorNet('Sin conexión.');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setLoading(false); setRefreshing(false);
     }
   }, [tab, coords]);
 
   useEffect(() => { setLoading(true); cargar(); }, [cargar]);
 
-  const filtradas = bolsas.filter((b) => {
-    const matchCat = catSelected === 'Todos' || b.negocios?.categoria === catSelected;
-    const matchZona = zonaSelected === 'Todas' || b.negocios?.zona === zonaSelected ||
-      b.negocios?.zona?.toLowerCase().includes(zonaSelected.toLowerCase());
-    const matchBusq = !busqueda ||
-      b.negocios?.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
-      b.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
-      b.negocios?.zona?.toLowerCase().includes(busqueda.toLowerCase());
-    const matchDist = distFiltro === null ||
-      b.distancia_km === null || b.distancia_km === undefined ||
-      (b.distancia_km as number) <= distFiltro;
-    return matchCat && matchZona && matchBusq && matchDist;
-  });
+  const filtradas = catSelected === 'Todos' ? bolsas : bolsas.filter(b => b.negocios?.categoria === catSelected);
 
-  const hayFiltro = busqueda || catSelected !== 'Todos' || zonaSelected !== 'Todas' || distFiltro;
-  const populares = [...bolsas]
-    .filter(b => (b.negocios?.calificacion_promedio || 0) >= 4)
-    .sort((a, b) => (b.negocios?.calificacion_promedio || 0) - (a.negocios?.calificacion_promedio || 0))
-    .slice(0, 8);
-  const ultimasHoras = bolsas.filter(b => {
-    if (!b.hora_recogida_fin) return false;
-    const [h, m] = b.hora_recogida_fin.split(':').map(Number);
-    const fin = new Date(); fin.setHours(h, m, 0, 0);
-    const diff = (fin.getTime() - Date.now()) / 60000;
-    return diff > 0 && diff <= 90;
+  // Extract unique restaurants sorted by rating
+  const restaurantesMap = new Map<string, { negocio: any; count: number }>();
+  bolsas.forEach(b => {
+    if (b.negocios?.nombre) {
+      const entry = restaurantesMap.get(b.negocios.nombre);
+      if (entry) entry.count++;
+      else restaurantesMap.set(b.negocios.nombre, { negocio: b.negocios, count: 1 });
+    }
   });
+  const restaurantesDestacados = Array.from(restaurantesMap.values())
+    .sort((a, b) => (b.negocio.calificacion_promedio || 0) - (a.negocio.calificacion_promedio || 0))
+    .slice(0, 10);
 
+  const nombreCorto = usuario?.nombre ? usuario.nombre.split(' ')[0] : null;
+  const inicialesNombre = `${usuario?.nombre?.[0] || ''}${usuario?.apellido?.[0] || ''}`.toUpperCase();
   const tieneUbicacion = coords !== null;
   const locDenied = permissionStatus === 'denied';
-  const nombreCorto = usuario?.nombre ? usuario.nombre.split(' ')[0] : null;
+
+  function renderGrid(items: Bolsa[]) {
+    const rows = [];
+    for (let i = 0; i < items.length; i += 2) {
+      rows.push(
+        <View key={i} style={s.gridRow}>
+          <ProductCard bolsa={items[i]} onPress={() => router.push(`/producto/${items[i].id}` as any)} />
+          {items[i + 1]
+            ? <ProductCard bolsa={items[i + 1]} onPress={() => router.push(`/producto/${items[i + 1].id}` as any)} />
+            : <View style={{ width: CARD_W }} />
+          }
+        </View>
+      );
+    }
+    return rows;
+  }
 
   return (
     <SafeAreaView style={s.root}>
-      {/* Header */}
+      {/* ── HEADER (fixed) ── */}
       <View style={s.header}>
-        <View style={s.headerTop}>
-          <View style={{ flex: 1 }}>
-            <Text style={s.greeting}>{nombreCorto ? `Hola, ${nombreCorto}` : 'Bocara'}</Text>
+        <View style={s.headerLeft}>
+          <TouchableOpacity style={s.avatar} onPress={() => router.push('/(tabs)/perfil')}>
+            <Text style={s.avatarText}>{inicialesNombre || '?'}</Text>
+          </TouchableOpacity>
+          <View>
+            <Text style={s.greeting}>Hola, {nombreCorto || 'Bocara'} 👋</Text>
             <TouchableOpacity
               onPress={!tieneUbicacion && !locDenied ? requestPermission : undefined}
-              activeOpacity={tieneUbicacion ? 1 : 0.7}
               style={s.locRow}
+              activeOpacity={tieneUbicacion ? 1 : 0.7}
             >
-              <Ionicons name="location" size={12} color={Colors.accent} />
-              <Text style={s.headerLoc} numberOfLines={1}>
+              <Ionicons name="location" size={11} color={Colors.accent} />
+              <Text style={s.locText} numberOfLines={1}>
                 {locLoading ? 'Buscando...' : tieneUbicacion ? locationName : locDenied ? 'Sin ubicación' : 'Activar ubicación'}
               </Text>
             </TouchableOpacity>
           </View>
-          <View style={s.headerActions}>
-            <TouchableOpacity
-              onPress={() => router.push('/(tabs)/explore' as any)}
-              style={s.iconBtn}
-            >
-              <Ionicons name="notifications-outline" size={20} color={Colors.primary} />
-              {sinLeerCount > 0 && <View style={s.notifDot} />}
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/(tabs)/perfil')} style={s.iconBtn}>
-              <Ionicons name="person-outline" size={20} color={Colors.primary} />
-            </TouchableOpacity>
-          </View>
         </View>
-
-        {/* Search */}
-        <View style={s.searchBar}>
-          <Ionicons name="search-outline" size={17} color={Colors.textSecondary} />
-          <TextInput
-            style={s.searchInput}
-            placeholder="Restaurantes, zonas, categorías..."
-            placeholderTextColor={Colors.textLight}
-            value={busqueda}
-            onChangeText={setBusqueda}
-          />
-          {busqueda.length > 0 && (
-            <TouchableOpacity onPress={() => setBusqueda('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={17} color={Colors.textLight} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Tabs bolsa/cupón */}
-        <View style={s.tabRow}>
-          <TouchableOpacity style={[s.tabBtn, tab === 'bolsa' && s.tabBtnActive]} onPress={() => setTab('bolsa')}>
-            <Text style={[s.tabBtnText, tab === 'bolsa' && s.tabBtnTextActive]}>Bolsas Sorpresa</Text>
+        <View style={s.headerRight}>
+          <TouchableOpacity style={s.headerIconBtn} onPress={() => router.push('/(tabs)/notificaciones' as any)}>
+            <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
+            {sinLeerCount > 0 && <View style={s.notifDot} />}
           </TouchableOpacity>
-          <TouchableOpacity style={[s.tabBtn, tab === 'cupon' && s.tabBtnActive]} onPress={() => setTab('cupon')}>
-            <Text style={[s.tabBtnText, tab === 'cupon' && s.tabBtnTextActive]}>Cupones</Text>
+          <TouchableOpacity style={s.headerIconBtn} onPress={() => router.push('/(tabs)/carrito' as any)}>
+            <Ionicons name="bag-outline" size={22} color={Colors.primary} />
+            {cantidadCarrito > 0 && (
+              <View style={s.cartBadge}>
+                <Text style={s.cartBadgeText}>{cantidadCarrito > 9 ? '9+' : cantidadCarrito}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Banners */}
-      {errorNet ? (
-        <View style={s.alertBanner}>
-          <Ionicons name="wifi-outline" size={15} color={Colors.error} />
-          <Text style={s.alertText}>{errorNet}</Text>
-          <TouchableOpacity onPress={cargar}><Text style={s.alertAction}>Reintentar</Text></TouchableOpacity>
+      {/* ── SCROLLABLE CONTENT ── */}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.primary} />
+        }
+      >
+        {/* SEARCH PILL */}
+        <TouchableOpacity style={s.searchPill} onPress={() => router.push('/(tabs)/buscar' as any)} activeOpacity={0.8}>
+          <Ionicons name="search-outline" size={17} color={Colors.textSecondary} />
+          <Text style={s.searchPlaceholder}>Restaurantes, categorías, zonas...</Text>
+          <View style={s.filterBtn}>
+            <Ionicons name="options-outline" size={17} color={Colors.primary} />
+          </View>
+        </TouchableOpacity>
+
+        {/* HERO BANNER */}
+        <View style={s.heroBanner}>
+          <View style={StyleSheet.absoluteFill}>
+            <View style={s.heroDeco1} />
+            <View style={s.heroDeco2} />
+            <View style={s.heroDeco3} />
+          </View>
+          <View style={s.heroContent}>
+            <Text style={s.heroTag}>Guatemala · Rescata comida</Text>
+            <Text style={s.heroTitle}>Descubre más.{'\n'}Ahorra mejor.</Text>
+            <TouchableOpacity style={s.heroCTA} onPress={() => setCatSelected('Todos')}>
+              <Text style={s.heroCTAText}>Ver ofertas</Text>
+              <Ionicons name="arrow-forward" size={13} color={Colors.primary} />
+            </TouchableOpacity>
+          </View>
+          <View style={s.heroCounter}>
+            <Text style={s.heroCounterNum}>{bolsas.filter(b => b.cantidad_disponible > 0).length}</Text>
+            <Text style={s.heroCounterLabel}>activas</Text>
+          </View>
         </View>
-      ) : locDenied ? (
-        <View style={s.infoBanner}>
-          <Ionicons name="location-outline" size={15} color={Colors.accent} />
-          <Text style={s.infoText}>Activa la ubicación para ver distancias</Text>
-          <TouchableOpacity onPress={requestPermission} style={s.infoBtn}>
-            <Text style={s.infoBtnText}>Activar</Text>
+
+        {/* TABS bolsa / cupón */}
+        <View style={s.tabRow}>
+          <TouchableOpacity style={[s.tabBtn, tab === 'bolsa' && s.tabBtnActive]} onPress={() => setTab('bolsa')}>
+            <Text style={[s.tabBtnText, tab === 'bolsa' && s.tabBtnTextActive]}>🛍️  Bolsas Sorpresa</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.tabBtn, tab === 'cupon' && s.tabBtnActive]} onPress={() => setTab('cupon')}>
+            <Text style={[s.tabBtnText, tab === 'cupon' && s.tabBtnTextActive]}>🏷️  Cupones</Text>
           </TouchableOpacity>
         </View>
-      ) : null}
 
-      {/* Categories */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.catRow} contentContainerStyle={s.catContent}>
-        {CATEGORIAS.map(({ label, emoji }) => {
-          const active = catSelected === label;
-          return (
-            <TouchableOpacity
-              key={label}
-              style={[s.catPill, active && s.catPillActive]}
-              onPress={() => setCatSelected(label)}
-              activeOpacity={0.8}
-            >
-              <Text style={s.catEmoji}>{emoji}</Text>
-              <Text style={[s.catLabel, active && s.catLabelActive]}>{label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* Distance filter (if location) */}
-      {tieneUbicacion && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterContent}>
-          {DIST_OPCIONES.map(({ label, km }) => (
-            <TouchableOpacity key={label} style={[s.chip, distFiltro === km && s.chipActive]} onPress={() => setDistFiltro(km)}>
-              <Text style={[s.chipText, distFiltro === km && s.chipTextActive]}>{label}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
-
-      {/* Zone filter */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterContent}>
-        {ZONAS_GT.map((z) => (
-          <TouchableOpacity key={z} style={[s.chip, zonaSelected === z && s.chipActive]} onPress={() => setZonaSelected(z)}>
-            <Text style={[s.chipText, zonaSelected === z && s.chipTextActive]}>{z}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Feed */}
-      {loading ? (
-        <View style={s.loadingBox}>
-          <ActivityIndicator color={Colors.primary} size="large" />
-          <Text style={s.loadingText}>{locLoading ? 'Obteniendo tu ubicación...' : 'Buscando ofertas...'}</Text>
-        </View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={s.feed}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.primary} />}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Hero banner */}
-          {!hayFiltro && bolsas.length > 0 && (
-            <View style={s.heroBanner}>
-              <View>
-                <Text style={s.heroTag}>Disponible ahora</Text>
-                <Text style={s.heroTitle}>Ofertas{'\n'}del día</Text>
-                <Text style={s.heroSub}>{bolsas.filter(b => b.cantidad_disponible > 0).length} bolsas disponibles</Text>
-              </View>
-              <View style={s.heroBadge}>
-                <Text style={{ fontSize: 40 }}>🥡</Text>
-              </View>
-            </View>
-          )}
-
-          {/* Highlighted sections */}
-          {!hayFiltro && (
-            <>
-              <SeccionHome titulo="Últimas horas" bolsas={ultimasHoras} onPress={(b) => router.push(`/producto/${b.id}` as any)} />
-              <SeccionHome titulo="Más populares" bolsas={populares} onPress={(b) => router.push(`/producto/${b.id}` as any)} />
-            </>
-          )}
-
-          {/* Filter results header */}
-          {hayFiltro && filtradas.length > 0 && (
-            <View style={s.resultRow}>
-              <Text style={s.resultText}>{filtradas.length} resultado{filtradas.length !== 1 ? 's' : ''}</Text>
-              <TouchableOpacity onPress={() => { setBusqueda(''); setCatSelected('Todos'); setZonaSelected('Todas'); setDistFiltro(null); }}>
-                <Text style={s.resultClear}>Limpiar</Text>
+        {/* CATEGORÍAS (circles) */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.catRow} contentContainerStyle={s.catContent}>
+          {CATEGORIAS.map(({ label, emoji, bg }) => {
+            const active = catSelected === label;
+            return (
+              <TouchableOpacity key={label} style={s.catItem} onPress={() => setCatSelected(label)} activeOpacity={0.8}>
+                <View style={[s.catCircle, { backgroundColor: active ? Colors.primary : bg }]}>
+                  <Text style={s.catEmoji}>{emoji}</Text>
+                </View>
+                <Text style={[s.catLabel, active && s.catLabelActive]} numberOfLines={2}>{label}</Text>
               </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Empty state */}
-          {filtradas.length === 0 ? (
-            <View style={s.empty}>
-              <View style={s.emptyIcon}>
-                <Ionicons name="restaurant-outline" size={38} color={Colors.textLight} />
-              </View>
-              <Text style={s.emptyTitle}>Sin resultados</Text>
-              <Text style={s.emptyText}>
-                {busqueda ? `No encontramos "${busqueda}"` :
-                  distFiltro && tieneUbicacion ? 'Prueba aumentando el radio de búsqueda' :
-                  `No hay ${tab === 'cupon' ? 'cupones' : 'bolsas'} disponibles ahora`}
-              </Text>
-              {hayFiltro && (
-                <TouchableOpacity style={s.emptyBtn} onPress={() => { setBusqueda(''); setCatSelected('Todos'); setZonaSelected('Todas'); setDistFiltro(null); }}>
-                  <Text style={s.emptyBtnText}>Ver todos</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : (
-            (hayFiltro ? filtradas : bolsas).map((b) => (
-              <BolsaCard key={b.id} bolsa={b} onPress={() => router.push(`/producto/${b.id}` as any)} />
-            ))
-          )}
-          <View style={{ height: 110 }} />
+            );
+          })}
         </ScrollView>
-      )}
+
+        {loading ? (
+          <View style={s.loadingBox}>
+            <ActivityIndicator color={Colors.primary} size="large" />
+            <Text style={s.loadingText}>Buscando ofertas...</Text>
+          </View>
+        ) : (
+          <View style={s.feedContent}>
+            {errorNet ? (
+              <View style={s.alertBanner}>
+                <Ionicons name="wifi-outline" size={14} color={Colors.error} />
+                <Text style={s.alertText}>{errorNet}</Text>
+                <TouchableOpacity onPress={cargar}><Text style={s.alertAction}>Reintentar</Text></TouchableOpacity>
+              </View>
+            ) : null}
+
+            {/* TIENDAS DESTACADAS */}
+            {restaurantesDestacados.length > 0 && catSelected === 'Todos' && (
+              <View style={s.section}>
+                <View style={s.sectionHeader}>
+                  <Text style={s.sectionTitle}>Tiendas destacadas</Text>
+                  <TouchableOpacity onPress={() => router.push('/(tabs)/tiendas' as any)}>
+                    <Text style={s.seeAll}>Ver todas</Text>
+                  </TouchableOpacity>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 14, paddingRight: 4 }}>
+                  {restaurantesDestacados.map(({ negocio, count }) => (
+                    <RestCard key={negocio.nombre} negocio={negocio} count={count} onPress={() => {}} />
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* PRODUCT GRID */}
+            {filtradas.length > 0 ? (
+              <View style={s.section}>
+                <View style={s.sectionHeader}>
+                  <Text style={s.sectionTitle}>
+                    {catSelected === 'Todos' ? 'Ofertas del día' : catSelected}
+                  </Text>
+                  {catSelected !== 'Todos' && (
+                    <TouchableOpacity onPress={() => setCatSelected('Todos')}>
+                      <Text style={s.seeAll}>Ver todos</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {renderGrid(filtradas)}
+              </View>
+            ) : (
+              <View style={s.empty}>
+                <View style={s.emptyIcon}>
+                  <Ionicons name="restaurant-outline" size={36} color={Colors.textLight} />
+                </View>
+                <Text style={s.emptyTitle}>Sin resultados</Text>
+                <Text style={s.emptyText}>
+                  {catSelected !== 'Todos'
+                    ? `No hay ${tab === 'cupon' ? 'cupones' : 'bolsas'} en ${catSelected} ahora`
+                    : `No hay ${tab === 'cupon' ? 'cupones' : 'bolsas'} disponibles`}
+                </Text>
+                {catSelected !== 'Todos' && (
+                  <TouchableOpacity style={s.emptyBtn} onPress={() => setCatSelected('Todos')}>
+                    <Text style={s.emptyBtnText}>Ver todos</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </View>
+        )}
+
+        <View style={{ height: 110 }} />
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -442,121 +352,115 @@ export default function HomeScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
 
-  // Header
-  header: { backgroundColor: Colors.white, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 22, paddingTop: 14 },
-  greeting: { fontSize: 28, fontWeight: '800', color: Colors.textPrimary, letterSpacing: -0.5 },
-  locRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  headerLoc: { fontSize: 12, color: Colors.accent, fontWeight: '600', maxWidth: 200 },
-  headerActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
-  iconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  // ── Header ──
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 14, backgroundColor: Colors.white,
+    borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 16, fontWeight: '800', color: Colors.white },
+  greeting: { fontSize: 16, fontWeight: '800', color: Colors.textPrimary },
+  locRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  locText: { fontSize: 12, color: Colors.textSecondary, maxWidth: 180 },
+  headerRight: { flexDirection: 'row', gap: 8 },
+  headerIconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
   notifDot: { position: 'absolute', top: 9, right: 9, width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.error, borderWidth: 1.5, borderColor: Colors.white },
+  cartBadge: { position: 'absolute', top: 6, right: 6, backgroundColor: Colors.error, borderRadius: 8, minWidth: 16, height: 16, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, borderWidth: 1.5, borderColor: Colors.white },
+  cartBadgeText: { color: '#fff', fontSize: 8, fontWeight: '800' },
 
-  // Search
-  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 50, marginHorizontal: 20, marginTop: 16, paddingHorizontal: 16, paddingVertical: 2, gap: 10 },
-  searchInput: { flex: 1, fontSize: 14, color: Colors.textPrimary, paddingVertical: 12 },
+  // ── Search ──
+  searchPill: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: '#F5F5F5',
+    borderRadius: 50, marginHorizontal: 20, marginTop: 18, marginBottom: 4,
+    paddingLeft: 16, paddingRight: 6, paddingVertical: 6, gap: 10,
+  },
+  searchPlaceholder: { flex: 1, fontSize: 14, color: Colors.textLight, paddingVertical: 8 },
+  filterBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
 
-  // Tabs
-  tabRow: { flexDirection: 'row', marginHorizontal: 20, marginTop: 14, gap: 10 },
-  tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 50, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },
+  // ── Hero Banner ──
+  heroBanner: {
+    backgroundColor: Colors.primary, borderRadius: 24,
+    marginHorizontal: 20, marginTop: 18, marginBottom: 20,
+    height: 190, overflow: 'hidden', flexDirection: 'row',
+    alignItems: 'flex-end', justifyContent: 'space-between',
+  },
+  heroDeco1: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(200,169,126,0.10)', top: -90, right: -60 },
+  heroDeco2: { position: 'absolute', width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(200,169,126,0.07)', bottom: -60, left: -30 },
+  heroDeco3: { position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.04)', top: 50, left: '45%' },
+  heroContent: { padding: 22, flex: 1 },
+  heroTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
+  heroTitle: { fontSize: 26, fontWeight: '900', color: Colors.white, lineHeight: 30, letterSpacing: -0.5, marginBottom: 16 },
+  heroCTA: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 9, alignSelf: 'flex-start' },
+  heroCTAText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
+  heroCounter: { alignItems: 'center', paddingRight: 22, paddingBottom: 22 },
+  heroCounterNum: { fontSize: 36, fontWeight: '900', color: Colors.white },
+  heroCounterLabel: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+
+  // ── Tabs ──
+  tabRow: { flexDirection: 'row', marginHorizontal: 20, gap: 10, marginBottom: 6 },
+  tabBtn: { flex: 1, paddingVertical: 11, alignItems: 'center', borderRadius: 50, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },
   tabBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   tabBtnText: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary },
   tabBtnTextActive: { color: Colors.white },
 
-  // Banners
-  alertBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.errorLight, paddingHorizontal: 18, paddingVertical: 10, gap: 8 },
-  alertText: { flex: 1, fontSize: 12, color: Colors.error, fontWeight: '600' },
-  alertAction: { color: Colors.error, fontWeight: '800', fontSize: 12 },
-  infoBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, paddingHorizontal: 18, paddingVertical: 10, gap: 8 },
-  infoText: { flex: 1, fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
-  infoBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 6 },
-  infoBtnText: { color: Colors.white, fontWeight: '700', fontSize: 12 },
+  // ── Categories (circles) ──
+  catRow: { maxHeight: 110 },
+  catContent: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 10, gap: 16 },
+  catItem: { alignItems: 'center', width: 68 },
+  catCircle: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', marginBottom: 7 },
+  catEmoji: { fontSize: 26 },
+  catLabel: { fontSize: 11, fontWeight: '700', color: Colors.textSecondary, textAlign: 'center' },
+  catLabelActive: { color: Colors.primary },
 
-  // Categories (pill with emoji)
-  catRow: { maxHeight: 90, backgroundColor: Colors.white },
-  catContent: { paddingHorizontal: 20, paddingVertical: 12, gap: 10 },
-  catPill: {
-    alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 18, paddingVertical: 8,
-    borderRadius: 50, borderWidth: 1.5, borderColor: Colors.border,
-    backgroundColor: Colors.white, minWidth: 80,
-  },
-  catPillActive: {
-    backgroundColor: Colors.primary, borderColor: Colors.primary,
-    shadowColor: Colors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 5,
-  },
-  catEmoji: { fontSize: 20, marginBottom: 2 },
-  catLabel: { fontSize: 12, fontWeight: '700', color: Colors.textSecondary },
-  catLabelActive: { color: Colors.white },
-
-  // Filters (distance / zone)
-  filterRow: { maxHeight: 48, backgroundColor: Colors.white },
-  filterContent: { paddingHorizontal: 20, paddingVertical: 8, gap: 8 },
-  chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 6 },
-  chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  chipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
-  chipTextActive: { color: Colors.white, fontWeight: '700' },
-
-  // Loading / empty
-  loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 },
+  // ── Loading / empty ──
+  loadingBox: { paddingVertical: 60, alignItems: 'center', gap: 16 },
   loadingText: { color: Colors.textSecondary, fontSize: 14 },
-  empty: { alignItems: 'center', paddingVertical: 64, gap: 12 },
-  emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  emptyTitle: { fontSize: 22, fontWeight: '800', color: Colors.textPrimary },
+  empty: { alignItems: 'center', paddingVertical: 56, gap: 12 },
+  emptyIcon: { width: 84, height: 84, borderRadius: 42, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  emptyTitle: { fontSize: 20, fontWeight: '800', color: Colors.textPrimary },
   emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22, maxWidth: 280 },
-  emptyBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 32, paddingVertical: 14, marginTop: 8 },
+  emptyBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 28, paddingVertical: 13, marginTop: 8 },
   emptyBtnText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
 
-  // Feed
-  feed: { padding: 20, paddingTop: 24 },
-  resultRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  resultText: { fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
-  resultClear: { fontSize: 13, color: Colors.accent, fontWeight: '700' },
+  // ── Error banner ──
+  alertBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', padding: 12, paddingHorizontal: 16, marginHorizontal: 20, borderRadius: 14, gap: 8, marginBottom: 16 },
+  alertText: { flex: 1, fontSize: 12, color: Colors.error, fontWeight: '600' },
+  alertAction: { color: Colors.error, fontWeight: '800', fontSize: 12 },
 
-  // Hero banner
-  heroBanner: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: Colors.primary, borderRadius: 24, padding: 24, marginBottom: 32,
-  },
-  heroTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 8 },
-  heroTitle: { fontSize: 34, fontWeight: '900', color: Colors.white, lineHeight: 38, letterSpacing: -0.5 },
-  heroSub: { fontSize: 13, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
-  heroBadge: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
+  // ── Feed ──
+  feedContent: { paddingTop: 8 },
 
-  // Sections (horizontal mini cards)
-  seccion: { marginBottom: 32 },
-  seccionTitulo: { fontSize: 20, fontWeight: '800', color: Colors.textPrimary, marginBottom: 16, letterSpacing: -0.3 },
-  miniCard: { width: MINI_W, backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
-  miniImgWrap: { height: 110, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  miniDisc: { position: 'absolute', top: 8, right: 8, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 8, paddingVertical: 3 },
-  miniDiscText: { color: Colors.white, fontSize: 10, fontWeight: '800' },
-  miniBody: { padding: 12 },
-  miniNegocio: { fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
-  miniPrice: { fontSize: 18, fontWeight: '900', color: Colors.primary, marginTop: 3 },
+  // ── Section headers ──
+  section: { marginBottom: 28 },
+  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 16 },
+  sectionTitle: { fontSize: 19, fontWeight: '900', color: Colors.textPrimary, letterSpacing: -0.3 },
+  seeAll: { fontSize: 13, color: Colors.accent, fontWeight: '700' },
 
-  // Main card
-  card: { backgroundColor: Colors.white, borderRadius: 24, marginBottom: 24, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 14, overflow: 'hidden' },
-  cardAgotada: { opacity: 0.45 },
-  cardImgWrap: { height: CARD_IMG_H, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  cardImgPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  cardGradient: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
+  // ── Restaurant cards (horizontal) ──
+  restCard: { width: 140, backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
+  restImgWrap: { height: 90, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
+  restInfo: { padding: 10 },
+  restNombre: { fontSize: 13, fontWeight: '800', color: Colors.textPrimary, marginBottom: 4 },
+  restRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
+  restRating: { fontSize: 11, fontWeight: '700', color: Colors.textSecondary },
+  restCount: { fontSize: 11, color: Colors.textLight },
 
-  discPill: { position: 'absolute', top: 14, left: 14, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5 },
-  discPillText: { color: Colors.white, fontSize: 11, fontWeight: '900' },
-  cuponPill: { position: 'absolute', top: 14, left: 14, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5, marginTop: 34 },
-  cuponPillText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
-  timePill: { position: 'absolute', bottom: 64, left: 14, backgroundColor: Colors.textSecondary, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5 },
-  timePillText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
-  shareBtn: { position: 'absolute', top: 14, right: 14, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 50, padding: 8 },
-
-  imgFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 16, paddingVertical: 16, backgroundColor: 'rgba(0,0,0,0.52)' },
-  imgNegocio: { fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
-  imgNombre: { fontSize: 18, fontWeight: '900', color: Colors.white, maxWidth: SW * 0.5 },
-  imgPriceBox: { alignItems: 'flex-end' },
-  imgOriginal: { fontSize: 12, color: 'rgba(255,255,255,0.55)', textDecorationLine: 'line-through' },
-  imgPrice: { fontSize: 30, fontWeight: '900', color: Colors.white },
-
-  cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
-  metaChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  metaText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
+  // ── Product grid ──
+  gridRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16 },
+  productCard: { backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
+  productAgotada: { opacity: 0.45 },
+  productImgWrap: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
+  productDiscBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
+  productDiscText: { color: Colors.white, fontSize: 10, fontWeight: '900' },
+  cuponBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
+  cuponBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
+  productInfo: { padding: 12 },
+  productNegocio: { fontSize: 10, color: Colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+  productNombre: { fontSize: 13, fontWeight: '800', color: Colors.textPrimary, lineHeight: 18, marginBottom: 8 },
+  productBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  productOriginal: { fontSize: 10, color: Colors.textLight, textDecorationLine: 'line-through' },
+  productPrice: { fontSize: 18, fontWeight: '900', color: Colors.primary },
+  addBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
 });
