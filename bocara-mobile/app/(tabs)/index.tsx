@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  TextInput, RefreshControl, ActivityIndicator, SafeAreaView, Share,
+  TextInput, RefreshControl, ActivityIndicator, SafeAreaView, Share, Dimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,9 @@ import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
+
+const { width: SW } = Dimensions.get('window');
+const CARD_IMG_H = Math.round(SW * 0.54);
 
 const CATEGORIAS = ['Todos', 'Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica'];
 const ZONAS_GT = ['Todas', 'Zona 1', 'Zona 2', 'Zona 4', 'Zona 9', 'Zona 10', 'Zona 11', 'Zona 12', 'Zona 13', 'Zona 14', 'Zona 15', 'Mixco', 'Villa Nueva'];
@@ -79,10 +82,13 @@ function BolsaCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
           />
         ) : (
           <View style={s.cardImgPlaceholder}>
-            <Text style={{ fontSize: 48 }}>{emoji}</Text>
+            <Text style={{ fontSize: 56 }}>{emoji}</Text>
           </View>
         )}
+        {/* Dark gradient at bottom */}
         <View style={s.cardImgOverlay} />
+
+        {/* Top badges */}
         <View style={[s.discBadge, agotada && { backgroundColor: Colors.textLight }]}>
           <Text style={s.discBadgeText}>{agotada ? 'Agotada' : `-${desc}%`}</Text>
         </View>
@@ -97,32 +103,36 @@ function BolsaCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
         <TouchableOpacity style={s.shareBtn} onPress={compartir} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Ionicons name="share-social-outline" size={16} color="#fff" />
         </TouchableOpacity>
+
+        {/* Price overlaid on bottom of image */}
+        <View style={s.imgPriceRow}>
+          <View>
+            <Text style={s.imgNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
+            <Text style={s.imgNombre} numberOfLines={1}>{bolsa.nombre}</Text>
+          </View>
+          <View style={s.imgPriceBox}>
+            <Text style={s.imgPriceOriginal}>Q{bolsa.precio_original}</Text>
+            <Text style={s.imgPrice}>Q{bolsa.precio_descuento}</Text>
+          </View>
+        </View>
       </View>
 
       <View style={s.cardBody}>
-        <View style={{ flex: 1 }}>
-          <Text style={s.cardNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
-          <Text style={s.cardNombre} numberOfLines={1}>{bolsa.nombre}</Text>
-          <View style={s.cardMeta}>
-            {distStr && (
-              <View style={s.metaChip}>
-                <Ionicons name="location-outline" size={11} color={Colors.textSecondary} />
-                <Text style={s.metaText}>{distStr}</Text>
-              </View>
-            )}
+        <View style={s.cardMeta}>
+          {distStr && (
             <View style={s.metaChip}>
-              <Ionicons name="time-outline" size={11} color={Colors.textSecondary} />
-              <Text style={s.metaText}>{bolsa.hora_recogida_inicio?.slice(0, 5)}–{bolsa.hora_recogida_fin?.slice(0, 5)}</Text>
+              <Ionicons name="location-outline" size={11} color={Colors.textSecondary} />
+              <Text style={s.metaText}>{distStr}</Text>
             </View>
-            <View style={s.metaChip}>
-              <Ionicons name="layers-outline" size={11} color={Colors.textSecondary} />
-              <Text style={s.metaText}>{bolsa.cantidad_disponible} disp.</Text>
-            </View>
+          )}
+          <View style={s.metaChip}>
+            <Ionicons name="time-outline" size={11} color={Colors.textSecondary} />
+            <Text style={s.metaText}>{bolsa.hora_recogida_inicio?.slice(0, 5)}–{bolsa.hora_recogida_fin?.slice(0, 5)}</Text>
           </View>
-        </View>
-        <View style={s.cardPriceCol}>
-          <Text style={s.cardOriginal}>Q{bolsa.precio_original}</Text>
-          <Text style={s.cardDescuento}>Q{bolsa.precio_descuento}</Text>
+          <View style={s.metaChip}>
+            <Ionicons name="layers-outline" size={11} color={Colors.textSecondary} />
+            <Text style={s.metaText}>{bolsa.cantidad_disponible} disp.</Text>
+          </View>
         </View>
       </View>
     </TouchableOpacity>
@@ -420,25 +430,25 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
 
   // Header
-  header: { backgroundColor: Colors.white, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 12 },
-  greeting: { fontSize: 20, fontWeight: '800', color: Colors.textPrimary, marginBottom: 2 },
+  header: { backgroundColor: Colors.white, paddingBottom: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 4 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 14 },
+  greeting: { fontSize: 26, fontWeight: '900', color: Colors.textPrimary, marginBottom: 4 },
   locRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   headerLoc: { fontSize: 13, color: Colors.primary, fontWeight: '600', maxWidth: 200 },
   headerActions: { flexDirection: 'row', gap: 8 },
-  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
-  notifDot: { position: 'absolute', top: 8, right: 8, width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.error, borderWidth: 1.5, borderColor: Colors.white },
+  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  notifDot: { position: 'absolute', top: 8, right: 8, width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.error, borderWidth: 2, borderColor: Colors.white },
 
   // Search
-  searchPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 16, marginHorizontal: 16, marginTop: 14, paddingHorizontal: 14, paddingVertical: 2, gap: 8 },
-  searchInput: { flex: 1, fontSize: 14, color: Colors.textPrimary, paddingVertical: 11 },
+  searchPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 50, marginHorizontal: 16, marginTop: 16, paddingHorizontal: 16, paddingVertical: 2, gap: 8 },
+  searchInput: { flex: 1, fontSize: 14, color: Colors.textPrimary, paddingVertical: 12 },
 
   // Tabs
-  tabRow: { flexDirection: 'row', marginHorizontal: 16, marginTop: 12, gap: 8 },
-  tabBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 12, backgroundColor: Colors.surface },
+  tabRow: { flexDirection: 'row', marginHorizontal: 16, marginTop: 14, gap: 8 },
+  tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 50, backgroundColor: Colors.surface },
   tabBtnActive: { backgroundColor: Colors.primary },
-  tabBtnText: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary },
-  tabBtnTextActive: { color: Colors.white, fontWeight: '700' },
+  tabBtnText: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary },
+  tabBtnTextActive: { color: Colors.white, fontWeight: '800' },
 
   // Banners
   alertBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.errorLight, padding: 10, paddingHorizontal: 16, gap: 8 },
@@ -446,30 +456,30 @@ const s = StyleSheet.create({
   alertAction: { color: Colors.error, fontWeight: '800', fontSize: 12 },
   infoBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.accentLight, padding: 10, paddingHorizontal: 16, gap: 8 },
   infoText: { flex: 1, fontSize: 12, color: Colors.primary, fontWeight: '600' },
-  infoAction: { backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 5 },
+  infoAction: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 6 },
   infoActionText: { color: Colors.white, fontWeight: '700', fontSize: 12 },
 
   // Filtros
-  filterRow: { backgroundColor: Colors.white, maxHeight: 52 },
+  filterRow: { backgroundColor: Colors.white, maxHeight: 54 },
   filterContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
-  chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
+  chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 7 },
   chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   chipText: { fontSize: 12, color: Colors.textPrimary, fontWeight: '600' },
   chipTextActive: { color: Colors.white },
-  catChip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1.5, borderColor: Colors.accentLight, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: Colors.accentLight },
+  catChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderColor: Colors.accentLight, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 7, backgroundColor: Colors.accentLight },
   catChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  catChipText: { fontSize: 12, color: Colors.primary, fontWeight: '600' },
+  catChipText: { fontSize: 12, color: Colors.primary, fontWeight: '700' },
   catChipTextActive: { color: Colors.white },
 
   // Loading / empty
   loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14 },
   loadingText: { color: Colors.textSecondary, fontSize: 14 },
   empty: { alignItems: 'center', paddingVertical: 60, gap: 10 },
-  emptyIcon: { width: 80, height: 80, borderRadius: 40, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  emptyTitle: { fontSize: 18, fontWeight: '800', color: Colors.textPrimary },
-  emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
-  emptyBtn: { backgroundColor: Colors.primary, borderRadius: 14, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
-  emptyBtnText: { color: Colors.white, fontWeight: '700', fontSize: 14 },
+  emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  emptyTitle: { fontSize: 20, fontWeight: '900', color: Colors.textPrimary },
+  emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
+  emptyBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 28, paddingVertical: 14, marginTop: 8 },
+  emptyBtnText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
 
   // Feed
   feed: { padding: 16, paddingTop: 20 },
@@ -480,44 +490,48 @@ const s = StyleSheet.create({
   // Ofertas banner
   ofertasBanner: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: Colors.primary, borderRadius: 20, padding: 20, marginBottom: 24,
+    backgroundColor: Colors.primary, borderRadius: 24, padding: 24, marginBottom: 28,
   },
-  ofertasBannerTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 },
-  ofertasBannerTitle: { fontSize: 22, fontWeight: '900', color: Colors.white },
-  ofertasBannerSub: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 4 },
-  ofertasBannerIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  ofertasBannerTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
+  ofertasBannerTitle: { fontSize: 36, fontWeight: '900', color: Colors.white, lineHeight: 40 },
+  ofertasBannerSub: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 6 },
+  ofertasBannerIcon: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
 
   // Secciones mini
-  seccion: { marginBottom: 24 },
-  seccionTitulo: { fontSize: 17, fontWeight: '800', color: Colors.textPrimary, marginBottom: 14 },
-  miniCard: { width: 148, backgroundColor: Colors.white, borderRadius: 18, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 8 },
-  miniImgWrap: { backgroundColor: Colors.surface, height: 100, justifyContent: 'center', alignItems: 'center' },
-  miniDisc: { position: 'absolute', top: 8, right: 8, backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 7, paddingVertical: 3 },
+  seccion: { marginBottom: 28 },
+  seccionTitulo: { fontSize: 20, fontWeight: '900', color: Colors.textPrimary, marginBottom: 16 },
+  miniCard: { width: 156, backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.10, shadowRadius: 12 },
+  miniImgWrap: { backgroundColor: Colors.surface, height: 108, justifyContent: 'center', alignItems: 'center' },
+  miniDisc: { position: 'absolute', top: 8, right: 8, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 8, paddingVertical: 3 },
   miniDiscText: { color: Colors.white, fontSize: 10, fontWeight: '800' },
-  miniBody: { padding: 10 },
+  miniBody: { padding: 12 },
   miniNegocio: { fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
-  miniPrecio: { fontSize: 17, fontWeight: '900', color: Colors.primary, marginTop: 3 },
+  miniPrecio: { fontSize: 18, fontWeight: '900', color: Colors.primary, marginTop: 3 },
 
   // Bolsa Card
-  card: { backgroundColor: Colors.white, borderRadius: 22, marginBottom: 16, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 10, overflow: 'hidden' },
+  card: { backgroundColor: Colors.white, borderRadius: 24, marginBottom: 20, elevation: 7, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.11, shadowRadius: 16, overflow: 'hidden' },
   cardAgotada: { opacity: 0.5 },
-  cardImgWrap: { height: 160, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
+  cardImgWrap: { height: CARD_IMG_H, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   cardImgPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  cardImgOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.04)' },
-  discBadge: { position: 'absolute', top: 12, right: 12, backgroundColor: Colors.primary, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
-  discBadgeText: { color: Colors.white, fontSize: 12, fontWeight: '800' },
-  cuponBadge: { position: 'absolute', top: 12, left: 12, backgroundColor: Colors.accent, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
+  cardImgOverlay: { ...StyleSheet.absoluteFillObject, background: 'transparent' as any },
+  discBadge: { position: 'absolute', top: 14, right: 14, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 6 },
+  discBadgeText: { color: Colors.white, fontSize: 12, fontWeight: '900' },
+  cuponBadge: { position: 'absolute', top: 14, left: 14, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 6 },
   cuponText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
-  timeBadge: { position: 'absolute', bottom: 10, left: 12, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 4 },
+  timeBadge: { position: 'absolute', bottom: 68, left: 14, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5 },
   timeBadgeText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
-  shareBtn: { position: 'absolute', bottom: 10, right: 12, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 16, padding: 6 },
-  cardBody: { padding: 16, flexDirection: 'row', alignItems: 'flex-end' },
-  cardNegocio: { fontSize: 11, color: Colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
-  cardNombre: { fontSize: 17, fontWeight: '800', color: Colors.textPrimary },
-  cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  metaChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  metaText: { fontSize: 11, color: Colors.textSecondary },
-  cardPriceCol: { alignItems: 'flex-end' },
-  cardOriginal: { fontSize: 12, color: Colors.textLight, textDecorationLine: 'line-through' },
-  cardDescuento: { fontSize: 24, fontWeight: '900', color: Colors.primary },
+  shareBtn: { position: 'absolute', top: 14, right: 66, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 18, padding: 7 },
+
+  // Price overlay on image
+  imgPriceRow: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: 'rgba(0,0,0,0.48)' },
+  imgNegocio: { fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
+  imgNombre: { fontSize: 17, fontWeight: '900', color: Colors.white, maxWidth: SW * 0.54 },
+  imgPriceBox: { alignItems: 'flex-end' },
+  imgPriceOriginal: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textDecorationLine: 'line-through' },
+  imgPrice: { fontSize: 28, fontWeight: '900', color: Colors.white },
+
+  cardBody: { paddingHorizontal: 16, paddingVertical: 12 },
+  cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  metaChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
 });
