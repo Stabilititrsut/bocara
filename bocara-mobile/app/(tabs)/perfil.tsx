@@ -90,8 +90,8 @@ export default function PerfilScreen() {
         <View style={s.statsRow}>
           {[
             { icon: 'bag-outline', val: usuario.total_bolsas_salvadas || 0, label: 'Bolsas\nrescatadas', color: Colors.primary },
-            { icon: 'leaf-outline', val: `${(usuario.total_co2_salvado_kg || 0).toFixed(1)}kg`, label: 'CO₂\nevitado', color: '#388E3C' },
-            { icon: 'wallet-outline', val: `Q${(usuario.total_ahorrado || 0).toFixed(0)}`, label: 'Total\nahorrado', color: '#1976D2' },
+            { icon: 'leaf-outline', val: `${(usuario.total_co2_salvado_kg || 0).toFixed(1)}kg`, label: 'CO₂\nevitado', color: Colors.accent },
+            { icon: 'wallet-outline', val: `Q${(usuario.total_ahorrado || 0).toFixed(0)}`, label: 'Total\nahorrado', color: Colors.textSecondary },
           ].map((stat) => (
             <View key={stat.label} style={s.statCard}>
               <Ionicons name={stat.icon as any} size={22} color={stat.color} />

@@ -13,18 +13,21 @@ import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 
 const { width: SW } = Dimensions.get('window');
-const CARD_IMG_H = Math.round(SW * 0.54);
+const CARD_IMG_H = Math.round(SW * 0.58);
+const MINI_W = 160;
 
-const CATEGORIAS = ['Todos', 'Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica'];
+const CATEGORIAS = [
+  { label: 'Todos',         emoji: '✨' },
+  { label: 'Panadería',    emoji: '🥐' },
+  { label: 'Restaurante',  emoji: '🍽️' },
+  { label: 'Cafetería',    emoji: '☕' },
+  { label: 'Supermercado', emoji: '🛒' },
+  { label: 'Sushi',        emoji: '🍣' },
+  { label: 'Pizza',        emoji: '🍕' },
+  { label: 'Comida Típica',emoji: '🫕' },
+];
+
 const ZONAS_GT = ['Todas', 'Zona 1', 'Zona 2', 'Zona 4', 'Zona 9', 'Zona 10', 'Zona 11', 'Zona 12', 'Zona 13', 'Zona 14', 'Zona 15', 'Mixco', 'Villa Nueva'];
-const EMOJI_MAP: Record<string, string> = {
-  Panadería: '🥐', Restaurante: '🍽️', Cafetería: '☕', Supermercado: '🛒',
-  Sushi: '🍣', Pizza: '🍕', 'Comida Típica': '🫕', Otro: '🍱',
-};
-const CAT_ICONS: Record<string, string> = {
-  Todos: 'grid', Panadería: 'cafe', Restaurante: 'restaurant', Cafetería: 'cafe',
-  Supermercado: 'cart', Sushi: 'fish', Pizza: 'pizza', 'Comida Típica': 'flame',
-};
 
 type DistFiltro = 1 | 3 | 5 | 10 | null;
 const DIST_OPCIONES: Array<{ label: string; km: DistFiltro }> = [
@@ -38,102 +41,126 @@ function formatDist(km: number | null | undefined): string | null {
   return `${km.toFixed(1)} km`;
 }
 
-function getTimeTag(inicio: string, fin: string): { texto: string; color: string } | null {
+function getTimeTag(inicio: string, fin: string): { texto: string; urgent: boolean } | null {
   if (!inicio || !fin) return null;
   const now = new Date();
   const [ih, im] = inicio.split(':').map(Number);
   const [fh, fm] = fin.split(':').map(Number);
   const ini = new Date(now); ini.setHours(ih, im, 0, 0);
   const end = new Date(now); end.setHours(fh, fm, 0, 0);
-  if (now > end) return { texto: 'Vencida', color: Colors.textLight };
+  if (now > end) return { texto: 'Vencida', urgent: false };
   if (now < ini) {
     const mins = Math.round((ini.getTime() - now.getTime()) / 60000);
-    if (mins <= 60) return { texto: `Abre en ${mins}m`, color: '#FF9800' };
+    if (mins <= 60) return { texto: `Abre en ${mins}m`, urgent: false };
     return null;
   }
   const mins = Math.round((end.getTime() - now.getTime()) / 60000);
-  if (mins <= 30) return { texto: `¡${mins}m restantes!`, color: Colors.error };
+  if (mins <= 30) return { texto: `${mins}m restantes`, urgent: true };
   return null;
 }
 
 function BolsaCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
-  const emoji = EMOJI_MAP[bolsa.negocios?.categoria || ''] || '🍱';
   const agotada = bolsa.cantidad_disponible === 0;
   const distStr = formatDist(bolsa.distancia_km);
   const timeTag = getTimeTag(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin);
+  const imgUri = bolsa.imagen_url || bolsa.negocios?.imagen_url;
+  const catEmoji = CATEGORIAS.find(c => c.label === bolsa.negocios?.categoria)?.emoji || '🍱';
 
   async function compartir() {
     await Share.share({
-      message: `🛍️ ¡Mira esta oferta en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocarafood.com`,
+      message: `Mira esta oferta en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocarafood.com`,
     });
   }
 
   return (
-    <TouchableOpacity style={[s.card, agotada && s.cardAgotada]} onPress={onPress} disabled={agotada} activeOpacity={0.9}>
+    <TouchableOpacity style={[s.card, agotada && s.cardAgotada]} onPress={onPress} disabled={agotada} activeOpacity={0.92}>
+      {/* Image */}
       <View style={s.cardImgWrap}>
-        {bolsa.imagen_url || bolsa.negocios?.imagen_url ? (
-          <Image
-            source={{ uri: bolsa.imagen_url || bolsa.negocios?.imagen_url }}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            transition={300}
-          />
+        {imgUri ? (
+          <Image source={{ uri: imgUri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
         ) : (
           <View style={s.cardImgPlaceholder}>
-            <Text style={{ fontSize: 56 }}>{emoji}</Text>
+            <Text style={{ fontSize: 64 }}>{catEmoji}</Text>
           </View>
         )}
-        {/* Dark gradient at bottom */}
-        <View style={s.cardImgOverlay} />
 
-        {/* Top badges */}
-        <View style={[s.discBadge, agotada && { backgroundColor: Colors.textLight }]}>
-          <Text style={s.discBadgeText}>{agotada ? 'Agotada' : `-${desc}%`}</Text>
+        {/* Gradient overlay */}
+        <View style={s.cardGradient} />
+
+        {/* Discount pill top-left */}
+        <View style={[s.discPill, agotada && { backgroundColor: Colors.textSecondary }]}>
+          <Text style={s.discPillText}>{agotada ? 'Agotado' : `-${desc}%`}</Text>
         </View>
+
+        {/* Coupon pill */}
         {bolsa.tipo === 'cupon' && (
-          <View style={s.cuponBadge}><Text style={s.cuponText}>Cupón</Text></View>
+          <View style={s.cuponPill}><Text style={s.cuponPillText}>Cupón</Text></View>
         )}
+
+        {/* Time badge */}
         {timeTag && (
-          <View style={[s.timeBadge, { backgroundColor: timeTag.color }]}>
-            <Text style={s.timeBadgeText}>{timeTag.texto}</Text>
+          <View style={[s.timePill, timeTag.urgent && { backgroundColor: Colors.error }]}>
+            <Text style={s.timePillText}>{timeTag.texto}</Text>
           </View>
         )}
+
+        {/* Share */}
         <TouchableOpacity style={s.shareBtn} onPress={compartir} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Ionicons name="share-social-outline" size={16} color="#fff" />
+          <Ionicons name="share-social-outline" size={15} color="#fff" />
         </TouchableOpacity>
 
-        {/* Price overlaid on bottom of image */}
-        <View style={s.imgPriceRow}>
-          <View>
+        {/* Name + price overlaid */}
+        <View style={s.imgFooter}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
             <Text style={s.imgNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
             <Text style={s.imgNombre} numberOfLines={1}>{bolsa.nombre}</Text>
           </View>
           <View style={s.imgPriceBox}>
-            <Text style={s.imgPriceOriginal}>Q{bolsa.precio_original}</Text>
+            <Text style={s.imgOriginal}>Q{bolsa.precio_original}</Text>
             <Text style={s.imgPrice}>Q{bolsa.precio_descuento}</Text>
           </View>
         </View>
       </View>
 
-      <View style={s.cardBody}>
-        <View style={s.cardMeta}>
-          {distStr && (
-            <View style={s.metaChip}>
-              <Ionicons name="location-outline" size={11} color={Colors.textSecondary} />
-              <Text style={s.metaText}>{distStr}</Text>
-            </View>
-          )}
+      {/* Meta row */}
+      <View style={s.cardMeta}>
+        {distStr && (
           <View style={s.metaChip}>
-            <Ionicons name="time-outline" size={11} color={Colors.textSecondary} />
-            <Text style={s.metaText}>{bolsa.hora_recogida_inicio?.slice(0, 5)}–{bolsa.hora_recogida_fin?.slice(0, 5)}</Text>
+            <Ionicons name="location-outline" size={11} color={Colors.textSecondary} />
+            <Text style={s.metaText}>{distStr}</Text>
           </View>
-          <View style={s.metaChip}>
-            <Ionicons name="layers-outline" size={11} color={Colors.textSecondary} />
-            <Text style={s.metaText}>{bolsa.cantidad_disponible} disp.</Text>
-          </View>
+        )}
+        <View style={s.metaChip}>
+          <Ionicons name="time-outline" size={11} color={Colors.textSecondary} />
+          <Text style={s.metaText}>{bolsa.hora_recogida_inicio?.slice(0, 5)}–{bolsa.hora_recogida_fin?.slice(0, 5)}</Text>
         </View>
+        <View style={s.metaChip}>
+          <Ionicons name="layers-outline" size={11} color={Colors.textSecondary} />
+          <Text style={s.metaText}>{bolsa.cantidad_disponible} disp.</Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+function MiniCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
+  const desc = bolsa.precio_original > 0 ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
+  const imgUri = bolsa.imagen_url || bolsa.negocios?.imagen_url;
+  const catEmoji = CATEGORIAS.find(c => c.label === bolsa.negocios?.categoria)?.emoji || '🍱';
+  return (
+    <TouchableOpacity style={s.miniCard} onPress={onPress} activeOpacity={0.9}>
+      <View style={s.miniImgWrap}>
+        {imgUri
+          ? <Image source={{ uri: imgUri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+          : <View style={s.miniImgWrap}><Text style={{ fontSize: 32 }}>{catEmoji}</Text></View>
+        }
+        <View style={s.miniDisc}><Text style={s.miniDiscText}>-{desc}%</Text></View>
+      </View>
+      <View style={s.miniBody}>
+        <Text style={s.miniNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
+        <Text style={s.miniPrice}>Q{bolsa.precio_descuento}</Text>
       </View>
     </TouchableOpacity>
   );
@@ -144,27 +171,8 @@ function SeccionHome({ titulo, bolsas, onPress }: { titulo: string; bolsas: Bols
   return (
     <View style={s.seccion}>
       <Text style={s.seccionTitulo}>{titulo}</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingRight: 16 }}>
-        {bolsas.map((b) => {
-          const emoji = EMOJI_MAP[b.negocios?.categoria || ''] || '🍱';
-          const desc = b.precio_original > 0 ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
-          return (
-            <TouchableOpacity key={b.id} style={s.miniCard} onPress={() => onPress(b)} activeOpacity={0.9}>
-              <View style={s.miniImgWrap}>
-                {b.imagen_url || b.negocios?.imagen_url ? (
-                  <Image source={{ uri: b.imagen_url || b.negocios?.imagen_url }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
-                ) : (
-                  <Text style={{ fontSize: 30 }}>{emoji}</Text>
-                )}
-                <View style={s.miniDisc}><Text style={s.miniDiscText}>-{desc}%</Text></View>
-              </View>
-              <View style={s.miniBody}>
-                <Text style={s.miniNegocio} numberOfLines={1}>{b.negocios?.nombre}</Text>
-                <Text style={s.miniPrecio}>Q{b.precio_descuento}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 14, paddingRight: 20 }}>
+        {bolsas.map((b) => <MiniCard key={b.id} bolsa={b} onPress={() => onPress(b)} />)}
       </ScrollView>
     </View>
   );
@@ -247,14 +255,14 @@ export default function HomeScreen() {
       {/* Header */}
       <View style={s.header}>
         <View style={s.headerTop}>
-          <View>
-            <Text style={s.greeting}>{nombreCorto ? `Hola, ${nombreCorto} 👋` : 'Hola 👋'}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={s.greeting}>{nombreCorto ? `Hola, ${nombreCorto}` : 'Bocara'}</Text>
             <TouchableOpacity
               onPress={!tieneUbicacion && !locDenied ? requestPermission : undefined}
               activeOpacity={tieneUbicacion ? 1 : 0.7}
               style={s.locRow}
             >
-              <Ionicons name="location" size={13} color={Colors.primary} />
+              <Ionicons name="location" size={12} color={Colors.accent} />
               <Text style={s.headerLoc} numberOfLines={1}>
                 {locLoading ? 'Buscando...' : tieneUbicacion ? locationName : locDenied ? 'Sin ubicación' : 'Activar ubicación'}
               </Text>
@@ -265,28 +273,28 @@ export default function HomeScreen() {
               onPress={() => router.push('/(tabs)/explore' as any)}
               style={s.iconBtn}
             >
-              <Ionicons name="notifications-outline" size={22} color={Colors.textPrimary} />
+              <Ionicons name="notifications-outline" size={20} color={Colors.primary} />
               {sinLeerCount > 0 && <View style={s.notifDot} />}
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/(tabs)/perfil')} style={s.iconBtn}>
-              <Ionicons name="person-outline" size={22} color={Colors.textPrimary} />
+              <Ionicons name="person-outline" size={20} color={Colors.primary} />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* Search */}
-        <View style={s.searchPill}>
-          <Ionicons name="search-outline" size={18} color={Colors.textSecondary} />
+        <View style={s.searchBar}>
+          <Ionicons name="search-outline" size={17} color={Colors.textSecondary} />
           <TextInput
             style={s.searchInput}
-            placeholder="Busca restaurantes, zonas..."
+            placeholder="Restaurantes, zonas, categorías..."
             placeholderTextColor={Colors.textLight}
             value={busqueda}
             onChangeText={setBusqueda}
           />
           {busqueda.length > 0 && (
             <TouchableOpacity onPress={() => setBusqueda('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Ionicons name="close-circle" size={18} color={Colors.textLight} />
+              <Ionicons name="close-circle" size={17} color={Colors.textLight} />
             </TouchableOpacity>
           )}
         </View>
@@ -302,54 +310,57 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Banners de estado */}
+      {/* Banners */}
       {errorNet ? (
         <View style={s.alertBanner}>
-          <Ionicons name="wifi-outline" size={16} color={Colors.error} />
+          <Ionicons name="wifi-outline" size={15} color={Colors.error} />
           <Text style={s.alertText}>{errorNet}</Text>
-          <TouchableOpacity onPress={cargar}>
-            <Text style={s.alertAction}>Reintentar</Text>
-          </TouchableOpacity>
+          <TouchableOpacity onPress={cargar}><Text style={s.alertAction}>Reintentar</Text></TouchableOpacity>
         </View>
       ) : locDenied ? (
         <View style={s.infoBanner}>
-          <Ionicons name="location-outline" size={16} color={Colors.primary} />
+          <Ionicons name="location-outline" size={15} color={Colors.accent} />
           <Text style={s.infoText}>Activa la ubicación para ver distancias</Text>
-          <TouchableOpacity onPress={requestPermission} style={s.infoAction}>
-            <Text style={s.infoActionText}>Activar</Text>
+          <TouchableOpacity onPress={requestPermission} style={s.infoBtn}>
+            <Text style={s.infoBtnText}>Activar</Text>
           </TouchableOpacity>
         </View>
       ) : null}
 
-      {/* Filtros */}
+      {/* Categories */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.catRow} contentContainerStyle={s.catContent}>
+        {CATEGORIAS.map(({ label, emoji }) => {
+          const active = catSelected === label;
+          return (
+            <TouchableOpacity
+              key={label}
+              style={[s.catPill, active && s.catPillActive]}
+              onPress={() => setCatSelected(label)}
+              activeOpacity={0.8}
+            >
+              <Text style={s.catEmoji}>{emoji}</Text>
+              <Text style={[s.catLabel, active && s.catLabelActive]}>{label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* Distance filter (if location) */}
       {tieneUbicacion && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterContent}>
           {DIST_OPCIONES.map(({ label, km }) => (
             <TouchableOpacity key={label} style={[s.chip, distFiltro === km && s.chipActive]} onPress={() => setDistFiltro(km)}>
-              <Text style={[s.chipText, distFiltro === km && s.chipTextActive]}>{km ? `${label}` : 'Todos'}</Text>
+              <Text style={[s.chipText, distFiltro === km && s.chipTextActive]}>{label}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       )}
 
+      {/* Zone filter */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterContent}>
         {ZONAS_GT.map((z) => (
           <TouchableOpacity key={z} style={[s.chip, zonaSelected === z && s.chipActive]} onPress={() => setZonaSelected(z)}>
             <Text style={[s.chipText, zonaSelected === z && s.chipTextActive]}>{z}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Categorías con icono */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.filterContent}>
-        {CATEGORIAS.map((cat) => (
-          <TouchableOpacity key={cat} style={[s.catChip, catSelected === cat && s.catChipActive]} onPress={() => setCatSelected(cat)}>
-            <Ionicons
-              name={(CAT_ICONS[cat] || 'grid') as any}
-              size={14}
-              color={catSelected === cat ? Colors.white : Colors.primary}
-            />
-            <Text style={[s.catChipText, catSelected === cat && s.catChipTextActive]}>{cat}</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -366,41 +377,43 @@ export default function HomeScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.primary} />}
           showsVerticalScrollIndicator={false}
         >
-          {/* Banner verde de Ofertas Activas */}
+          {/* Hero banner */}
           {!hayFiltro && bolsas.length > 0 && (
-            <View style={s.ofertasBanner}>
+            <View style={s.heroBanner}>
               <View>
-                <Text style={s.ofertasBannerTag}>Disponible ahora</Text>
-                <Text style={s.ofertasBannerTitle}>Ofertas Activas</Text>
-                <Text style={s.ofertasBannerSub}>{bolsas.filter(b => b.cantidad_disponible > 0).length} bolsas esperándote</Text>
+                <Text style={s.heroTag}>Disponible ahora</Text>
+                <Text style={s.heroTitle}>Ofertas{'\n'}del día</Text>
+                <Text style={s.heroSub}>{bolsas.filter(b => b.cantidad_disponible > 0).length} bolsas disponibles</Text>
               </View>
-              <View style={s.ofertasBannerIcon}>
-                <Text style={{ fontSize: 36 }}>🥡</Text>
+              <View style={s.heroBadge}>
+                <Text style={{ fontSize: 40 }}>🥡</Text>
               </View>
             </View>
           )}
 
-          {/* Secciones sin filtro */}
+          {/* Highlighted sections */}
           {!hayFiltro && (
             <>
-              <SeccionHome titulo="⚡ Últimas horas" bolsas={ultimasHoras} onPress={(b) => router.push(`/producto/${b.id}` as any)} />
-              <SeccionHome titulo="⭐ Más populares" bolsas={populares} onPress={(b) => router.push(`/producto/${b.id}` as any)} />
+              <SeccionHome titulo="Últimas horas" bolsas={ultimasHoras} onPress={(b) => router.push(`/producto/${b.id}` as any)} />
+              <SeccionHome titulo="Más populares" bolsas={populares} onPress={(b) => router.push(`/producto/${b.id}` as any)} />
             </>
           )}
 
+          {/* Filter results header */}
           {hayFiltro && filtradas.length > 0 && (
             <View style={s.resultRow}>
               <Text style={s.resultText}>{filtradas.length} resultado{filtradas.length !== 1 ? 's' : ''}</Text>
               <TouchableOpacity onPress={() => { setBusqueda(''); setCatSelected('Todos'); setZonaSelected('Todas'); setDistFiltro(null); }}>
-                <Text style={s.resultClear}>Limpiar filtros</Text>
+                <Text style={s.resultClear}>Limpiar</Text>
               </TouchableOpacity>
             </View>
           )}
 
+          {/* Empty state */}
           {filtradas.length === 0 ? (
             <View style={s.empty}>
               <View style={s.emptyIcon}>
-                <Ionicons name="restaurant-outline" size={40} color={Colors.textLight} />
+                <Ionicons name="restaurant-outline" size={38} color={Colors.textLight} />
               </View>
               <Text style={s.emptyTitle}>Sin resultados</Text>
               <Text style={s.emptyText}>
@@ -419,7 +432,7 @@ export default function HomeScreen() {
               <BolsaCard key={b.id} bolsa={b} onPress={() => router.push(`/producto/${b.id}` as any)} />
             ))
           )}
-          <View style={{ height: 100 }} />
+          <View style={{ height: 110 }} />
         </ScrollView>
       )}
     </SafeAreaView>
@@ -430,108 +443,120 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
 
   // Header
-  header: { backgroundColor: Colors.white, paddingBottom: 14, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 4 },
-  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 20, paddingTop: 14 },
-  greeting: { fontSize: 26, fontWeight: '900', color: Colors.textPrimary, marginBottom: 4 },
-  locRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  headerLoc: { fontSize: 13, color: Colors.primary, fontWeight: '600', maxWidth: 200 },
-  headerActions: { flexDirection: 'row', gap: 8 },
-  iconBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
-  notifDot: { position: 'absolute', top: 8, right: 8, width: 9, height: 9, borderRadius: 5, backgroundColor: Colors.error, borderWidth: 2, borderColor: Colors.white },
+  header: { backgroundColor: Colors.white, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingHorizontal: 22, paddingTop: 14 },
+  greeting: { fontSize: 28, fontWeight: '800', color: Colors.textPrimary, letterSpacing: -0.5 },
+  locRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  headerLoc: { fontSize: 12, color: Colors.accent, fontWeight: '600', maxWidth: 200 },
+  headerActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  iconBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
+  notifDot: { position: 'absolute', top: 9, right: 9, width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.error, borderWidth: 1.5, borderColor: Colors.white },
 
   // Search
-  searchPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 50, marginHorizontal: 16, marginTop: 16, paddingHorizontal: 16, paddingVertical: 2, gap: 8 },
+  searchBar: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, borderRadius: 50, marginHorizontal: 20, marginTop: 16, paddingHorizontal: 16, paddingVertical: 2, gap: 10 },
   searchInput: { flex: 1, fontSize: 14, color: Colors.textPrimary, paddingVertical: 12 },
 
   // Tabs
-  tabRow: { flexDirection: 'row', marginHorizontal: 16, marginTop: 14, gap: 8 },
-  tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 50, backgroundColor: Colors.surface },
-  tabBtnActive: { backgroundColor: Colors.primary },
+  tabRow: { flexDirection: 'row', marginHorizontal: 20, marginTop: 14, gap: 10 },
+  tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 50, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },
+  tabBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   tabBtnText: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary },
-  tabBtnTextActive: { color: Colors.white, fontWeight: '800' },
+  tabBtnTextActive: { color: Colors.white },
 
   // Banners
-  alertBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.errorLight, padding: 10, paddingHorizontal: 16, gap: 8 },
+  alertBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.errorLight, paddingHorizontal: 18, paddingVertical: 10, gap: 8 },
   alertText: { flex: 1, fontSize: 12, color: Colors.error, fontWeight: '600' },
   alertAction: { color: Colors.error, fontWeight: '800', fontSize: 12 },
-  infoBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.accentLight, padding: 10, paddingHorizontal: 16, gap: 8 },
-  infoText: { flex: 1, fontSize: 12, color: Colors.primary, fontWeight: '600' },
-  infoAction: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 6 },
-  infoActionText: { color: Colors.white, fontWeight: '700', fontSize: 12 },
+  infoBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, paddingHorizontal: 18, paddingVertical: 10, gap: 8 },
+  infoText: { flex: 1, fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
+  infoBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 6 },
+  infoBtnText: { color: Colors.white, fontWeight: '700', fontSize: 12 },
 
-  // Filtros
-  filterRow: { backgroundColor: Colors.white, maxHeight: 54 },
-  filterContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
-  chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 7 },
+  // Categories (pill with emoji)
+  catRow: { maxHeight: 90, backgroundColor: Colors.white },
+  catContent: { paddingHorizontal: 20, paddingVertical: 12, gap: 10 },
+  catPill: {
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 18, paddingVertical: 8,
+    borderRadius: 50, borderWidth: 1.5, borderColor: Colors.border,
+    backgroundColor: Colors.white, minWidth: 80,
+  },
+  catPillActive: {
+    backgroundColor: Colors.primary, borderColor: Colors.primary,
+    shadowColor: Colors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 5,
+  },
+  catEmoji: { fontSize: 20, marginBottom: 2 },
+  catLabel: { fontSize: 12, fontWeight: '700', color: Colors.textSecondary },
+  catLabelActive: { color: Colors.white },
+
+  // Filters (distance / zone)
+  filterRow: { maxHeight: 48, backgroundColor: Colors.white },
+  filterContent: { paddingHorizontal: 20, paddingVertical: 8, gap: 8 },
+  chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 6 },
   chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  chipText: { fontSize: 12, color: Colors.textPrimary, fontWeight: '600' },
-  chipTextActive: { color: Colors.white },
-  catChip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderColor: Colors.accentLight, borderRadius: 50, paddingHorizontal: 14, paddingVertical: 7, backgroundColor: Colors.accentLight },
-  catChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  catChipText: { fontSize: 12, color: Colors.primary, fontWeight: '700' },
-  catChipTextActive: { color: Colors.white },
+  chipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  chipTextActive: { color: Colors.white, fontWeight: '700' },
 
   // Loading / empty
-  loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14 },
+  loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 16 },
   loadingText: { color: Colors.textSecondary, fontSize: 14 },
-  empty: { alignItems: 'center', paddingVertical: 60, gap: 10 },
+  empty: { alignItems: 'center', paddingVertical: 64, gap: 12 },
   emptyIcon: { width: 88, height: 88, borderRadius: 44, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  emptyTitle: { fontSize: 20, fontWeight: '900', color: Colors.textPrimary },
-  emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22 },
-  emptyBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 28, paddingVertical: 14, marginTop: 8 },
+  emptyTitle: { fontSize: 22, fontWeight: '800', color: Colors.textPrimary },
+  emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22, maxWidth: 280 },
+  emptyBtn: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 32, paddingVertical: 14, marginTop: 8 },
   emptyBtnText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
 
   // Feed
-  feed: { padding: 16, paddingTop: 20 },
-  resultRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  resultText: { fontSize: 14, fontWeight: '700', color: Colors.textPrimary },
-  resultClear: { fontSize: 13, color: Colors.primary, fontWeight: '600' },
+  feed: { padding: 20, paddingTop: 24 },
+  resultRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  resultText: { fontSize: 15, fontWeight: '800', color: Colors.textPrimary },
+  resultClear: { fontSize: 13, color: Colors.accent, fontWeight: '700' },
 
-  // Ofertas banner
-  ofertasBanner: {
+  // Hero banner
+  heroBanner: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: Colors.primary, borderRadius: 24, padding: 24, marginBottom: 28,
+    backgroundColor: Colors.primary, borderRadius: 24, padding: 24, marginBottom: 32,
   },
-  ofertasBannerTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
-  ofertasBannerTitle: { fontSize: 36, fontWeight: '900', color: Colors.white, lineHeight: 40 },
-  ofertasBannerSub: { fontSize: 13, color: 'rgba(255,255,255,0.75)', marginTop: 6 },
-  ofertasBannerIcon: { width: 68, height: 68, borderRadius: 34, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  heroTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 8 },
+  heroTitle: { fontSize: 34, fontWeight: '900', color: Colors.white, lineHeight: 38, letterSpacing: -0.5 },
+  heroSub: { fontSize: 13, color: 'rgba(255,255,255,0.6)', marginTop: 8 },
+  heroBadge: { width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center' },
 
-  // Secciones mini
-  seccion: { marginBottom: 28 },
-  seccionTitulo: { fontSize: 20, fontWeight: '900', color: Colors.textPrimary, marginBottom: 16 },
-  miniCard: { width: 156, backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.10, shadowRadius: 12 },
-  miniImgWrap: { backgroundColor: Colors.surface, height: 108, justifyContent: 'center', alignItems: 'center' },
+  // Sections (horizontal mini cards)
+  seccion: { marginBottom: 32 },
+  seccionTitulo: { fontSize: 20, fontWeight: '800', color: Colors.textPrimary, marginBottom: 16, letterSpacing: -0.3 },
+  miniCard: { width: MINI_W, backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
+  miniImgWrap: { height: 110, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   miniDisc: { position: 'absolute', top: 8, right: 8, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 8, paddingVertical: 3 },
   miniDiscText: { color: Colors.white, fontSize: 10, fontWeight: '800' },
   miniBody: { padding: 12 },
   miniNegocio: { fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
-  miniPrecio: { fontSize: 18, fontWeight: '900', color: Colors.primary, marginTop: 3 },
+  miniPrice: { fontSize: 18, fontWeight: '900', color: Colors.primary, marginTop: 3 },
 
-  // Bolsa Card
-  card: { backgroundColor: Colors.white, borderRadius: 24, marginBottom: 20, elevation: 7, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.11, shadowRadius: 16, overflow: 'hidden' },
-  cardAgotada: { opacity: 0.5 },
+  // Main card
+  card: { backgroundColor: Colors.white, borderRadius: 24, marginBottom: 24, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 14, overflow: 'hidden' },
+  cardAgotada: { opacity: 0.45 },
   cardImgWrap: { height: CARD_IMG_H, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   cardImgPlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  cardImgOverlay: { ...StyleSheet.absoluteFillObject, background: 'transparent' as any },
-  discBadge: { position: 'absolute', top: 14, right: 14, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 6 },
-  discBadgeText: { color: Colors.white, fontSize: 12, fontWeight: '900' },
-  cuponBadge: { position: 'absolute', top: 14, left: 14, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 6 },
-  cuponText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
-  timeBadge: { position: 'absolute', bottom: 68, left: 14, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5 },
-  timeBadgeText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
-  shareBtn: { position: 'absolute', top: 14, right: 66, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 18, padding: 7 },
+  cardGradient: { ...StyleSheet.absoluteFillObject, backgroundColor: 'transparent' },
 
-  // Price overlay on image
-  imgPriceRow: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: 'rgba(0,0,0,0.48)' },
-  imgNegocio: { fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
-  imgNombre: { fontSize: 17, fontWeight: '900', color: Colors.white, maxWidth: SW * 0.54 },
+  discPill: { position: 'absolute', top: 14, left: 14, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5 },
+  discPillText: { color: Colors.white, fontSize: 11, fontWeight: '900' },
+  cuponPill: { position: 'absolute', top: 14, left: 14, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5, marginTop: 34 },
+  cuponPillText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
+  timePill: { position: 'absolute', bottom: 64, left: 14, backgroundColor: Colors.textSecondary, borderRadius: 50, paddingHorizontal: 12, paddingVertical: 5 },
+  timePillText: { color: Colors.white, fontSize: 11, fontWeight: '700' },
+  shareBtn: { position: 'absolute', top: 14, right: 14, backgroundColor: 'rgba(0,0,0,0.35)', borderRadius: 50, padding: 8 },
+
+  imgFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', paddingHorizontal: 16, paddingVertical: 16, backgroundColor: 'rgba(0,0,0,0.52)' },
+  imgNegocio: { fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
+  imgNombre: { fontSize: 18, fontWeight: '900', color: Colors.white, maxWidth: SW * 0.5 },
   imgPriceBox: { alignItems: 'flex-end' },
-  imgPriceOriginal: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textDecorationLine: 'line-through' },
-  imgPrice: { fontSize: 28, fontWeight: '900', color: Colors.white },
+  imgOriginal: { fontSize: 12, color: 'rgba(255,255,255,0.55)', textDecorationLine: 'line-through' },
+  imgPrice: { fontSize: 30, fontWeight: '900', color: Colors.white },
 
-  cardBody: { paddingHorizontal: 16, paddingVertical: 12 },
-  cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  cardMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 16, paddingVertical: 14 },
   metaChip: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
 });
