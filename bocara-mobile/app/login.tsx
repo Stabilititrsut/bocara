@@ -283,12 +283,12 @@ const s = StyleSheet.create({
 
   logoArea: { alignItems: 'center', paddingTop: 28, paddingBottom: 24 },
   logoCircle: {
-    width: 120, height: 120, borderRadius: 28, backgroundColor: Colors.white,
+    width: 120, height: 120, borderRadius: 60, backgroundColor: Colors.white,
     alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+    overflow: 'hidden',
     elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.10, shadowRadius: 16,
-    borderWidth: 1, borderColor: Colors.border,
   },
-  logoImg: { width: 108, height: 108 },
+  logoImg: { width: 120, height: 120, borderRadius: 60 },
   tagline: { fontSize: 14, color: Colors.textSecondary, marginTop: 4, textAlign: 'center' },
 
   adminPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#312E81', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, marginTop: 12, borderWidth: 1, borderColor: '#4338CA' },

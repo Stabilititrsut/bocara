@@ -69,8 +69,16 @@ function AuthGuard() {
   const [onboardingDone, setOnboardingDone] = useState(true);
 
   useEffect(() => {
+    if (Platform.OS === 'web') {
+      setOnboardingDone(true);
+      setOnboardingChecked(true);
+      return;
+    }
     AsyncStorage.getItem('bocara_onboarding_done').then((val) => {
       setOnboardingDone(val === 'true');
+      setOnboardingChecked(true);
+    }).catch(() => {
+      setOnboardingDone(true);
       setOnboardingChecked(true);
     });
   }, []);
@@ -94,8 +102,8 @@ function AuthGuard() {
     }
 
     if (usuario) {
-      // Mostrar onboarding a clientes nuevos que no lo han visto
-      if (usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
+      // Mostrar onboarding a clientes nuevos (solo en nativo, no en web)
+      if (Platform.OS !== 'web' && usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
         router.replace('/onboarding');
         return;
       }
