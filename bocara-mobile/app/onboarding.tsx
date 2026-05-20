@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Dimensions } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -53,6 +54,9 @@ export default function OnboardingScreen() {
       )}
 
       <View style={s.content}>
+        {/* Logo */}
+        <Image source={require('@/assets/images/logo.png')} style={s.logoSmall} contentFit="contain" />
+
         {/* Ilustración */}
         <View style={[s.ilustracion, { backgroundColor: bg }]}>
           <Ionicons name={icon} size={72} color={color} />
@@ -94,6 +98,8 @@ const s = StyleSheet.create({
   skipText: { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
 
   content: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 36 },
+
+  logoSmall: { width: 90, height: 60, marginBottom: 32 },
 
   ilustracion: { width: 160, height: 160, borderRadius: 50, alignItems: 'center', justifyContent: 'center', marginBottom: 44 },
 

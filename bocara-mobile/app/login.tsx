@@ -3,6 +3,7 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -155,11 +156,14 @@ export default function LoginScreen() {
 
         <TouchableOpacity style={s.logoArea} onPress={handleLogoTap} activeOpacity={1}>
           <View style={s.logoCircle}>
-            <Text style={{ fontSize: 40 }}>🥡</Text>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={s.logoImg}
+              contentFit="contain"
+            />
           </View>
-          <Text style={s.logo}>Boca<Text style={s.logoAccent}>ra</Text></Text>
           <Text style={s.tagline}>
-            {esRest ? '🏪 Panel para negocios' : 'Rescata comida · Ahorra dinero 🌱'}
+            {esRest ? 'Panel para negocios' : 'Rescata comida · Ahorra dinero'}
           </Text>
         </TouchableOpacity>
 
@@ -273,13 +277,13 @@ const s = StyleSheet.create({
 
   logoArea: { alignItems: 'center', paddingTop: 28, paddingBottom: 24 },
   logoCircle: {
-    width: 80, height: 80, borderRadius: 26, backgroundColor: Colors.accentLight,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
-    elevation: 4, shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12,
+    width: 120, height: 120, borderRadius: 28, backgroundColor: Colors.white,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+    elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.10, shadowRadius: 16,
+    borderWidth: 1, borderColor: Colors.border,
   },
-  logo: { fontSize: 42, fontWeight: '900', color: Colors.textPrimary, letterSpacing: -1 },
-  logoAccent: { color: Colors.primary },
-  tagline: { fontSize: 14, color: Colors.textSecondary, marginTop: 6, textAlign: 'center' },
+  logoImg: { width: 108, height: 108 },
+  tagline: { fontSize: 14, color: Colors.textSecondary, marginTop: 4, textAlign: 'center' },
 
   adminPill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#312E81', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, marginTop: 12, borderWidth: 1, borderColor: '#4338CA' },
   adminPillText: { color: '#A5B4FC', fontSize: 11, fontWeight: '800', letterSpacing: 1 },

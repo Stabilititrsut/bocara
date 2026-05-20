@@ -15,7 +15,8 @@ import { useCart } from '@/src/context/CartContext';
 
 const { width: SW } = Dimensions.get('window');
 const CARD_W = Math.floor((SW - 52) / 2);
-const CARD_IMG_H = Math.round(CARD_W * 0.68);
+const CARD_H = 280;
+const CARD_IMG_H = 168;
 
 const CATEGORIAS = [
   { label: 'Todos',          emoji: '✨', bg: '#F5F0EB' },
@@ -39,12 +40,12 @@ function ProductCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) 
 
   return (
     <TouchableOpacity
-      style={[s.productCard, { width: CARD_W }, agotada && s.productAgotada]}
+      style={[s.productCard, { width: CARD_W, height: CARD_H }, agotada && s.productAgotada]}
       onPress={onPress}
       activeOpacity={0.88}
       disabled={agotada}
     >
-      <View style={[s.productImgWrap, { height: CARD_IMG_H }]}>
+      <View style={s.productImgWrap}>
         {imgUri ? (
           <Image source={{ uri: imgUri }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
         ) : (
@@ -181,7 +182,11 @@ export default function HomeScreen() {
       <View style={s.header}>
         <View style={s.headerLeft}>
           <TouchableOpacity style={s.avatar} onPress={() => router.push('/(tabs)/perfil')}>
-            <Text style={s.avatarText}>{inicialesNombre || '?'}</Text>
+            <Image
+              source={require('@/assets/images/logo.png')}
+              style={s.avatarLogo}
+              contentFit="contain"
+            />
           </TouchableOpacity>
           <View>
             <Text style={s.greeting}>Hola, {nombreCorto || 'Bocara'} 👋</Text>
@@ -359,8 +364,8 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: Colors.border,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 16, fontWeight: '800', color: Colors.white },
+  avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.white, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: Colors.border, overflow: 'hidden' },
+  avatarLogo: { width: 40, height: 40 },
   greeting: { fontSize: 16, fontWeight: '800', color: Colors.textPrimary },
   locRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
   locText: { fontSize: 12, color: Colors.textSecondary, maxWidth: 180 },
@@ -451,7 +456,7 @@ const s = StyleSheet.create({
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, marginBottom: 16 },
   productCard: { backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
   productAgotada: { opacity: 0.45 },
-  productImgWrap: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
+  productImgWrap: { height: CARD_IMG_H, backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
   productDiscBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
   productDiscText: { color: Colors.white, fontSize: 10, fontWeight: '900' },
   cuponBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
