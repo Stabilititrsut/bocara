@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, SafeAreaView, ActivityIndicator,
+  Alert, Platform, SafeAreaView, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -33,9 +33,16 @@ export default function PerfilScreen() {
   }, []);
 
   async function handleLogout() {
+    if (Platform.OS === 'web') {
+      if ((window as any).confirm('¿Seguro que quieres cerrar sesión?')) {
+        await logout();
+        router.replace('/login');
+      }
+      return;
+    }
     Alert.alert('Cerrar sesión', '¿Seguro que quieres salir?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Salir', style: 'destructive', onPress: logout },
+      { text: 'Salir', style: 'destructive', onPress: async () => { await logout(); router.replace('/login'); } },
     ]);
   }
 

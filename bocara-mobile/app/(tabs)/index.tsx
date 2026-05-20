@@ -185,7 +185,7 @@ export default function HomeScreen() {
             <Image
               source={require('@/assets/images/logo.png')}
               style={s.avatarLogo}
-              contentFit="contain"
+              contentFit="cover"
             />
           </TouchableOpacity>
           <View>

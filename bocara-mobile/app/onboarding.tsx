@@ -56,7 +56,7 @@ export default function OnboardingScreen() {
       <View style={s.content}>
         {/* Logo */}
         <View style={s.logoWrap}>
-          <Image source={require('@/assets/images/logo.png')} style={s.logoSmall} contentFit="contain" />
+          <Image source={require('@/assets/images/logo.png')} style={s.logoSmall} contentFit="cover" />
         </View>
 
         {/* Ilustración */}
@@ -101,8 +101,8 @@ const s = StyleSheet.create({
 
   content: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 36 },
 
-  logoWrap: { width: 90, height: 90, borderRadius: 45, overflow: 'hidden', backgroundColor: Colors.white, marginBottom: 32, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 },
-  logoSmall: { width: 90, height: 90 },
+  logoWrap: { width: 90, height: 90, borderRadius: 45, overflow: 'hidden', backgroundColor: Colors.white, marginBottom: 32 },
+  logoSmall: { width: 90, height: 90, borderRadius: 45 },
 
   ilustracion: { width: 160, height: 160, borderRadius: 50, alignItems: 'center', justifyContent: 'center', marginBottom: 44 },
 
