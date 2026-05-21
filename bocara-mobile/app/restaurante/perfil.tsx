@@ -14,6 +14,8 @@ const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', '
 export default function PerfilRestauranteScreen() {
   const [negocio, setNegocio] = useState<any>(null);
   const [form, setForm] = useState<any>({});
+  const [originalForm, setOriginalForm] = useState<any>({});
+  const [camposPendientes, setCamposPendientes] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingImg, setUploadingImg] = useState(false);
@@ -21,7 +23,14 @@ export default function PerfilRestauranteScreen() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const { logout } = useAuth();
   const fileInputRef = useRef<any>(null);
-  const set = (k: string) => (v: string) => setForm((f: any) => ({ ...f, [k]: v }));
+  const set = (k: string) => (v: string) => {
+    setForm((f: any) => ({ ...f, [k]: v }));
+    setCamposPendientes(prev => {
+      const next = new Set(prev);
+      next.add(k);
+      return next;
+    });
+  };
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -31,7 +40,7 @@ export default function PerfilRestauranteScreen() {
   useEffect(() => {
     negociosAPI.miNegocio().then((res) => {
       setNegocio(res.data);
-      setForm({
+      const loaded = {
         nombre: res.data.nombre || '',
         descripcion: res.data.descripcion || '',
         direccion: res.data.direccion || '',
@@ -41,7 +50,10 @@ export default function PerfilRestauranteScreen() {
         categoria: res.data.categoria || '',
         latitud: res.data.latitud != null ? String(res.data.latitud) : '',
         longitud: res.data.longitud != null ? String(res.data.longitud) : '',
-      });
+      };
+      setForm(loaded);
+      setOriginalForm(loaded);
+      setCamposPendientes(new Set());
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -92,6 +104,7 @@ export default function PerfilRestauranteScreen() {
   }
 
   async function guardar() {
+    if (camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
     setSaving(true);
     setToast(null);
     try {
@@ -101,7 +114,7 @@ export default function PerfilRestauranteScreen() {
       payload.latitud  = isNaN(lat) ? null : lat;
       payload.longitud = isNaN(lng) ? null : lng;
       await negociosAPI.actualizar(negocio.id, payload);
-      showToast('¡Datos del negocio actualizados!');
+      showToast('✅ Cambios enviados para revisión del equipo Bocara');
     } catch (e: any) { showToast(e.message || 'Error al guardar', false); }
     finally { setSaving(false); }
   }
@@ -147,9 +160,14 @@ export default function PerfilRestauranteScreen() {
       })}
 
       <View style={s.header}>
-        <Text style={s.headerTitle}>Mi negocio</Text>
-        <TouchableOpacity style={s.saveBtn} onPress={guardar} disabled={saving}>
-          <Text style={s.saveBtnText}>{saving ? '...' : 'Guardar'}</Text>
+        <View>
+          <Text style={s.headerTitle}>Mi negocio</Text>
+          {camposPendientes.size > 0 && (
+            <Text style={s.pendienteHint}>⏳ Tienes cambios sin enviar</Text>
+          )}
+        </View>
+        <TouchableOpacity style={[s.saveBtn, camposPendientes.size === 0 && s.saveBtnDisabled]} onPress={guardar} disabled={saving}>
+          <Text style={s.saveBtnText}>{saving ? '...' : 'Enviar cambios'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -200,7 +218,12 @@ export default function PerfilRestauranteScreen() {
         </View>
 
         {/* Datos básicos */}
-        <Text style={s.sectionTitle}>Información del negocio</Text>
+        <View style={s.sectionRow}>
+          <Text style={s.sectionTitle}>Información del negocio</Text>
+          {(['nombre','descripcion','telefono','categoria'] as const).some(k => camposPendientes.has(k)) && (
+            <View style={s.pendienteBadge}><Text style={s.pendienteBadgeText}>⏳ Pendiente</Text></View>
+          )}
+        </View>
         {[
           { key: 'nombre',      label: 'Nombre del negocio' },
           { key: 'descripcion', label: 'Descripción', multi: true },
@@ -227,7 +250,12 @@ export default function PerfilRestauranteScreen() {
         </ScrollView>
 
         {/* Dirección */}
-        <Text style={s.sectionTitle}>Dirección</Text>
+        <View style={s.sectionRow}>
+          <Text style={s.sectionTitle}>Dirección</Text>
+          {(['direccion','zona','ciudad'] as const).some(k => camposPendientes.has(k)) && (
+            <View style={s.pendienteBadge}><Text style={s.pendienteBadgeText}>⏳ Pendiente</Text></View>
+          )}
+        </View>
         {[
           { key: 'direccion', label: 'Dirección', placeholder: '5a Calle 10-35' },
           { key: 'zona',      label: 'Zona / Colonia', placeholder: 'Zona 10' },
@@ -285,7 +313,12 @@ const s = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown },
   saveBtn: { backgroundColor: Colors.orange, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
+  saveBtnDisabled: { backgroundColor: Colors.border },
   saveBtnText: { color: Colors.white, fontWeight: '700', fontSize: 14 },
+  pendienteHint: { fontSize: 11, color: Colors.orange, fontWeight: '600', marginTop: 2 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12, marginTop: 4 },
+  pendienteBadge: { backgroundColor: '#FEF3C7', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: '#FDE68A' },
+  pendienteBadgeText: { fontSize: 11, color: '#92400E', fontWeight: '700' },
   scroll: { padding: 16 },
   toast: { borderRadius: 12, padding: 12, marginBottom: 14 },
   toastOk: { backgroundColor: '#DCFCE7' },
@@ -303,7 +336,7 @@ const s = StyleSheet.create({
   stat: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, padding: 12, alignItems: 'center', elevation: 1 },
   statVal: { fontSize: 22, fontWeight: '900', color: Colors.orange },
   statLabel: { fontSize: 11, color: Colors.textSecondary, marginTop: 2, textAlign: 'center' },
-  sectionTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12, marginTop: 4 },
+  sectionTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown },
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   input: { backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, padding: 12, fontSize: 14, color: Colors.textPrimary, marginBottom: 14 },
   chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: Colors.white },

@@ -258,10 +258,10 @@ export default function HomeScreen() {
         {/* TABS bolsa / cupón */}
         <View style={s.tabRow}>
           <TouchableOpacity style={[s.tabBtn, tab === 'bolsa' && s.tabBtnActive]} onPress={() => setTab('bolsa')}>
-            <Text style={[s.tabBtnText, tab === 'bolsa' && s.tabBtnTextActive]}>🛍️  Bolsas Sorpresa</Text>
+            <Text style={[s.tabBtnText, tab === 'bolsa' && s.tabBtnTextActive]}>⏱️  Tiempo Limitado</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[s.tabBtn, tab === 'cupon' && s.tabBtnActive]} onPress={() => setTab('cupon')}>
-            <Text style={[s.tabBtnText, tab === 'cupon' && s.tabBtnTextActive]}>🏷️  Cupones</Text>
+            <Text style={[s.tabBtnText, tab === 'cupon' && s.tabBtnTextActive]}>🏷️  Promociones</Text>
           </TouchableOpacity>
         </View>
 

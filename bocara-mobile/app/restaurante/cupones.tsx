@@ -131,9 +131,9 @@ export default function CuponesRestauranteScreen() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>🎫 Cupones</Text>
+        <Text style={s.headerTitle}>🏷️ Promociones</Text>
         <TouchableOpacity style={s.addBtn} onPress={abrirNuevo}>
-          <Text style={s.addBtnText}>+ Nuevo</Text>
+          <Text style={s.addBtnText}>+ Nueva</Text>
         </TouchableOpacity>
       </View>
 
@@ -144,9 +144,9 @@ export default function CuponesRestauranteScreen() {
         {cupones.length === 0 && (
           <View style={s.empty}>
             <Text style={{ fontSize: 48 }}>🎫</Text>
-            <Text style={s.emptyText}>Aún no tienes cupones publicados</Text>
+            <Text style={s.emptyText}>Aún no tienes promociones publicadas</Text>
             <TouchableOpacity style={s.emptyBtn} onPress={abrirNuevo}>
-              <Text style={s.emptyBtnText}>Crear primer cupón</Text>
+              <Text style={s.emptyBtnText}>Crear primera promoción</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -207,7 +207,7 @@ export default function CuponesRestauranteScreen() {
             <TouchableOpacity onPress={() => setModal(false)}>
               <Text style={s.cancelText}>Cancelar</Text>
             </TouchableOpacity>
-            <Text style={s.modalTitle}>{editando ? 'Editar cupón' : 'Nuevo cupón'}</Text>
+            <Text style={s.modalTitle}>{editando ? 'Editar cupón' : 'Nueva promoción'}</Text>
             <TouchableOpacity onPress={guardar} disabled={saving}>
               <Text style={[s.saveText, saving && { opacity: 0.5 }]}>{saving ? 'Guardando…' : 'Guardar'}</Text>
             </TouchableOpacity>

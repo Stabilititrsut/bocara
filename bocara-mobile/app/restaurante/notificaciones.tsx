@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   RefreshControl, ActivityIndicator, SafeAreaView,
@@ -20,6 +20,7 @@ export default function RestauranteNotificacionesScreen() {
   const [notifs, setNotifs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const pollingRef = useRef<any>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -28,7 +29,11 @@ export default function RestauranteNotificacionesScreen() {
     } catch { setNotifs([]); } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  useEffect(() => {
+    cargar();
+    pollingRef.current = setInterval(cargar, 30000);
+    return () => clearInterval(pollingRef.current);
+  }, [cargar]);
 
   async function marcarLeida(id: string) {
     try {

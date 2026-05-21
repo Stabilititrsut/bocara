@@ -17,7 +17,7 @@ if (Platform.OS !== 'web') {
   } catch {}
 }
 
-const ESTADOS = ['todos', 'confirmado', 'listo', 'recogido'];
+const ESTADOS = ['todos', 'pendiente', 'confirmado', 'listo', 'recogido'];
 const ESTADO_COLORS: Record<string, string> = {
   pendiente: Colors.textLight, confirmado: Colors.orange,
   listo: Colors.green, recogido: Colors.textSecondary, cancelado: Colors.error,
@@ -127,7 +127,7 @@ export default function PedidosRestauranteScreen() {
 
   // Polling cada 10 segundos para detectar nuevos pedidos
   useEffect(() => {
-    pollingRef.current = setInterval(cargar, 10000);
+    pollingRef.current = setInterval(cargar, 15000);
     return () => clearInterval(pollingRef.current);
   }, [cargar]);
 

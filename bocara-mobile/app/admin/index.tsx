@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, SafeAreaView,
   ActivityIndicator, TouchableOpacity, RefreshControl,
@@ -13,25 +13,35 @@ const DARK2 = '#0F172A';
 
 export default function AdminDashboard() {
   const [stats, setStats] = useState<any>(null);
+  const [pedidos, setPedidos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const pollingRef = useRef<any>(null);
   const { logout, usuario } = useAuth();
   const router = useRouter();
 
   const cargar = useCallback(async () => {
     setLoadError('');
     try {
-      const res = await adminAPI.stats();
-      setStats(res.data);
+      const [statsRes, pedidosRes] = await Promise.all([
+        adminAPI.stats(),
+        adminAPI.pedidosTodos?.() ?? Promise.resolve({ data: [] }),
+      ]);
+      setStats(statsRes.data);
+      setPedidos((pedidosRes.data || []).slice(0, 20));
       setLastUpdated(new Date());
     } catch (e: any) {
       setLoadError(e.message || 'Error al cargar estadísticas');
     } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  useEffect(() => {
+    cargar();
+    pollingRef.current = setInterval(cargar, 15000);
+    return () => clearInterval(pollingRef.current);
+  }, [cargar]);
 
   if (loading) return (
     <View style={[s.loading, { backgroundColor: DARK }]}>
@@ -126,6 +136,36 @@ export default function AdminDashboard() {
           ))}
         </View>
 
+        {/* Pedidos en tiempo real */}
+        <Text style={s.sectionTitle}>Pedidos en tiempo real</Text>
+        {pedidos.length === 0 ? (
+          <View style={[s.finCard, { padding: 20, alignItems: 'center' }]}>
+            <Text style={{ color: '#64748B', fontSize: 13 }}>No hay pedidos recientes</Text>
+          </View>
+        ) : (
+          pedidos.map((p: any) => {
+            const estadoColor: Record<string, string> = {
+              pendiente: '#F59E0B', confirmado: Colors.orange, listo: '#22C55E',
+              recogido: '#64748B', cancelado: Colors.error,
+            };
+            return (
+              <View key={p.id} style={s.pedidoCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.pedidoCodigo}>{p.codigo_recogida}</Text>
+                  <Text style={s.pedidoNegocio} numberOfLines={1}>{p.negocios?.nombre || '—'}</Text>
+                  <Text style={s.pedidoCliente}>👤 {p.usuarios?.nombre || 'Cliente'}</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <Text style={s.pedidoTotal}>Q{(p.total || 0).toFixed(2)}</Text>
+                  <View style={[s.pedidoEstado, { backgroundColor: (estadoColor[p.estado] || '#64748B') + '25' }]}>
+                    <Text style={[s.pedidoEstadoText, { color: estadoColor[p.estado] || '#64748B' }]}>{p.estado}</Text>
+                  </View>
+                </View>
+              </View>
+            );
+          })
+        )}
+
         {/* Impacto */}
         <View style={s.impactCard}>
           <Text style={s.impactEmoji}>🌿</Text>
@@ -167,6 +207,13 @@ const s = StyleSheet.create({
   finRowBorder: { borderBottomWidth: 1, borderBottomColor: '#334155' },
   finLabel: { fontSize: 13, color: '#94A3B8' },
   finVal: { fontSize: 16, fontWeight: '800' },
+  pedidoCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E293B', borderRadius: 12, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#334155' },
+  pedidoCodigo: { fontSize: 14, fontWeight: '900', color: Colors.white, letterSpacing: 1 },
+  pedidoNegocio: { fontSize: 12, color: '#94A3B8', marginTop: 2 },
+  pedidoCliente: { fontSize: 11, color: '#64748B', marginTop: 1 },
+  pedidoTotal: { fontSize: 15, fontWeight: '900', color: Colors.orange },
+  pedidoEstado: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  pedidoEstadoText: { fontSize: 11, fontWeight: '700' },
   impactCard: { backgroundColor: '#064E3B', borderRadius: 20, padding: 24, alignItems: 'center', borderWidth: 1, borderColor: '#065F46' },
   impactEmoji: { fontSize: 36, marginBottom: 4 },
   impactBig: { fontSize: 52, fontWeight: '900', color: '#6EE7B7' },

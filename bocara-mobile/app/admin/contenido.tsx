@@ -81,7 +81,7 @@ export default function AdminContenidoScreen() {
       <View style={s.header}>
         <View>
           <Text style={s.headerSub}>PANEL DE CONTENIDO</Text>
-          <Text style={s.headerTitle}>Bolsas pendientes</Text>
+          <Text style={s.headerTitle}>Contenido pendiente</Text>
         </View>
         <View style={s.badge}>
           <Text style={s.badgeText}>{items.length}</Text>
@@ -127,7 +127,7 @@ export default function AdminContenidoScreen() {
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <Text style={s.cardNombre} numberOfLines={1}>{item.nombre}</Text>
                       <View style={s.tipoBadge}>
-                        <Text style={s.tipoBadgeText}>{isBolsa ? 'BOLSA' : 'CUPÓN'}</Text>
+                        <Text style={s.tipoBadgeText}>{isBolsa ? 'TIEMPO LIM.' : 'PROMO'}</Text>
                       </View>
                     </View>
                     <Text style={s.cardRestaurante} numberOfLines={1}>
