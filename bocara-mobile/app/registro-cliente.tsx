@@ -104,6 +104,12 @@ export default function RegistroClienteScreen() {
         <Text style={s.title}>Crear cuenta</Text>
         <Text style={s.subtitle}>Únete a Bocara y rescata comida</Text>
 
+        <View style={s.emailHint}>
+          <Text style={s.emailHintText}>
+            📧 Tu correo electrónico será tu usuario para iniciar sesión. Guárdalo junto con tu contraseña.
+          </Text>
+        </View>
+
         {fields.map(({ key, label, placeholder, keyboard, secure }) => (
           <View key={key}>
             <Text style={s.label}>{label}</Text>
@@ -160,4 +166,9 @@ const s = StyleSheet.create({
   btnText: { color: Colors.white, fontWeight: '800', fontSize: 16 },
   info: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 12, lineHeight: 18 },
   terms: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 8 },
+  emailHint: {
+    backgroundColor: '#EFF6FF', borderRadius: 12, padding: 14, marginBottom: 20,
+    borderWidth: 1, borderColor: '#BFDBFE',
+  },
+  emailHintText: { fontSize: 13, color: '#1D4ED8', lineHeight: 20 },
 });

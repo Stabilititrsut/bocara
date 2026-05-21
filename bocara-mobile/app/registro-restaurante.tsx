@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -275,6 +275,19 @@ export default function RegistroRestauranteScreen() {
             </View>
           </View>
 
+          <View style={sc.credCard}>
+            <Text style={sc.credTitle}>🔑 Tus credenciales de acceso</Text>
+            <View style={sc.credRow}>
+              <Text style={sc.credLabel}>Usuario (correo)</Text>
+              <Text style={sc.credEmail}>{form.email}</Text>
+            </View>
+            <View style={sc.credWarning}>
+              <Text style={sc.credWarningText}>
+                ⚠️ Guarda tu contraseña en un lugar seguro. La necesitarás para iniciar sesión en Bocara.
+              </Text>
+            </View>
+          </View>
+
           <View style={sc.summaryCard}>
             <Text style={sc.summaryTitle}>📋 Datos registrados</Text>
             {[
@@ -355,6 +368,11 @@ export default function RegistroRestauranteScreen() {
         {step === 1 && (
           <>
             <Text style={s.section}>👤 Datos del propietario</Text>
+            <View style={s.emailInfoBox}>
+              <Text style={s.emailInfoText}>
+                📧 Tu correo electrónico será tu usuario para iniciar sesión en Bocara. Guarda bien tu contraseña.
+              </Text>
+            </View>
             <Field label="Nombre *"              value={form.nombre}   onChange={set('nombre')}   placeholder="María"              error={errors.nombre} />
             <Field label="Apellido *"            value={form.apellido} onChange={set('apellido')} placeholder="González"           error={errors.apellido} />
             <Field label="Correo electrónico *"  value={form.email}    onChange={set('email')}    placeholder="maria@negocio.com"  keyboard="email-address" lower error={errors.email} />
@@ -758,6 +776,8 @@ const s = StyleSheet.create({
   btnDisabled:     { backgroundColor: Colors.textLight },
   errorCard:       { backgroundColor: '#FEE2E2', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#FCA5A5' },
   errorCardText:   { fontSize: 13, color: '#DC2626', fontWeight: '600', lineHeight: 20 },
+  emailInfoBox:    { backgroundColor: '#EFF6FF', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#BFDBFE' },
+  emailInfoText:   { fontSize: 13, color: '#1D4ED8', lineHeight: 20 },
 });
 
 const sc = StyleSheet.create({
@@ -780,4 +800,11 @@ const sc = StyleSheet.create({
   stepsItem:    { fontSize: 13, color: Colors.textSecondary, paddingVertical: 5, lineHeight: 20 },
   btn:          { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center', width: '100%', marginBottom: 20 },
   btnText:      { color: Colors.white, fontWeight: '900', fontSize: 16 },
+  credCard:     { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 2, borderColor: Colors.orange },
+  credTitle:    { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
+  credRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  credLabel:    { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
+  credEmail:    { fontSize: 13, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
+  credWarning:  { backgroundColor: '#FEF3C7', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#F59E0B40' },
+  credWarningText: { fontSize: 12, color: '#92400E', lineHeight: 18 },
 });

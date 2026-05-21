@@ -489,4 +489,40 @@ router.post('/setup-admin', async (req, res) => {
   }
 });
 
+// POST /api/auth/reset-password — verifica OTP de Supabase y actualiza contraseña en nuestra DB
+router.post('/reset-password', async (req, res) => {
+  const { email, new_password, supabase_access_token } = req.body;
+  if (!email || !new_password || !supabase_access_token)
+    return res.status(400).json({ error: 'Faltan campos requeridos' });
+  if (new_password.length < 6)
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
+  try {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(supabase_access_token);
+    if (authErr || !user)
+      return res.status(401).json({ error: 'Código de verificación inválido o expirado' });
+    if (user.email?.toLowerCase() !== email.toLowerCase().trim())
+      return res.status(401).json({ error: 'El email no coincide con la verificación' });
+
+    const { data: dbUser, error: findErr } = await supabase
+      .from('usuarios')
+      .select('id')
+      .eq('email', email.toLowerCase().trim())
+      .maybeSingle();
+    if (findErr || !dbUser)
+      return res.status(404).json({ error: 'No existe una cuenta con ese correo electrónico' });
+
+    const hash = await bcrypt.hash(new_password, 10);
+    const { error: updateErr } = await supabase
+      .from('usuarios')
+      .update({ password_hash: hash })
+      .eq('email', email.toLowerCase().trim());
+    if (updateErr) return res.status(400).json({ error: updateErr.message });
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

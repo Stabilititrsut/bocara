@@ -51,6 +51,8 @@ export const authAPI = {
     api.post('/auth/verify-phone-otp', data),
   oauthComplete: (supabase_access_token: string) =>
     api.post('/auth/oauth-complete', { supabase_access_token }),
+  resetPassword: (data: { email: string; new_password: string; supabase_access_token: string }) =>
+    api.post('/auth/reset-password', data),
 };
 
 export const negociosAPI = {

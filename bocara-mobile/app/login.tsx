@@ -234,6 +234,10 @@ export default function LoginScreen() {
               <Text style={s.btnPillText}>{loading ? 'Verificando...' : 'Ingresar'}</Text>
             </TouchableOpacity>
 
+            <TouchableOpacity style={s.forgotBtn} onPress={() => router.push('/forgot-password')}>
+              <Text style={s.forgotText}>¿Olvidaste tu contraseña?</Text>
+            </TouchableOpacity>
+
             <View style={s.divider}>
               <View style={s.dividerLine} />
               <Text style={s.dividerText}>¿No tienes cuenta?</Text>
@@ -346,4 +350,6 @@ const s = StyleSheet.create({
   linkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 16, padding: 10 },
   linkBtnText: { fontSize: 13, fontWeight: '600' },
   tapHint: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 16 },
+  forgotBtn: { alignItems: 'center', paddingVertical: 12 },
+  forgotText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
 });
