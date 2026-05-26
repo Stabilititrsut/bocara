@@ -281,9 +281,9 @@ export default function LoginScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.surface },
   rootDark: { flex: 1, backgroundColor: '#0F172A' },
-  scroll: { flexGrow: 1, alignItems: 'center', backgroundColor: Colors.surface },
-  scrollDark: { flexGrow: 1, alignItems: 'center', backgroundColor: '#0F172A' },
-  inner: { width: '100%', maxWidth: 480, paddingHorizontal: 24, paddingTop: 16 } as any,
+  scroll: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.surface, paddingVertical: 24 },
+  scrollDark: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0F172A', paddingVertical: 24 },
+  inner: { width: '100%', maxWidth: 480, paddingHorizontal: 24 } as any,
 
   logoArea: { alignItems: 'center', paddingTop: 28, paddingBottom: 24 },
   logoCircle: {
@@ -349,6 +349,7 @@ const s = StyleSheet.create({
 
   linkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 16, padding: 10 },
   linkBtnText: { fontSize: 13, fontWeight: '600' },
+  logo: { fontSize: 36, fontWeight: '900', letterSpacing: -1 },
   tapHint: { textAlign: 'center', color: Colors.textLight, fontSize: 12, marginTop: 16 },
   forgotBtn: { alignItems: 'center', paddingVertical: 12 },
   forgotText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
