@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
+const { enviarEmail, templateAprobado, templateRechazado } = require('../services/email');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -141,11 +142,29 @@ router.get('/negocios/pendientes', authMiddleware, adminOnly, async (req, res) =
 
 async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo, extra = {}) {
   try {
-    const { data: u } = await supabase.from('usuarios').select('expo_push_token').eq('id', propietarioId).single();
+    const { data: u } = await supabase.from('usuarios').select('expo_push_token,email,nombre,apellido').eq('id', propietarioId).single();
     if (u?.expo_push_token) {
       await enviarNotificacionPush(u.expo_push_token, titulo, cuerpo, { tipo, ...extra });
     }
     await guardarNotificacion(supabase, propietarioId, tipo, titulo, cuerpo, extra);
+
+    // Enviar email si hay dirección
+    if (u?.email) {
+      const nombreProp = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Propietario';
+      if (tipo === 'negocio_aprobado') {
+        await enviarEmail({
+          to: u.email,
+          subject: '🎉 ¡Tu negocio fue aprobado en Bocara Food!',
+          html: templateAprobado(nombre, nombreProp),
+        });
+      } else if (tipo === 'negocio_rechazado') {
+        await enviarEmail({
+          to: u.email,
+          subject: '❌ Actualización sobre tu solicitud en Bocara Food',
+          html: templateRechazado(nombre, nombreProp, extra.motivo),
+        });
+      }
+    }
   } catch { }
 }
 

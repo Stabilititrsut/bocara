@@ -489,6 +489,18 @@ router.post('/setup-admin', async (req, res) => {
   }
 });
 
+// GET /api/auth/check-email?email=... — verifica si un correo ya está registrado
+router.get('/check-email', async (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.status(400).json({ error: 'email requerido' });
+  const { data } = await supabase
+    .from('usuarios')
+    .select('id')
+    .eq('email', email.toLowerCase().trim())
+    .maybeSingle();
+  res.json({ existe: !!data });
+});
+
 // POST /api/auth/reset-password — verifica OTP de Supabase y actualiza contraseña en nuestra DB
 router.post('/reset-password', async (req, res) => {
   const { email, new_password, supabase_access_token } = req.body;

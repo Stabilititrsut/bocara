@@ -117,7 +117,7 @@ export default function AdminVerificacionScreen() {
                 <Text style={s.sectionTitle}>👤 Propietario</Text>
                 <InfoRow label="Nombre" val={`${n.usuarios?.nombre || ''} ${n.usuarios?.apellido || ''}`.trim() || '—'} />
                 <InfoRow label="Email" val={n.usuarios?.email || n.email || '—'} />
-                <InfoRow label="Teléfono" val={n.telefono || '—'} />
+                <InfoRow label="Teléfono" val={n.usuarios?.telefono || n.telefono || '—'} />
               </View>
 
               {/* Legal */}

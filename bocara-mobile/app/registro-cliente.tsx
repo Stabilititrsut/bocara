@@ -6,6 +6,7 @@ import {
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/src/services/supabase';
+import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
@@ -27,7 +28,7 @@ function validateEmail(value: string): string | null {
 }
 
 export default function RegistroClienteScreen() {
-  const [form, setForm] = useState({ nombre: '', apellido: '', email: '', password: '', telefono: '' });
+  const [form, setForm] = useState({ nombre: '', apellido: '', email: '', password: '', confirmPassword: '', telefono: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -56,6 +57,12 @@ export default function RegistroClienteScreen() {
       next.password = 'La contraseña debe tener al menos 6 caracteres';
     }
 
+    if (!form.confirmPassword) {
+      next.confirmPassword = 'Confirma tu contraseña';
+    } else if (form.password !== form.confirmPassword) {
+      next.confirmPassword = 'Las contraseñas no coinciden';
+    }
+
     setErrors(next);
     return Object.keys(next).length === 0;
   }
@@ -64,6 +71,13 @@ export default function RegistroClienteScreen() {
     if (!validate()) return;
     setLoading(true);
     try {
+      // Verificar que el correo no esté ya registrado
+      const check = await authAPI.checkEmail(form.email.trim().toLowerCase());
+      if (check.data?.existe) {
+        setErrors({ email: 'Este correo ya tiene una cuenta registrada. Inicia sesión o usa otro correo.' });
+        return;
+      }
+
       // Guardar datos del formulario para usarlos después de la verificación
       await AsyncStorage.setItem('bocara_pending_registro', JSON.stringify(form));
 
@@ -93,6 +107,7 @@ export default function RegistroClienteScreen() {
     { key: 'email', label: 'Correo electrónico *', placeholder: 'juan@dominio.com', keyboard: 'email-address' as any },
     { key: 'telefono', label: 'Teléfono', placeholder: '55555555', keyboard: 'phone-pad' as any },
     { key: 'password', label: 'Contraseña *', placeholder: 'Mínimo 6 caracteres', secure: true },
+    { key: 'confirmPassword', label: 'Confirmar contraseña *', placeholder: 'Repite tu contraseña', secure: true },
   ];
 
   return (

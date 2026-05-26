@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Modal,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
-import { negociosAPI, uploadsAPI } from '@/src/services/api';
+import { negociosAPI, uploadsAPI, authAPI } from '@/src/services/api';
+import { supabase } from '@/src/services/supabase';
 import { Colors } from '@/constants/Colors';
 import { Image } from 'expo-image';
 
@@ -23,7 +24,7 @@ const ZONAS_GT = [
 type Step = 1 | 2 | 3 | 4;
 
 type FormState = {
-  nombre: string; apellido: string; email: string; password: string; telefono: string;
+  nombre: string; apellido: string; email: string; password: string; confirmPassword: string; telefono: string;
   nombre_negocio: string; descripcion: string; categoria: string; categoria_otro: string;
   direccion_negocio: string; zona: string; horario_atencion: string;
   nit: string; dpi: string;
@@ -35,7 +36,7 @@ type FormState = {
 export default function RegistroRestauranteScreen() {
   const [step, setStep] = useState<Step>(1);
   const [form, setForm] = useState<FormState>({
-    nombre: '', apellido: '', email: '', password: '', telefono: '',
+    nombre: '', apellido: '', email: '', password: '', confirmPassword: '', telefono: '',
     nombre_negocio: '', descripcion: '', categoria: '', categoria_otro: '',
     direccion_negocio: '', zona: '', horario_atencion: '',
     nit: '', dpi: '',
@@ -48,8 +49,25 @@ export default function RegistroRestauranteScreen() {
   const [uploadStatus, setUploadStatus] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState('');
+
+  // OTP email verification (step 1 → step 2 gate)
+  const [showOtpModal, setShowOtpModal] = useState(false);
+  const [otpCodigo, setOtpCodigo] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState('');
+  const [otpReenvioSeg, setOtpReenvioSeg] = useState(60);
+  const otpCountdownRef = useRef<any>(null);
+
   const { registroRestaurante } = useAuth();
   const router = useRouter();
+
+  function startOtpCountdown() {
+    setOtpReenvioSeg(60);
+    clearInterval(otpCountdownRef.current);
+    otpCountdownRef.current = setInterval(() => {
+      setOtpReenvioSeg(s => { if (s <= 1) { clearInterval(otpCountdownRef.current); return 0; } return s - 1; });
+    }, 1000);
+  }
 
   const set = (k: keyof FormState) => (v: string) => {
     setForm(f => ({ ...f, [k]: v }));
@@ -121,6 +139,8 @@ export default function RegistroRestauranteScreen() {
       else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Ingresa un correo electrónico válido';
       if (!form.password)        e.password  = 'La contraseña es obligatoria';
       else if (form.password.length < 6) e.password = 'La contraseña debe tener al menos 6 caracteres';
+      if (!form.confirmPassword) e.confirmPassword = 'Confirma tu contraseña';
+      else if (form.password !== form.confirmPassword) e.confirmPassword = 'Las contraseñas no coinciden';
       if (!form.telefono.trim()) e.telefono  = 'El teléfono es obligatorio';
     }
 
@@ -161,7 +181,79 @@ export default function RegistroRestauranteScreen() {
 
   function nextStep() {
     if (!validarPaso()) return;
+    if (step === 1) {
+      // Gate: verify email via OTP before proceeding to step 2
+      enviarOtpEmail();
+      return;
+    }
     setStep(s => Math.min(s + 1, 4) as Step);
+  }
+
+  async function enviarOtpEmail() {
+    const email = form.email.trim().toLowerCase();
+    setLoading(true);
+    setErrors(e => ({ ...e, email: '' }));
+    try {
+      // Check for duplicate email first
+      const check = await authAPI.checkEmail(email);
+      if (check.data?.existe) {
+        setErrors(e => ({ ...e, email: 'Este correo ya tiene una cuenta registrada. Inicia sesión o usa otro correo.' }));
+        return;
+      }
+      // Send OTP
+      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      if (error) {
+        setErrors(e => ({ ...e, email: 'No se pudo enviar el código de verificación. Verifica el correo e intenta de nuevo.' }));
+        return;
+      }
+      setOtpCodigo('');
+      setOtpError('');
+      setShowOtpModal(true);
+      startOtpCountdown();
+    } catch (err: any) {
+      setErrors(e => ({ ...e, email: err.message || 'Error al verificar el correo' }));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function verificarOtp() {
+    if (otpCodigo.length !== 6) { setOtpError('Ingresa el código de 6 dígitos'); return; }
+    setOtpLoading(true);
+    setOtpError('');
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        email: form.email.trim().toLowerCase(),
+        token: otpCodigo.trim(),
+        type: 'email',
+      });
+      if (error) {
+        setOtpError('Código incorrecto o expirado. Verifica tu correo e intenta de nuevo.');
+        return;
+      }
+      clearInterval(otpCountdownRef.current);
+      setShowOtpModal(false);
+      setStep(2);
+    } catch (err: any) {
+      setOtpError(err.message || 'Error al verificar el código');
+    } finally {
+      setOtpLoading(false);
+    }
+  }
+
+  async function reenviarOtp() {
+    if (otpReenvioSeg > 0) return;
+    setOtpLoading(true);
+    setOtpError('');
+    try {
+      const { error } = await supabase.auth.signInWithOtp({
+        email: form.email.trim().toLowerCase(),
+        options: { shouldCreateUser: true },
+      });
+      if (error) { setOtpError('No se pudo reenviar el código. Intenta más tarde.'); return; }
+      startOtpCountdown();
+    } catch { setOtpError('Error al reenviar el código'); }
+    finally { setOtpLoading(false); }
   }
 
   async function subirFotoBase64(base64: string, path: string): Promise<string | null> {
@@ -320,7 +412,7 @@ export default function RegistroRestauranteScreen() {
               '1. Revisamos tu DPI y datos bancarios',
               '2. Verificamos la información del negocio',
               '3. Activamos tu cuenta (24-48 h)',
-              '4. Empiezas a publicar tus bolsas sorpresa',
+              '4. Empiezas a publicar',
             ].map((s) => (
               <Text key={s} style={sc.stepsItem}>{s}</Text>
             ))}
@@ -376,7 +468,8 @@ export default function RegistroRestauranteScreen() {
             <Field label="Nombre *"              value={form.nombre}   onChange={set('nombre')}   placeholder="María"              error={errors.nombre} />
             <Field label="Apellido *"            value={form.apellido} onChange={set('apellido')} placeholder="González"           error={errors.apellido} />
             <Field label="Correo electrónico *"  value={form.email}    onChange={set('email')}    placeholder="maria@negocio.com"  keyboard="email-address" lower error={errors.email} />
-            <Field label="Contraseña *"          value={form.password} onChange={set('password')} placeholder="Mínimo 6 caracteres" secure                error={errors.password} />
+            <Field label="Contraseña *"          value={form.password} onChange={set('password')} placeholder="Mínimo 6 caracteres" secure error={errors.password} />
+            <Field label="Confirmar contraseña *" value={form.confirmPassword} onChange={set('confirmPassword')} placeholder="Repite tu contraseña" secure error={errors.confirmPassword} />
             <Field label="Teléfono *"            value={form.telefono} onChange={set('telefono')} placeholder="5555-1234"          keyboard="phone-pad"  error={errors.telefono} />
           </>
         )}
@@ -678,6 +771,57 @@ export default function RegistroRestauranteScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* ── Modal OTP verificación de correo ── */}
+      <Modal visible={showOtpModal} transparent animationType="slide" onRequestClose={() => setShowOtpModal(false)}>
+        <View style={s.otpOverlay}>
+          <View style={s.otpCard}>
+            <Text style={s.otpTitle}>Verifica tu correo</Text>
+            <Text style={s.otpSub}>
+              Enviamos un código de 6 dígitos a{'\n'}
+              <Text style={{ fontWeight: '800', color: Colors.brown }}>{form.email}</Text>
+            </Text>
+            <Text style={s.otpHint}>Revisa también tu carpeta de spam.</Text>
+
+            <TextInput
+              style={[s.otpInput, otpError ? s.otpInputError : null]}
+              placeholder="123456"
+              placeholderTextColor={Colors.textLight}
+              keyboardType="number-pad"
+              maxLength={6}
+              value={otpCodigo}
+              onChangeText={v => { setOtpCodigo(v.replace(/\D/g, '')); setOtpError(''); }}
+              autoFocus
+            />
+            {otpError ? <Text style={s.otpError}>{otpError}</Text> : null}
+
+            <TouchableOpacity
+              style={[s.otpBtn, (otpLoading || otpCodigo.length < 6) && s.otpBtnDisabled]}
+              onPress={verificarOtp}
+              disabled={otpLoading || otpCodigo.length < 6}
+            >
+              {otpLoading
+                ? <ActivityIndicator color={Colors.white} />
+                : <Text style={s.otpBtnText}>Verificar y continuar →</Text>
+              }
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.otpReenvio, otpReenvioSeg > 0 && s.otpReenvioDisabled]}
+              onPress={reenviarOtp}
+              disabled={otpReenvioSeg > 0 || otpLoading}
+            >
+              <Text style={[s.otpReenvioText, otpReenvioSeg > 0 && { color: Colors.textLight }]}>
+                {otpReenvioSeg > 0 ? `Reenviar código en ${otpReenvioSeg}s` : 'Reenviar código'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={s.otpCancelar} onPress={() => setShowOtpModal(false)}>
+              <Text style={s.otpCancelarText}>← Volver y editar correo</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -778,6 +922,22 @@ const s = StyleSheet.create({
   errorCardText:   { fontSize: 13, color: '#DC2626', fontWeight: '600', lineHeight: 20 },
   emailInfoBox:    { backgroundColor: '#EFF6FF', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#BFDBFE' },
   emailInfoText:   { fontSize: 13, color: '#1D4ED8', lineHeight: 20 },
+  otpOverlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  otpCard:         { backgroundColor: Colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 28, paddingBottom: 40 },
+  otpTitle:        { fontSize: 22, fontWeight: '900', color: Colors.brown, marginBottom: 8 },
+  otpSub:          { fontSize: 14, color: Colors.textSecondary, lineHeight: 22, marginBottom: 4 },
+  otpHint:         { fontSize: 12, color: Colors.textLight, marginBottom: 24 },
+  otpInput:        { backgroundColor: Colors.background, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 14, padding: 16, fontSize: 28, letterSpacing: 10, color: Colors.textPrimary, textAlign: 'center', marginBottom: 8 },
+  otpInputError:   { borderColor: Colors.error },
+  otpError:        { fontSize: 12, color: Colors.error, marginBottom: 12, textAlign: 'center' },
+  otpBtn:          { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
+  otpBtnDisabled:  { opacity: 0.5 },
+  otpBtnText:      { color: Colors.white, fontWeight: '800', fontSize: 16 },
+  otpReenvio:      { marginTop: 16, alignItems: 'center', padding: 10 },
+  otpReenvioDisabled: {},
+  otpReenvioText:  { color: Colors.orange, fontWeight: '600', fontSize: 14 },
+  otpCancelar:     { marginTop: 8, alignItems: 'center', padding: 10 },
+  otpCancelarText: { color: Colors.textSecondary, fontSize: 13 },
 });
 
 const sc = StyleSheet.create({
