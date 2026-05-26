@@ -10,6 +10,17 @@ import { Colors } from '@/constants/Colors';
 const DARK = '#1E293B';
 const DARK2 = '#0F172A';
 
+const CAMPOS_RECHAZO = [
+  { key: 'nombre_negocio',  label: 'Nombre del negocio' },
+  { key: 'direccion',       label: 'Dirección' },
+  { key: 'telefono',        label: 'Teléfono' },
+  { key: 'nit',             label: 'NIT' },
+  { key: 'dpi_foto_url',    label: 'Foto del DPI' },
+  { key: 'datos_bancarios', label: 'Datos bancarios' },
+  { key: 'imagen_url',      label: 'Foto del negocio' },
+  { key: 'otro',            label: 'Otro' },
+];
+
 export default function AdminVerificacionScreen() {
   const [negocios, setNegocios] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +29,7 @@ export default function AdminVerificacionScreen() {
   const [confirmandoId, setConfirmandoId] = useState<string | null>(null);
   const [modalRechazo, setModalRechazo] = useState<{ id: string; nombre: string } | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
+  const [camposSeleccionados, setCamposSeleccionados] = useState<string[]>([]);
   const [errores, setErrores] = useState<Record<string, string>>({});
 
   const cargar = useCallback(async () => {
@@ -46,20 +58,27 @@ export default function AdminVerificacionScreen() {
     }
   }
 
+  function toggleCampo(key: string) {
+    setCamposSeleccionados(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  }
+
   async function rechazar() {
     if (!modalRechazo) return;
     setProcesando(modalRechazo.id);
-    const { id, nombre } = modalRechazo;
+    const { id } = modalRechazo;
     setModalRechazo(null);
     setErrores(prev => ({ ...prev, [id]: '' }));
     try {
-      await adminAPI.rechazarNegocio(id, motivoRechazo);
+      await adminAPI.rechazarNegocio(id, motivoRechazo, camposSeleccionados);
       setNegocios(prev => prev.filter(n => n.id !== id));
     } catch (e: any) {
       setErrores(prev => ({ ...prev, [id]: e.message || 'Error al rechazar' }));
     } finally {
       setProcesando(null);
       setMotivoRechazo('');
+      setCamposSeleccionados([]);
     }
   }
 
@@ -196,7 +215,7 @@ export default function AdminVerificacionScreen() {
                 <View style={s.cardActions}>
                   <TouchableOpacity
                     style={[s.btnRechazar, !!procesando && s.btnDisabled]}
-                    onPress={() => { setModalRechazo({ id: n.id, nombre: n.nombre }); setMotivoRechazo(''); }}
+                    onPress={() => { setModalRechazo({ id: n.id, nombre: n.nombre }); setMotivoRechazo(''); setCamposSeleccionados([]); }}
                     disabled={!!procesando}
                   >
                     <Text style={s.btnRechazarText}>✕ Rechazar</Text>
@@ -224,15 +243,24 @@ export default function AdminVerificacionScreen() {
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
             <Text style={s.modalTitle}>Rechazar {modalRechazo?.nombre}</Text>
-            <Text style={s.modalSub}>Escribe el motivo para notificar al propietario (opcional).</Text>
+            <Text style={s.modalSub}>Marca los campos que el propietario debe corregir:</Text>
+            <ScrollView style={{ maxHeight: 280 }} showsVerticalScrollIndicator={false} nestedScrollEnabled>
+              {CAMPOS_RECHAZO.map(({ key, label }) => (
+                <TouchableOpacity key={key} style={s.checkRow} onPress={() => toggleCampo(key)}>
+                  <View style={[s.checkbox, camposSeleccionados.includes(key) && s.checkboxChecked]}>
+                    {camposSeleccionados.includes(key) && <Text style={s.checkmark}>✓</Text>}
+                  </View>
+                  <Text style={s.checkLabel}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
             <TextInput
-              style={s.modalInput}
-              placeholder="Ej: La documentación está incompleta..."
+              style={[s.modalInput, { marginTop: 12 }]}
+              placeholder="Motivo adicional (opcional)..."
               placeholderTextColor="#64748B"
               value={motivoRechazo}
               onChangeText={setMotivoRechazo}
               multiline
-              autoFocus
             />
             <View style={s.modalActions}>
               <TouchableOpacity style={s.modalCancelar} onPress={() => setModalRechazo(null)}>
@@ -309,4 +337,9 @@ const s = StyleSheet.create({
   modalCancelarText: { color: '#94A3B8', fontWeight: '700', fontSize: 14 },
   modalRechazar: { flex: 1, backgroundColor: Colors.error, borderRadius: 12, padding: 14, alignItems: 'center' },
   modalRechazarText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
+  checkRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#334155' },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: '#475569', marginRight: 12, alignItems: 'center', justifyContent: 'center' },
+  checkboxChecked: { backgroundColor: Colors.error, borderColor: Colors.error },
+  checkmark: { color: Colors.white, fontSize: 13, fontWeight: '900' },
+  checkLabel: { fontSize: 14, color: '#E2E8F0', flex: 1 },
 });

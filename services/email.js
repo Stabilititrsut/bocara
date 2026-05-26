@@ -52,9 +52,28 @@ function templateAprobado(nombreNegocio, nombrePropietario) {
 </body></html>`;
 }
 
-function templateRechazado(nombreNegocio, nombrePropietario, motivo) {
+const CAMPO_LABELS = {
+  nombre_negocio: 'Nombre del negocio',
+  direccion: 'Dirección',
+  telefono: 'Teléfono',
+  nit: 'NIT',
+  dpi_foto_url: 'Foto del DPI',
+  datos_bancarios: 'Datos bancarios',
+  imagen_url: 'Foto del negocio',
+};
+
+function templateRechazado(nombreNegocio, nombrePropietario, motivo, campos = []) {
   const motivoHtml = motivo
     ? `<div style="background:#FEF3C7;border-radius:10px;padding:14px;margin:16px 0"><b>Motivo:</b><br>${motivo}</div>`
+    : '';
+  const camposFiltrados = (campos || []).filter(c => c !== 'otro' && CAMPO_LABELS[c]);
+  const camposHtml = camposFiltrados.length > 0
+    ? `<div style="background:#FEE2E2;border-radius:10px;padding:14px;margin:16px 0">
+  <b style="color:#991B1B">Campos que necesitan corrección:</b>
+  <ul style="margin:8px 0 0 0;padding-left:20px;color:#7F1D1D">
+    ${camposFiltrados.map(c => `<li style="margin:4px 0">${CAMPO_LABELS[c]}</li>`).join('')}
+  </ul>
+</div>`
     : '';
   return `
 <!DOCTYPE html><html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
@@ -63,6 +82,7 @@ function templateRechazado(nombreNegocio, nombrePropietario, motivo) {
 </div>
 <p>Hola <b>${nombrePropietario}</b>,</p>
 <p>Lamentablemente, la solicitud para registrar <b>${nombreNegocio}</b> en Bocara Food no fue aprobada.</p>
+${camposHtml}
 ${motivoHtml}
 <p>Puedes corregir la información y volver a intentarlo desde la app, o contactarnos si crees que es un error.</p>
 <p style="color:#64748B;font-size:13px">Equipo Bocara Food</p>

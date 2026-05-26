@@ -72,8 +72,17 @@ export default function GananciasScreen() {
           <Text style={s.mainCardSub}>{resumen.total_pedidos || 0} pedidos completados</Text>
         </View>
 
+        {/* Empty state cuando no hay ventas */}
+        {resumen.total_pedidos === 0 && (
+          <View style={s.emptyVentas}>
+            <Text style={{ fontSize: 40, marginBottom: 10 }}>🛍️</Text>
+            <Text style={s.emptyVentasTitle}>Aún no tienes ventas registradas</Text>
+            <Text style={s.emptyVentasSub}>Publica tus primeras bolsas sorpresa para empezar a vender.</Text>
+          </View>
+        )}
+
         {/* Desglose financiero */}
-        <View style={s.desglose}>
+        {resumen.total_pedidos > 0 && <View style={s.desglose}>
           <Text style={s.desgloseTitle}>Desglose</Text>
           {[
             { label: 'Ventas brutas',       val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
@@ -87,7 +96,7 @@ export default function GananciasScreen() {
               </Text>
             </View>
           ))}
-        </View>
+        </View>}
 
         {/* Datos bancarios registrados */}
         {banco ? (
@@ -190,6 +199,9 @@ const s = StyleSheet.create({
   sinBancoTitle: { fontSize: 15, fontWeight: '800', color: Colors.brown },
   sinBancoSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 6, textAlign: 'center' },
   sectionTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12, marginTop: 4 },
+  emptyVentas: { backgroundColor: Colors.white, borderRadius: 16, padding: 24, alignItems: 'center', marginBottom: 16, borderWidth: 1.5, borderColor: Colors.border },
+  emptyVentasTitle: { fontSize: 15, fontWeight: '800', color: Colors.brown, textAlign: 'center' },
+  emptyVentasSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 6, textAlign: 'center', lineHeight: 18 },
   emptyLiq: { backgroundColor: Colors.white, borderRadius: 14, padding: 20, alignItems: 'center', marginBottom: 16 },
   emptyLiqText: { fontSize: 13, color: Colors.textSecondary },
   liqCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1.5, borderColor: Colors.border },

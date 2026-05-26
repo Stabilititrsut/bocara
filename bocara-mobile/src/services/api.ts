@@ -128,8 +128,8 @@ export const adminAPI = {
   negociosPendientes: () => api.get('/admin/negocios/pendientes'),
   verificarNegocio: (id: string) => api.put(`/admin/negocios/${id}/verificar`),
   aprobarNegocio: (id: string) => api.put(`/admin/negocios/${id}/aprobar`),
-  rechazarNegocio: (id: string, motivo?: string) =>
-    api.put(`/admin/negocios/${id}/rechazar`, { motivo }),
+  rechazarNegocio: (id: string, motivo?: string, campos_incorrectos?: string[]) =>
+    api.put(`/admin/negocios/${id}/rechazar`, { motivo, campos_incorrectos }),
   toggleNegocio: (id: string) => api.put(`/admin/negocios/${id}/toggle`),
   financiero: (periodo?: string) => api.get('/admin/financiero', { params: { periodo } }),
   pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),

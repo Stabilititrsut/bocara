@@ -161,7 +161,7 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
         await enviarEmail({
           to: u.email,
           subject: '❌ Actualización sobre tu solicitud en Bocara Food',
-          html: templateRechazado(nombre, nombreProp, extra.motivo),
+          html: templateRechazado(nombre, nombreProp, extra.motivo, extra.campos),
         });
       }
     }
@@ -191,16 +191,18 @@ router.put('/negocios/:id/aprobar', authMiddleware, adminOnly, async (req, res) 
 
 // PUT /api/admin/negocios/:id/rechazar
 router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
-  const { motivo } = req.body;
+  const { motivo, campos_incorrectos } = req.body;
   const { data, error } = await supabase.from('negocios').update({ verificado: false, activo: false }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
-  // Intentar guardar motivo/estado si las columnas existen
   const rechazarUpd = { estado_verificacion: 'rechazado' };
-  if (motivo) rechazarUpd.motivo_rechazo = motivo;
+  const hayCampos = Array.isArray(campos_incorrectos) && campos_incorrectos.length > 0;
+  if (motivo || hayCampos) {
+    rechazarUpd.motivo_rechazo = JSON.stringify({ texto: motivo || '', campos: campos_incorrectos || [] });
+  }
   await supabase.from('negocios').update(rechazarUpd).eq('id', req.params.id);
-  const motivoTexto = motivo ? `: ${motivo}` : '. Contacta a soporte para más información.';
-  await notificarPropietario(data.propietario_id, data.nombre, 'negocio_rechazado', '❌ Solicitud rechazada', `Tu solicitud para ${data.nombre} fue rechazada${motivoTexto}`, { motivo });
-  res.json({ ...data, estado_verificacion: 'rechazado', motivo_rechazo: motivo });
+  const motivoTexto = motivo ? `: ${motivo}` : (hayCampos ? '. Revisa los campos indicados en el correo.' : '. Contacta a soporte para más información.');
+  await notificarPropietario(data.propietario_id, data.nombre, 'negocio_rechazado', '❌ Solicitud rechazada', `Tu solicitud para ${data.nombre} fue rechazada${motivoTexto}`, { motivo, campos: campos_incorrectos || [] });
+  res.json({ ...data, estado_verificacion: 'rechazado', motivo_rechazo: rechazarUpd.motivo_rechazo });
 });
 
 // PUT /api/admin/negocios/:id/toggle

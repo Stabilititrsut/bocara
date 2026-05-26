@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Modal,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
@@ -14,6 +14,16 @@ let ImagePicker: any = null;
 try { ImagePicker = require('expo-image-picker'); } catch { }
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otro'];
+
+const CAMPO_LABELS_ES: Record<string, string> = {
+  nombre_negocio: 'Nombre del negocio',
+  direccion: 'Dirección',
+  telefono: 'Teléfono',
+  nit: 'NIT',
+  dpi_foto_url: 'Foto del DPI',
+  datos_bancarios: 'Datos bancarios',
+  imagen_url: 'Foto del negocio',
+};
 const BANCOS_GT  = ['Banrural', 'Banco Industrial', 'BAC Credomatic', 'Agromercantil', 'G&T Continental', 'Bantrab', 'Banpaís', 'Otro'];
 const TIPOS_CUENTA = ['Monetaria', 'Ahorro', 'Empresarial'];
 const ZONAS_GT = [
@@ -49,6 +59,7 @@ export default function RegistroRestauranteScreen() {
   const [uploadStatus, setUploadStatus] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
 
   // OTP email verification (step 1 → step 2 gate)
   const [showOtpModal, setShowOtpModal] = useState(false);
@@ -60,6 +71,22 @@ export default function RegistroRestauranteScreen() {
 
   const { registroRestaurante } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    negociosAPI.miNegocio()
+      .then(res => {
+        const neg = res.data;
+        if (neg?.estado_verificacion === 'rechazado' && neg.motivo_rechazo) {
+          try {
+            const parsed = JSON.parse(neg.motivo_rechazo);
+            setRechazoInfo({ texto: parsed.texto || '', campos: Array.isArray(parsed.campos) ? parsed.campos : [] });
+          } catch {
+            setRechazoInfo({ texto: neg.motivo_rechazo, campos: [] });
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   function startOtpCountdown() {
     setOtpReenvioSeg(60);
@@ -456,6 +483,24 @@ export default function RegistroRestauranteScreen() {
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
 
+        {/* ── Banner de rechazo (visible si el negocio fue rechazado) ── */}
+        {rechazoInfo && (
+          <View style={s.rechazoCard}>
+            <Text style={s.rechazoTitle}>⚠️ Tu solicitud fue rechazada</Text>
+            {rechazoInfo.campos.filter(c => CAMPO_LABELS_ES[c]).length > 0 && (
+              <>
+                <Text style={s.rechazoSub}>Corrige los siguientes campos:</Text>
+                {rechazoInfo.campos.filter(c => CAMPO_LABELS_ES[c]).map(c => (
+                  <Text key={c} style={s.rechazoItem}>• {CAMPO_LABELS_ES[c]}</Text>
+                ))}
+              </>
+            )}
+            {rechazoInfo.texto ? (
+              <Text style={s.rechazoMotivo}>Motivo: {rechazoInfo.texto}</Text>
+            ) : null}
+          </View>
+        )}
+
         {/* ─── PASO 1: Datos del propietario ─── */}
         {step === 1 && (
           <>
@@ -470,7 +515,7 @@ export default function RegistroRestauranteScreen() {
             <Field label="Correo electrónico *"  value={form.email}    onChange={set('email')}    placeholder="maria@negocio.com"  keyboard="email-address" lower error={errors.email} />
             <Field label="Contraseña *"          value={form.password} onChange={set('password')} placeholder="Mínimo 6 caracteres" secure error={errors.password} />
             <Field label="Confirmar contraseña *" value={form.confirmPassword} onChange={set('confirmPassword')} placeholder="Repite tu contraseña" secure error={errors.confirmPassword} />
-            <Field label="Teléfono *"            value={form.telefono} onChange={set('telefono')} placeholder="5555-1234"          keyboard="phone-pad"  error={errors.telefono} />
+            <Field label="Teléfono *"            value={form.telefono} onChange={set('telefono')} placeholder="5555-1234"          keyboard="phone-pad"  error={errors.telefono} highlighted={rechazoInfo?.campos.includes('telefono')} />
           </>
         )}
 
@@ -479,7 +524,7 @@ export default function RegistroRestauranteScreen() {
           <>
             <Text style={s.section}>🍽️ Información del negocio</Text>
 
-            <Field label="Nombre del negocio *" value={form.nombre_negocio} onChange={set('nombre_negocio')} placeholder="Panadería San Marcos" error={errors.nombre_negocio} />
+            <Field label="Nombre del negocio *" value={form.nombre_negocio} onChange={set('nombre_negocio')} placeholder="Panadería San Marcos" error={errors.nombre_negocio} highlighted={rechazoInfo?.campos.includes('nombre_negocio')} />
             <Field label="Descripción *"        value={form.descripcion}    onChange={set('descripcion')}    placeholder="Somos una panadería artesanal con 10 años de experiencia..." multi error={errors.descripcion} />
 
             {/* NIT — formato 7-9 dígitos + dash + 1 dígito */}
@@ -521,7 +566,7 @@ export default function RegistroRestauranteScreen() {
               {errors.dpi ? <Text style={s.fieldError}>{errors.dpi}</Text> : null}
             </View>
 
-            <Field label="Dirección *"           value={form.direccion_negocio} onChange={set('direccion_negocio')} placeholder="5a Avenida 10-35, Zona 1" error={errors.direccion_negocio} />
+            <Field label="Dirección *"           value={form.direccion_negocio} onChange={set('direccion_negocio')} placeholder="5a Avenida 10-35, Zona 1" error={errors.direccion_negocio} highlighted={rechazoInfo?.campos.includes('direccion')} />
 
             {/* Horario */}
             <View>
@@ -827,16 +872,16 @@ export default function RegistroRestauranteScreen() {
 }
 
 // ── Reusable field component with error display ──────────────────────────────
-function Field({ label, value, onChange, placeholder, multi, keyboard, secure, lower, error }: {
+function Field({ label, value, onChange, placeholder, multi, keyboard, secure, lower, error, highlighted }: {
   label: string; value: string; onChange: (v: string) => void;
   placeholder: string; multi?: boolean; keyboard?: any;
-  secure?: boolean; lower?: boolean; error?: string;
+  secure?: boolean; lower?: boolean; error?: string; highlighted?: boolean;
 }) {
   return (
     <View>
       <Text style={sf.label}>{label}</Text>
       <TextInput
-        style={[sf.input, multi && { height: 80 }, error && sf.inputError]}
+        style={[sf.input, multi && { height: 80 }, error && sf.inputError, highlighted && !error && sf.inputHighlighted]}
         placeholder={placeholder}
         placeholderTextColor={Colors.textLight}
         keyboardType={keyboard || 'default'}
@@ -853,10 +898,11 @@ function Field({ label, value, onChange, placeholder, multi, keyboard, secure, l
 }
 
 const sf = StyleSheet.create({
-  label:      { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
-  input:      { backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 4 },
-  inputError: { borderColor: Colors.error },
-  error:      { fontSize: 12, color: Colors.error, marginBottom: 12, marginTop: 2 },
+  label:           { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
+  input:           { backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 4 },
+  inputError:      { borderColor: Colors.error },
+  inputHighlighted:{ borderColor: '#F59E0B', borderWidth: 2 },
+  error:           { fontSize: 12, color: Colors.error, marginBottom: 12, marginTop: 2 },
 });
 
 const s = StyleSheet.create({
@@ -922,6 +968,11 @@ const s = StyleSheet.create({
   errorCardText:   { fontSize: 13, color: '#DC2626', fontWeight: '600', lineHeight: 20 },
   emailInfoBox:    { backgroundColor: '#EFF6FF', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#BFDBFE' },
   emailInfoText:   { fontSize: 13, color: '#1D4ED8', lineHeight: 20 },
+  rechazoCard:     { backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1.5, borderColor: '#FCA5A5' },
+  rechazoTitle:    { fontSize: 14, fontWeight: '800', color: '#DC2626', marginBottom: 6 },
+  rechazoSub:      { fontSize: 13, color: '#7F1D1D', fontWeight: '600', marginBottom: 4 },
+  rechazoItem:     { fontSize: 13, color: '#991B1B', paddingVertical: 2, lineHeight: 20 },
+  rechazoMotivo:   { fontSize: 12, color: '#7F1D1D', marginTop: 8, fontStyle: 'italic' },
   otpOverlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
   otpCard:         { backgroundColor: Colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 28, paddingBottom: 40 },
   otpTitle:        { fontSize: 22, fontWeight: '900', color: Colors.brown, marginBottom: 8 },
