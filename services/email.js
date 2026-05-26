@@ -1,54 +1,35 @@
-const https = require('https');
+const nodemailer = require('nodemailer');
 
-/**
- * Envía email vía Resend API si RESEND_API_KEY está configurada.
- * Falla silenciosamente si no hay API key.
- */
+let transporter = null;
+
+function getTransporter() {
+  if (transporter) return transporter;
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_PASS;
+  if (!user || !pass) return null;
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user, pass },
+  });
+  return transporter;
+}
+
 async function enviarEmail({ to, subject, html }) {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.EMAIL_FROM || 'Bocara Food <noreply@bocarafood.com>';
-
-  if (!apiKey) {
-    console.log(`[email] RESEND_API_KEY no configurada — omitiendo email a: ${to}`);
+  const t = getTransporter();
+  if (!t) {
+    console.log(`[email] EMAIL_USER/EMAIL_PASS no configuradas — omitiendo email a: ${to}`);
     return { ok: false };
   }
-
   try {
-    const body = JSON.stringify({
-      from,
-      to: Array.isArray(to) ? to : [to],
+    await t.sendMail({
+      from: `"Bocara Food" <${process.env.EMAIL_USER}>`,
+      to: Array.isArray(to) ? to.join(', ') : to,
       subject,
       html,
     });
-
-    return await new Promise((resolve) => {
-      const options = {
-        hostname: 'api.resend.com',
-        path: '/emails',
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      };
-      const req = https.request(options, (res) => {
-        let data = '';
-        res.on('data', chunk => { data += chunk; });
-        res.on('end', () => {
-          try { resolve({ ok: res.statusCode < 400, response: JSON.parse(data) }); }
-          catch { resolve({ ok: res.statusCode < 400 }); }
-        });
-      });
-      req.on('error', (e) => {
-        console.error('[email] Error HTTP:', e.message);
-        resolve({ ok: false });
-      });
-      req.write(body);
-      req.end();
-    });
+    return { ok: true };
   } catch (e) {
-    console.error('[email] Error:', e.message);
+    console.error('[email] Error al enviar:', e.message);
     return { ok: false };
   }
 }
@@ -67,15 +48,13 @@ function templateAprobado(nombreNegocio, nombrePropietario) {
     Ir a mi panel →
   </a>
 </div>
-<p style="color:#64748B;font-size:13px">Si tienes preguntas, responde este correo o contáctanos.</p>
+<p style="color:#64748B;font-size:13px">Si tienes preguntas contáctanos respondiendo este correo.</p>
 </body></html>`;
 }
 
 function templateRechazado(nombreNegocio, nombrePropietario, motivo) {
   const motivoHtml = motivo
-    ? `<div style="background:#FEF3C7;border-radius:10px;padding:14px;margin:16px 0">
-         <b>Motivo del rechazo:</b><br>${motivo}
-       </div>`
+    ? `<div style="background:#FEF3C7;border-radius:10px;padding:14px;margin:16px 0"><b>Motivo:</b><br>${motivo}</div>`
     : '';
   return `
 <!DOCTYPE html><html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
@@ -83,9 +62,9 @@ function templateRechazado(nombreNegocio, nombrePropietario, motivo) {
   <h1 style="color:white;margin:0">❌ Solicitud rechazada</h1>
 </div>
 <p>Hola <b>${nombrePropietario}</b>,</p>
-<p>Lamentablemente, la solicitud para registrar <b>${nombreNegocio}</b> en Bocara Food no fue aprobada en esta ocasión.</p>
+<p>Lamentablemente, la solicitud para registrar <b>${nombreNegocio}</b> en Bocara Food no fue aprobada.</p>
 ${motivoHtml}
-<p>Puedes corregir la información y volver a enviar tu solicitud desde la app, o contactarnos si crees que es un error.</p>
+<p>Puedes corregir la información y volver a intentarlo desde la app, o contactarnos si crees que es un error.</p>
 <p style="color:#64748B;font-size:13px">Equipo Bocara Food</p>
 </body></html>`;
 }
