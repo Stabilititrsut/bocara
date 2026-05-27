@@ -89,4 +89,23 @@ ${motivoHtml}
 </body></html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado };
+function templateOlvidoContrasena(nombre, codigo) {
+  return `
+<!DOCTYPE html><html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
+<div style="background:#C8A97E;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px">
+  <h1 style="color:white;margin:0">🔑 Restablecer contraseña</h1>
+</div>
+<p>Hola <b>${nombre}</b>,</p>
+<p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en <b>Bocara Food</b>.</p>
+<p>Usa el siguiente código en la app. Expira en <b>15 minutos</b>.</p>
+<div style="text-align:center;margin:28px 0">
+  <div style="display:inline-block;background:#F3F4F6;border:2px solid #E5E7EB;border-radius:16px;padding:20px 40px">
+    <span style="font-size:40px;font-weight:900;letter-spacing:10px;color:#1A1A1A">${codigo}</span>
+  </div>
+</div>
+<p style="color:#64748B;font-size:13px">Si no solicitaste este cambio, ignora este correo. Tu contraseña no cambiará.</p>
+<p style="color:#64748B;font-size:13px">Equipo Bocara Food</p>
+</body></html>`;
+}
+
+module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena };

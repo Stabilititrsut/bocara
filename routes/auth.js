@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const { enviarEmail, templateOlvidoContrasena } = require('../services/email');
 const router = express.Router();
 
 // Twilio client — solo si las vars de entorno están configuradas
@@ -13,6 +14,9 @@ const twilio = (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
 
 // OTP de teléfono en memoria (TTL: 10 min)
 const phoneOtpStore = new Map();
+
+// OTP de reset de contraseña en memoria (TTL: 15 min)
+const resetOtpStore = new Map();
 
 function cleanExpiredOtps() {
   const now = Date.now();
@@ -501,25 +505,57 @@ router.get('/check-email', async (req, res) => {
   res.json({ existe: !!data });
 });
 
-// POST /api/auth/reset-password — verifica OTP de Supabase y actualiza contraseña en nuestra DB
+// POST /api/auth/forgot-password — genera y envía código OTP por email
+router.post('/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'El correo es requerido' });
+  const emailLower = email.toLowerCase().trim();
+
+  try {
+    const { data: dbUser, error: findErr } = await supabase
+      .from('usuarios')
+      .select('id, nombre')
+      .eq('email', emailLower)
+      .maybeSingle();
+    if (findErr || !dbUser)
+      return res.status(404).json({ error: 'No existe una cuenta con ese correo electrónico' });
+
+    const codigo = String(Math.floor(100000 + Math.random() * 900000));
+    resetOtpStore.set(emailLower, { codigo, expiresAt: Date.now() + 15 * 60 * 1000 });
+
+    await enviarEmail({
+      to: emailLower,
+      subject: 'Código para restablecer tu contraseña — Bocara Food',
+      html: templateOlvidoContrasena(dbUser.nombre || 'Usuario', codigo),
+    });
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/auth/reset-password — verifica código OTP y actualiza contraseña
 router.post('/reset-password', async (req, res) => {
-  const { email, new_password, supabase_access_token } = req.body;
-  if (!email || !new_password || !supabase_access_token)
+  const { email, codigo, new_password } = req.body;
+  if (!email || !codigo || !new_password)
     return res.status(400).json({ error: 'Faltan campos requeridos' });
   if (new_password.length < 6)
     return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
 
-  try {
-    const { data: { user }, error: authErr } = await supabase.auth.getUser(supabase_access_token);
-    if (authErr || !user)
-      return res.status(401).json({ error: 'Código de verificación inválido o expirado' });
-    if (user.email?.toLowerCase() !== email.toLowerCase().trim())
-      return res.status(401).json({ error: 'El email no coincide con la verificación' });
+  const emailLower = email.toLowerCase().trim();
+  const stored = resetOtpStore.get(emailLower);
 
+  if (!stored || stored.codigo !== codigo.trim())
+    return res.status(401).json({ error: 'Código incorrecto o expirado' });
+  if (stored.expiresAt < Date.now())
+    return res.status(401).json({ error: 'El código ha expirado. Solicita uno nuevo.' });
+
+  try {
     const { data: dbUser, error: findErr } = await supabase
       .from('usuarios')
       .select('id')
-      .eq('email', email.toLowerCase().trim())
+      .eq('email', emailLower)
       .maybeSingle();
     if (findErr || !dbUser)
       return res.status(404).json({ error: 'No existe una cuenta con ese correo electrónico' });
@@ -528,9 +564,10 @@ router.post('/reset-password', async (req, res) => {
     const { error: updateErr } = await supabase
       .from('usuarios')
       .update({ password_hash: hash })
-      .eq('email', email.toLowerCase().trim());
+      .eq('email', emailLower);
     if (updateErr) return res.status(400).json({ error: updateErr.message });
 
+    resetOtpStore.delete(emailLower);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

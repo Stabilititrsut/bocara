@@ -4,7 +4,6 @@ import {
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { supabase } from '@/src/services/supabase';
 import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -43,18 +42,11 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
     setErrorMsg('');
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: trimEmail,
-        options: { shouldCreateUser: true },
-      });
-      if (error) {
-        setErrorMsg('No se pudo enviar el código. Verifica el correo e intenta de nuevo.');
-        return;
-      }
+      await authAPI.forgotPassword(trimEmail);
       setStage('verify');
       startCountdown();
     } catch (e: any) {
-      setErrorMsg(e.message || 'Error inesperado. Intenta de nuevo.');
+      setErrorMsg(e.message || 'No se pudo enviar el código. Intenta de nuevo.');
     } finally {
       setLoading(false);
     }
@@ -65,14 +57,10 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
     setErrorMsg('');
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim().toLowerCase(),
-        options: { shouldCreateUser: true },
-      });
-      if (error) { setErrorMsg('No se pudo reenviar el código. Intenta más tarde.'); return; }
+      await authAPI.forgotPassword(email.trim().toLowerCase());
       startCountdown();
     } catch (e: any) {
-      setErrorMsg(e.message || 'Error al reenviar');
+      setErrorMsg(e.message || 'No se pudo reenviar el código. Intenta más tarde.');
     } finally {
       setLoading(false);
     }
@@ -84,24 +72,10 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
     setErrorMsg('');
     try {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: email.trim().toLowerCase(),
-        token: codigo.trim(),
-        type: 'email',
-      });
-      if (error) {
-        setErrorMsg('Código incorrecto o expirado. Verifica el código en tu correo.');
-        return;
-      }
-      const access_token = data.session?.access_token;
-      if (!access_token) {
-        setErrorMsg('No se pudo verificar la sesión. Intenta de nuevo.');
-        return;
-      }
       await authAPI.resetPassword({
         email: email.trim().toLowerCase(),
+        codigo: codigo.trim(),
         new_password: newPassword,
-        supabase_access_token: access_token,
       });
       clearInterval(countdownRef.current);
       setSuccess(true);

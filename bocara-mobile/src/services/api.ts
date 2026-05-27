@@ -51,7 +51,9 @@ export const authAPI = {
     api.post('/auth/verify-phone-otp', data),
   oauthComplete: (supabase_access_token: string) =>
     api.post('/auth/oauth-complete', { supabase_access_token }),
-  resetPassword: (data: { email: string; new_password: string; supabase_access_token: string }) =>
+  forgotPassword: (email: string) =>
+    api.post('/auth/forgot-password', { email }),
+  resetPassword: (data: { email: string; codigo: string; new_password: string }) =>
     api.post('/auth/reset-password', data),
   checkEmail: (email: string) =>
     api.get('/auth/check-email', { params: { email } }),
