@@ -109,11 +109,15 @@ export default function BolsasRestauranteScreen() {
     setModal(true);
   }
 
+  function alertar(msg: string) {
+    Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Error', msg);
+  }
+
   async function guardar() {
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
-      return Alert.alert('Error', 'Nombre, precio original y precio Bocara son requeridos');
+      return alertar('Nombre, precio original y precio Bocara son requeridos');
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
-      return Alert.alert('Error', 'El código de la promoción es requerido');
+      return alertar('El código de la promoción es requerido');
 
     const payload: any = {
       negocio_id: negocioId,
@@ -136,10 +140,15 @@ export default function BolsasRestauranteScreen() {
       else await bolsasAPI.crear(payload);
       setModal(false);
       cargar();
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) { alertar(e.message || 'Error al guardar'); }
   }
 
   async function eliminar(id: string) {
+    if (Platform.OS === 'web') {
+      if (!(window as any).confirm('¿Eliminar este elemento? Esta acción no se puede deshacer.')) return;
+      try { await bolsasAPI.eliminar(id); cargar(); } catch (e: any) { (window as any).alert(e.message || 'Error al eliminar'); }
+      return;
+    }
     Alert.alert('Eliminar', '¿Eliminar este elemento?', [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Eliminar', style: 'destructive', onPress: () => bolsasAPI.eliminar(id).then(cargar) },

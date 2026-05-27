@@ -23,6 +23,11 @@ export default function PerfilRestauranteScreen() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const { logout } = useAuth();
   const fileInputRef = useRef<any>(null);
+  const dpiInputRef = useRef<any>(null);
+  const [dpiUrl, setDpiUrl] = useState('');
+  const [uploadingDpi, setUploadingDpi] = useState(false);
+  const [dpiError, setDpiError] = useState('');
+  const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
   const set = (k: string) => (v: string) => {
     setForm((f: any) => ({ ...f, [k]: v }));
     setCamposPendientes(prev => {
@@ -54,6 +59,15 @@ export default function PerfilRestauranteScreen() {
       setForm(loaded);
       setOriginalForm(loaded);
       setCamposPendientes(new Set());
+      setDpiUrl(res.data.dpi_foto_url || res.data.datos_bancarios?.dpi_foto_url || '');
+      if (res.data.estado_verificacion === 'rechazado' && res.data.motivo_rechazo) {
+        try {
+          const parsed = JSON.parse(res.data.motivo_rechazo);
+          setRechazoInfo({ texto: parsed.texto || '', campos: Array.isArray(parsed.campos) ? parsed.campos : [] });
+        } catch {
+          setRechazoInfo({ texto: res.data.motivo_rechazo, campos: [] });
+        }
+      }
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
@@ -85,6 +99,49 @@ export default function PerfilRestauranteScreen() {
     });
   }
 
+  const isRejected = (campo: string) => !!(rechazoInfo?.campos?.includes(campo));
+
+  function handleWebDpiChange(e: any) {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      subirDpi(base64, file.type || 'image/jpeg');
+    };
+    reader.onerror = () => setDpiError('No se pudo leer el archivo');
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  }
+
+  function seleccionarDpi() {
+    setDpiError('');
+    if (Platform.OS === 'web') { dpiInputRef.current?.click(); return; }
+    pickImage().then((picked) => {
+      if (!picked) return;
+      subirDpi(picked.base64, picked.mimeType);
+    });
+  }
+
+  async function subirDpi(base64: string, mimeType: string) {
+    if (!negocio?.id) return;
+    setUploadingDpi(true);
+    try {
+      const ext = mimeType.split('/')[1] || 'jpg';
+      const path = `dpi/${negocio.id}_${Date.now()}.${ext}`;
+      const { data } = await uploadsAPI.uploadBase64(base64, path, mimeType);
+      if (data?.publicUrl) {
+        await negociosAPI.actualizar(negocio.id, { dpi_foto_url: data.publicUrl });
+        setDpiUrl(data.publicUrl);
+        showToast('✅ Foto del DPI actualizada');
+      }
+    } catch (e: any) {
+      setDpiError(e.message || 'No se pudo subir la foto del DPI');
+    } finally {
+      setUploadingDpi(false);
+    }
+  }
+
   async function subirImagen(base64: string, mimeType: string) {
     if (!negocio?.id) return;
     setUploadingImg(true);
@@ -113,8 +170,17 @@ export default function PerfilRestauranteScreen() {
       const lng = parseFloat(form.longitud);
       payload.latitud  = isNaN(lat) ? null : lat;
       payload.longitud = isNaN(lng) ? null : lng;
+      if (negocio?.estado_verificacion === 'rechazado') payload.estado_verificacion = 'pendiente';
       await negociosAPI.actualizar(negocio.id, payload);
-      showToast('✅ Cambios enviados para revisión del equipo Bocara');
+      setCamposPendientes(new Set());
+      setOriginalForm({ ...form });
+      if (negocio?.estado_verificacion === 'rechazado') {
+        setNegocio((n: any) => ({ ...n, estado_verificacion: 'pendiente' }));
+        setRechazoInfo(null);
+        showToast('✅ Solicitud re-enviada. El equipo de Bocara la revisará en 24-48h.');
+      } else {
+        showToast('✅ Cambios enviados para revisión del equipo Bocara');
+      }
     } catch (e: any) { showToast(e.message || 'Error al guardar', false); }
     finally { setSaving(false); }
   }
@@ -158,6 +224,13 @@ export default function PerfilRestauranteScreen() {
         style: { display: 'none' },
         onChange: handleWebFileChange,
       })}
+      {Platform.OS === 'web' && React.createElement('input', {
+        ref: dpiInputRef,
+        type: 'file',
+        accept: 'image/*',
+        style: { display: 'none' },
+        onChange: handleWebDpiChange,
+      })}
 
       <View style={s.header}>
         <View>
@@ -175,6 +248,21 @@ export default function PerfilRestauranteScreen() {
         {toast && (
           <View style={[s.toast, toast.ok ? s.toastOk : s.toastErr]}>
             <Text style={s.toastText}>{toast.msg}</Text>
+          </View>
+        )}
+        {rechazoInfo && (
+          <View style={s.rechazoCard}>
+            <Text style={s.rechazoTitle}>⚠️ Tu solicitud fue rechazada</Text>
+            {rechazoInfo.campos.filter((c: string) => !['otro'].includes(c) && ['nombre_negocio','direccion','telefono','nit','dpi_foto_url','datos_bancarios','imagen_url'].includes(c)).length > 0 && (
+              <>
+                <Text style={s.rechazoSub}>Corrige los siguientes campos:</Text>
+                {rechazoInfo.campos.filter((c: string) => c !== 'otro').map((c: string) => {
+                  const labels: Record<string,string> = { nombre_negocio:'Nombre del negocio', direccion:'Dirección', telefono:'Teléfono', nit:'NIT', dpi_foto_url:'Foto del DPI', datos_bancarios:'Datos bancarios', imagen_url:'Foto del negocio' };
+                  return labels[c] ? <Text key={c} style={s.rechazoItem}>• {labels[c]}</Text> : null;
+                })}
+              </>
+            )}
+            {rechazoInfo.texto ? <Text style={s.rechazoMotivo}>Motivo: {rechazoInfo.texto}</Text> : null}
           </View>
         )}
 
@@ -225,14 +313,14 @@ export default function PerfilRestauranteScreen() {
           )}
         </View>
         {[
-          { key: 'nombre',      label: 'Nombre del negocio' },
+          { key: 'nombre',      label: 'Nombre del negocio', campo: 'nombre_negocio' },
           { key: 'descripcion', label: 'Descripción', multi: true },
-          { key: 'telefono',    label: 'Teléfono', keyboard: 'phone-pad' as any },
-        ].map(({ key, label, multi, keyboard }) => (
+          { key: 'telefono',    label: 'Teléfono', keyboard: 'phone-pad' as any, campo: 'telefono' },
+        ].map(({ key, label, multi, keyboard, campo }: any) => (
           <View key={key}>
-            <Text style={s.label}>{label}</Text>
+            <Text style={[s.label, campo && isRejected(campo) && s.labelRejected]}>{label}{campo && isRejected(campo) ? ' ⚠️' : ''}</Text>
             <TextInput
-              style={[s.input, multi && { height: 80 }]}
+              style={[s.input, multi && { height: 80 }, campo && isRejected(campo) && s.inputRejected]}
               placeholder={label} placeholderTextColor={Colors.textLight}
               keyboardType={keyboard} value={form[key]} onChangeText={set(key)}
               multiline={multi} textAlignVertical={multi ? 'top' : 'center'}
@@ -257,13 +345,13 @@ export default function PerfilRestauranteScreen() {
           )}
         </View>
         {[
-          { key: 'direccion', label: 'Dirección', placeholder: '5a Calle 10-35' },
+          { key: 'direccion', label: 'Dirección', placeholder: '5a Calle 10-35', campo: 'direccion' },
           { key: 'zona',      label: 'Zona / Colonia', placeholder: 'Zona 10' },
           { key: 'ciudad',    label: 'Ciudad', placeholder: 'Guatemala' },
-        ].map(({ key, label, placeholder }) => (
+        ].map(({ key, label, placeholder, campo }: any) => (
           <View key={key}>
-            <Text style={s.label}>{label}</Text>
-            <TextInput style={s.input} placeholder={placeholder} placeholderTextColor={Colors.textLight} value={form[key]} onChangeText={set(key)} />
+            <Text style={[s.label, campo && isRejected(campo) && s.labelRejected]}>{label}{campo && isRejected(campo) ? ' ⚠️' : ''}</Text>
+            <TextInput style={[s.input, campo && isRejected(campo) && s.inputRejected]} placeholder={placeholder} placeholderTextColor={Colors.textLight} value={form[key]} onChangeText={set(key)} />
           </View>
         ))}
 
@@ -297,6 +385,34 @@ export default function PerfilRestauranteScreen() {
           </TouchableOpacity>
           <Text style={s.coordsHint}>O busca en maps.google.com, haz clic derecho y copia las coordenadas.</Text>
         </View>
+
+        {/* Foto del DPI */}
+        <View style={s.sectionRow}>
+          <Text style={s.sectionTitle}>Foto del DPI 🪪</Text>
+          {isRejected('dpi_foto_url') && <View style={s.pendienteBadge}><Text style={[s.pendienteBadgeText, { color: '#DC2626' }]}>⚠️ Requiere corrección</Text></View>}
+        </View>
+        <TouchableOpacity
+          style={[s.dpiContainer, isRejected('dpi_foto_url') && { borderColor: '#DC2626' }]}
+          onPress={seleccionarDpi}
+          disabled={uploadingDpi}
+        >
+          {dpiUrl ? (
+            <Image source={{ uri: dpiUrl }} style={s.dpiImg} contentFit="contain" />
+          ) : (
+            <View style={s.dpiPlaceholder}>
+              <Text style={{ fontSize: 32 }}>🪪</Text>
+              <Text style={s.dpiPlaceholderText}>Toca para subir foto del DPI</Text>
+              <Text style={{ fontSize: 11, color: Colors.textLight }}>Frente del documento, bien iluminado</Text>
+            </View>
+          )}
+          <View style={[s.imgEditBtn, !dpiUrl && { backgroundColor: 'rgba(245,158,11,0.9)' }]}>
+            {uploadingDpi
+              ? <ActivityIndicator color={Colors.white} size="small" />
+              : <Text style={s.imgEditText}>{dpiUrl ? '📷 Cambiar foto DPI' : '📷 Subir foto DPI'}</Text>
+            }
+          </View>
+        </TouchableOpacity>
+        {dpiError ? <View style={s.errorInline}><Text style={s.errorInlineText}>⚠️ {dpiError}</Text></View> : null}
 
         <TouchableOpacity style={s.logoutBtn} onPress={logout}>
           <Text style={s.logoutText}>Cerrar sesión</Text>
@@ -354,4 +470,15 @@ const s = StyleSheet.create({
   coordsHint: { fontSize: 11, color: Colors.textLight, lineHeight: 16 },
   logoutBtn: { borderWidth: 1.5, borderColor: Colors.error, borderRadius: 14, padding: 14, alignItems: 'center', marginTop: 8 },
   logoutText: { color: Colors.error, fontWeight: '700', fontSize: 15 },
+  inputRejected: { borderColor: '#DC2626', borderWidth: 2 },
+  labelRejected: { color: '#DC2626' },
+  rechazoCard: { backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1.5, borderColor: '#FCA5A5' },
+  rechazoTitle: { fontSize: 14, fontWeight: '800', color: '#DC2626', marginBottom: 6 },
+  rechazoSub: { fontSize: 13, color: '#7F1D1D', fontWeight: '600', marginBottom: 4 },
+  rechazoItem: { fontSize: 13, color: '#991B1B', paddingVertical: 2, lineHeight: 20 },
+  rechazoMotivo: { fontSize: 12, color: '#7F1D1D', marginTop: 8, fontStyle: 'italic' },
+  dpiContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 140, borderWidth: 1.5, borderColor: Colors.border },
+  dpiImg: { width: '100%', height: '100%' },
+  dpiPlaceholder: { width: '100%', height: '100%', backgroundColor: '#FEF3C7', justifyContent: 'center', alignItems: 'center', gap: 6 },
+  dpiPlaceholderText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
 });

@@ -93,7 +93,7 @@ function AuthGuard() {
 
   useEffect(() => {
     if (loading || !onboardingChecked) return;
-    const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante';
+    const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'forgot-password' || segments[0] === 'verificar-email';
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!usuario && !inAuth && !inOnboarding) {
@@ -139,6 +139,8 @@ function AuthGuard() {
       <Stack.Screen name="login" options={{ animation: 'fade' }} />
       <Stack.Screen name="registro-cliente" />
       <Stack.Screen name="registro-restaurante" />
+      <Stack.Screen name="forgot-password" />
+      <Stack.Screen name="verificar-email" />
       <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
       <Stack.Screen name="pago" options={{ headerShown: false }} />
       <Stack.Screen name="qr-recogida" options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />

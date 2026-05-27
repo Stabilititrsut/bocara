@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView, RefreshControl, ActivityIndicator } from 'react-native';
+import { useRouter } from 'expo-router';
 import { negociosAPI, pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
 
 export default function DashboardRestauranteScreen() {
   const { usuario } = useAuth();
+  const router = useRouter();
   const [negocio, setNegocio] = useState<any>(null);
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
@@ -67,21 +69,56 @@ export default function DashboardRestauranteScreen() {
 
   // ─── Estado: negocio rechazado ───
   if (negocio?.estado_verificacion === 'rechazado') {
+    const CAMPO_LABELS_R: Record<string, string> = {
+      nombre_negocio: 'Nombre del negocio',
+      direccion: 'Dirección',
+      telefono: 'Teléfono',
+      nit: 'NIT',
+      dpi_foto_url: 'Foto del DPI',
+      datos_bancarios: 'Datos bancarios',
+      imagen_url: 'Foto del negocio',
+    };
+    let motivoTexto = '';
+    let camposRechazados: string[] = [];
+    if (negocio.motivo_rechazo) {
+      try {
+        const parsed = JSON.parse(negocio.motivo_rechazo);
+        motivoTexto = parsed.texto || '';
+        camposRechazados = Array.isArray(parsed.campos) ? parsed.campos : [];
+      } catch {
+        motivoTexto = negocio.motivo_rechazo;
+      }
+    }
+    const camposConLabel = camposRechazados.filter(c => c !== 'otro' && CAMPO_LABELS_R[c]);
+
     return (
       <SafeAreaView style={s.root}>
-        <ScrollView contentContainerStyle={s.scrollCenter}>
+        <ScrollView contentContainerStyle={s.scrollCenter}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
+        >
           <View style={[s.pendingCard, s.rejectedCard]}>
             <Text style={s.pendingEmoji}>❌</Text>
             <Text style={s.pendingTitle}>Solicitud rechazada</Text>
-            {negocio.motivo_rechazo && (
-              <View style={s.motivoCard}>
-                <Text style={s.motivoLabel}>Motivo:</Text>
-                <Text style={s.motivoText}>{negocio.motivo_rechazo}</Text>
+            {camposConLabel.length > 0 && (
+              <View style={s.camposCard}>
+                <Text style={s.camposTitle}>Campos que debes corregir:</Text>
+                {camposConLabel.map(c => (
+                  <Text key={c} style={s.campoItem}>• {CAMPO_LABELS_R[c]}</Text>
+                ))}
               </View>
             )}
-            <Text style={s.pendingHint}>
-              Revisa los datos desde "Mi negocio", corrígelos y contacta a soporte para reabrir tu solicitud.
+            {motivoTexto ? (
+              <View style={s.motivoCard}>
+                <Text style={s.motivoLabel}>Motivo adicional:</Text>
+                <Text style={s.motivoText}>{motivoTexto}</Text>
+              </View>
+            ) : null}
+            <Text style={[s.pendingHint, { marginBottom: 20 }]}>
+              Corrige los datos desde "Mi negocio" y vuelve a enviar tu solicitud.
             </Text>
+            <TouchableOpacity style={s.corregirBtn} onPress={() => router.push('/restaurante/perfil' as any)}>
+              <Text style={s.corregirBtnText}>✏️ Corregir y reenviar →</Text>
+            </TouchableOpacity>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -162,6 +199,11 @@ const s = StyleSheet.create({
   motivoCard: { backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, alignSelf: 'stretch', marginBottom: 16, borderWidth: 1, borderColor: Colors.error + '30' },
   motivoLabel: { fontSize: 12, fontWeight: '800', color: Colors.error, marginBottom: 4 },
   motivoText: { fontSize: 13, color: Colors.brown },
+  camposCard: { backgroundColor: '#FEE2E2', borderRadius: 12, padding: 14, alignSelf: 'stretch', marginBottom: 16, borderWidth: 1, borderColor: '#FCA5A5' },
+  camposTitle: { fontSize: 12, fontWeight: '800', color: '#DC2626', marginBottom: 8 },
+  campoItem: { fontSize: 13, color: '#991B1B', paddingVertical: 2 },
+  corregirBtn: { backgroundColor: Colors.orange, borderRadius: 14, paddingHorizontal: 28, paddingVertical: 14, width: '100%', alignItems: 'center' },
+  corregirBtnText: { color: Colors.white, fontWeight: '800', fontSize: 15 },
   // Normal dashboard
   header: { backgroundColor: Colors.brown, borderRadius: 20, padding: 20, marginBottom: 20 },
   greeting: { fontSize: 14, color: Colors.orangeLight },
