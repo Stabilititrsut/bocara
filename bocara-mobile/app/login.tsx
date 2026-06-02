@@ -6,14 +6,9 @@ import {
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import * as WebBrowser from 'expo-web-browser';
-import * as Linking from 'expo-linking';
 import { useAuth } from '@/src/context/AuthContext';
 import { supabase } from '@/src/services/supabase';
-import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
-
-WebBrowser.maybeCompleteAuthSession();
 
 type Modo = 'cliente' | 'restaurante' | 'admin';
 
@@ -23,10 +18,10 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [googleLoading, setGoogleLoading] = useState(false);
+
   const [errorMsg, setErrorMsg] = useState('');
   const [logoTaps, setLogoTaps] = useState(0);
-  const { login, setSession } = useAuth();
+  const { login } = useAuth();
   const router = useRouter();
 
   const esRest = modo === 'restaurante';
@@ -53,43 +48,14 @@ export default function LoginScreen() {
     }
   }
 
-  async function handleGoogleLogin() {
-    setErrorMsg('');
-    setGoogleLoading(true);
-    try {
-      const redirectTo = Platform.OS === 'web'
-        ? `${window.location.origin}/auth/callback`
-        : Linking.createURL('/auth/callback');
-
-      if (Platform.OS === 'web') {
-        const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
-        if (error) setErrorMsg(error.message || 'No se pudo iniciar el login con Google.');
-        return;
+  const loginWithGoogle = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: 'https://bocara.vercel.app/auth/callback'
       }
-
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: { redirectTo, skipBrowserRedirect: true },
-      });
-      if (error || !data?.url) { setErrorMsg('No se pudo iniciar el login con Google.'); return; }
-
-      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-      if (result.type !== 'success') return;
-
-      const url = result.url;
-      const params = new URLSearchParams(url.includes('#') ? url.split('#')[1] : url.split('?')[1]);
-      const access_token = params.get('access_token');
-      const refresh_token = params.get('refresh_token');
-      if (!access_token) { setErrorMsg('No se pudo obtener la sesión de Google.'); return; }
-
-      await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
-      const res = await authAPI.oauthComplete(access_token);
-      await setSession(res.data.token, res.data.usuario);
-    } catch (e: any) {
-      setErrorMsg(e.message || 'Error al iniciar sesión con Google.');
-    } finally {
-      setGoogleLoading(false);
-    }
+    })
+    if (error) console.error(error.message)
   }
 
   /* ─── ADMIN ─── */
@@ -192,9 +158,9 @@ export default function LoginScreen() {
 
             {!esRest && (
               <>
-                <TouchableOpacity style={s.googleBtn} onPress={handleGoogleLogin} disabled={googleLoading}>
+                <TouchableOpacity style={s.googleBtn} onPress={loginWithGoogle}>
                   <Text style={s.googleG}>G</Text>
-                  <Text style={s.googleText}>{googleLoading ? 'Conectando...' : 'Continuar con Google'}</Text>
+                  <Text style={s.googleText}>Continuar con Google</Text>
                 </TouchableOpacity>
                 <View style={s.orRow}>
                   <View style={s.orLine} />
