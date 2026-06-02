@@ -2,18 +2,15 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
-const PROD_URL = 'https://bocara.onrender.com/api';
-const DEV_URL  = Platform.OS === 'web'
-  ? 'http://localhost:3000/api'
-  : 'http://192.168.1.34:3000/api';
-
-// EXPO_PUBLIC_API_URL (definida en vercel.json) tiene prioridad sobre __DEV__
-export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? (__DEV__ ? DEV_URL : PROD_URL);
+// La URL de producción es siempre el fallback — __DEV__ nunca se usa para la URL
+// para evitar que bocara.vercel.app apunte a localhost por error de bundler.
+export const API_BASE_URL: string =
+  process.env.EXPO_PUBLIC_API_URL || 'https://bocara.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  // 35 s cubre el cold start de Render free tier (~20-50 s)
+  timeout: 35000,
   headers: { 'Content-Type': 'application/json' },
 });
 
