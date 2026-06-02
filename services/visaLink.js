@@ -5,11 +5,11 @@
  */
 const axios = require('axios');
 
-const BASE_URL = process.env.VISALINK_API_URL || 'https://api.cubo.com';
+const BASE_URL = process.env.VISALINK_API_URL || 'https://api-payment-sandbox.cubopago.com';
 
-async function generarLinkPago({ referencia, titulo, monto, urlRedireccion, cliente }) {
-  const apiKey = process.env.CUBOPAGO_API_KEY;
-  if (!apiKey) throw new Error('CUBOPAGO_API_KEY no configurada en el servidor');
+async function generarLinkPago({ referencia, titulo, monto, urlRedireccion, cliente, items }) {
+  const apiKey = process.env.CUBO_API_KEY_SANDBOX || process.env.CUBOPAGO_API_KEY;
+  if (!apiKey) throw new Error('CUBO_API_KEY_SANDBOX no configurada en el servidor');
 
   // Cubo Pago recibe el monto en centavos (entero)
   const montoCentavos = Math.round(parseFloat(monto) * 100);
@@ -24,6 +24,7 @@ async function generarLinkPago({ referencia, titulo, monto, urlRedireccion, clie
   if (cliente?.nombre)   body.clientName  = cliente.nombre;
   if (cliente?.email)    body.clientEmail  = cliente.email;
   if (cliente?.telefono) body.clientPhone  = cliente.telefono;
+  if (items?.length)     body.items        = items;
 
   let data;
   try {

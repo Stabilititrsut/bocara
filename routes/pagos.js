@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const axios = require('axios');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
@@ -324,6 +325,68 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/pagos/cubo/crear-link-test — endpoint sin auth para validar Cubo Sandbox
+router.post('/cubo/crear-link-test', async (req, res) => {
+  try {
+    const apiKey = process.env.CUBO_API_KEY_SANDBOX || process.env.CUBOPAGO_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'CUBO_API_KEY_SANDBOX no configurada en el servidor' });
+    }
+
+    const baseUrl = process.env.VISALINK_API_URL || 'https://api-payment-sandbox.cubopago.com';
+
+    console.log('[CUBO TEST] Creando link de pago...');
+    console.log('[CUBO TEST] API Key (8 chars):', apiKey.substring(0, 8) + '...');
+    console.log('[CUBO TEST] Base URL:', baseUrl);
+
+    const payload = {
+      description: 'Prueba Bocara Sandbox',
+      amount: 100,
+      redirectUri: 'https://bocara.vercel.app/pago-exitoso',
+      metadata: {
+        orderId: 'TEST-CUBO-001',
+        source: 'bocara',
+        environment: 'sandbox',
+      },
+      clientName: 'Cliente Prueba',
+      clientEmail: 'test@bocara.com',
+      clientPhone: '55555555',
+      items: [
+        { name: 'Bolsa de comida prueba', price: 100, quantity: 1 },
+      ],
+    };
+
+    const response = await axios.post(`${baseUrl}/api/v1/links/one-use`, payload, {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-KEY': apiKey,
+      },
+    });
+
+    console.log('[CUBO TEST] Response Cubo:', JSON.stringify(response.data, null, 2));
+
+    res.json({
+      success: true,
+      paymentLink: response.data.cuboRedirectUri || response.data.url || null,
+      identifier: response.data.paymentIntentToken || response.data.identifier || response.data.id || null,
+      cuboRawResponse: response.data,
+      requestSent: {
+        url: `${baseUrl}/api/v1/links/one-use`,
+        payload,
+        note: 'X-API-KEY omitida de este log por seguridad',
+      },
+    });
+  } catch (err) {
+    const errorData = err.response?.data;
+    console.error('[CUBO TEST] Error al crear link:', err.message, errorData || '');
+    res.status(err.response?.status || 500).json({
+      success: false,
+      error: err.message,
+      cuboError: errorData || null,
+    });
+  }
+});
+
 // POST /api/pagos/cubo-webhook — Cubo Pago notifica aquí el resultado de cada pago
 // Configurar en Cubo Admin → Developers → Webhooks
 router.post('/cubo-webhook', async (req, res) => {
@@ -347,7 +410,7 @@ router.post('/cubo-webhook', async (req, res) => {
       return res.status(200).send('OK');
     }
 
-    if (status === 'PAID' || status === 'APPROVED' || status === 'success') {
+    if (status === 'SUCCEEDED' || status === 'PAID' || status === 'APPROVED' || status === 'success') {
       await supabase.from('pedidos')
         .update({ estado_pago: 'pagado', estado: 'confirmado' })
         .eq('id', pedido.id);

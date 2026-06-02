@@ -41,6 +41,7 @@ app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 // PayU webhook envía application/x-www-form-urlencoded
 app.use('/api/pagos/webhook', express.urlencoded({ extended: false }));
 app.use(express.json({ limit: '15mb' }));
+app.use('/api/webhooks',      require('./routes/webhooks'));
 
 app.use('/api/auth',           require('./routes/auth'));
 app.use('/api/negocios',       require('./routes/negocios'));
