@@ -93,7 +93,7 @@ function AuthGuard() {
 
   useEffect(() => {
     if (loading || !onboardingChecked) return;
-    const inAuth = segments[0] === 'login' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'forgot-password' || segments[0] === 'verificar-email';
+    const inAuth = segments[0] === 'login' || segments[0] === 'auth' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'registro-telefono' || segments[0] === 'forgot-password' || segments[0] === 'verificar-email';
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!usuario && !inAuth && !inOnboarding) {
@@ -137,6 +137,7 @@ function AuthGuard() {
       <Stack.Screen name="admin" />
       <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
       <Stack.Screen name="login" options={{ animation: 'fade' }} />
+      <Stack.Screen name="auth/callback" options={{ animation: 'none' }} />
       <Stack.Screen name="registro-cliente" />
       <Stack.Screen name="registro-restaurante" />
       <Stack.Screen name="forgot-password" />
