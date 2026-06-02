@@ -336,7 +336,7 @@ router.post('/cubo/crear-link-test', async (req, res) => {
     const baseUrl = process.env.VISALINK_API_URL || 'https://api-payment-sandbox.cubopago.com';
 
     console.log('[CUBO TEST] Creando link de pago...');
-    console.log('[CUBO TEST] API Key (8 chars):', apiKey.substring(0, 8) + '...');
+    console.log('[CUBO TEST] API key exists:', !!apiKey, '| prefix:', apiKey.substring(0, 6) + '...');
     console.log('[CUBO TEST] Base URL:', baseUrl);
 
     const payload = {
