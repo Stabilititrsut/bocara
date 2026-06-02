@@ -29,16 +29,28 @@ export default function AuthCallbackScreen() {
       if (!session && Platform.OS === 'web') {
         const hash = window.location.hash.substring(1);
         const params = new URLSearchParams(hash);
+
+        // Detectar si Supabase/Google envió un error en la URL
+        const hashError = params.get('error');
+        const hashErrorDesc = params.get('error_description');
+        if (hashError) {
+          throw new Error(`OAuth error en URL hash: ${hashError} — ${hashErrorDesc}`);
+        }
+
         const access_token = params.get('access_token');
         const refresh_token = params.get('refresh_token');
         console.log('[OAuth Callback] tokens en hash:', { access_token: !!access_token, refresh_token: !!refresh_token });
+        console.log('[OAuth Callback] hash completo (sin tokens):', hash.replace(/access_token=[^&]+/, 'access_token=REDACTED').replace(/refresh_token=[^&]+/, 'refresh_token=REDACTED'));
 
         if (access_token) {
           const { data, error: setErr } = await supabase.auth.setSession({
             access_token,
             refresh_token: refresh_token || '',
           });
-          if (setErr) throw new Error(`setSession falló: ${setErr.message}`);
+          if (setErr) {
+            console.error('[OAuth Callback] setSession error completo:', setErr);
+            throw new Error(`setSession falló: ${setErr.message}`);
+          }
           session = data.session;
           console.log('[OAuth Callback] session (desde hash):', session?.user?.email ?? null);
         }
