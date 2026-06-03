@@ -83,18 +83,35 @@ router.get('/', async (req, res) => {
 
 // GET /api/bolsas/:id — detalle de bolsa con coords del negocio
 router.get('/:id', async (req, res) => {
-  const { data, error } = await supabase
+  console.log('[BOLSAS DETAIL] id recibido:', req.params.id);
+
+  let { data, error } = await supabase
     .from('bolsas')
     .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud)')
     .eq('id', req.params.id)
     .single();
+
+  // Fallback: si el join extendido falla, intentar sin él
+  if (error && error.code !== 'PGRST116') {
+    console.warn('[BOLSAS DETAIL] join falló, reintentando sin negocios join:', error.message);
+    const r2 = await supabase
+      .from('bolsas')
+      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
+      .eq('id', req.params.id)
+      .single();
+    data = r2.data;
+    error = r2.error;
+  }
+
+  console.log('[BOLSAS DETAIL] error:', error?.code, error?.message);
+  console.log('[BOLSAS DETAIL] data id:', data?.id);
+
+  if (error?.code === 'PGRST116' || (!error && !data)) {
+    return res.status(404).json({ error: 'Bolsa no encontrada' });
+  }
   if (error) {
-    // PGRST116 = 0 rows (not found); cualquier otro código es un error real de DB
-    if (error.code === 'PGRST116') return res.status(404).json({ error: 'Bolsa no encontrada' });
-    console.error('❌ bolsas/:id Supabase error:', error);
     return res.status(500).json({ error: error.message });
   }
-  if (!data) return res.status(404).json({ error: 'Bolsa no encontrada' });
   res.json(data);
 });
 
