@@ -350,7 +350,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
 
     const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
-    const redirectUri = `${frontendUrl}/pago-exitoso`;
+    const redirectUri = `${frontendUrl}/pago-exitoso?pedidoId=${pedido.id}`;
     console.log('[CUBO] redirectUri:', redirectUri);
 
     // Items para Cubo: todos los productos del carrito
