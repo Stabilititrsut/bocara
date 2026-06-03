@@ -60,8 +60,12 @@ export default function PagoScreen() {
     setLoading(true);
     try {
       const item = items[0];
+      const cantidad = item.cantidad;
+      console.log('[PAGO] cantidad recibida:', cantidad);
+      console.log('[PAGO] precio unitario:', item.bolsa.precio_descuento);
       const res = await pagosAPI.cubopago({
         bolsa_id: item.bolsa.id,
+        cantidad,
         tipo_entrega: tipo,
         direccion_envio: tipo === 'envio' ? direccion : undefined,
       });

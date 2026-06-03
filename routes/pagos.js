@@ -240,8 +240,9 @@ router.post('/webhook', async (req, res) => {
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/cubopago', authMiddleware, async (req, res) => {
   try {
-    const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
+    const { bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq } = req.body;
     if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
+    const cantidad = Math.max(1, parseInt(cantidadReq) || 1);
 
     if (!process.env.CUBOPAGO_API_KEY) {
       return res.status(500).json({ error: 'CUBOPAGO_API_KEY no configurada en el servidor' });
@@ -253,18 +254,21 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       .eq('id', bolsa_id)
       .single();
     if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-    if (bolsa.cantidad_disponible < 1) return res.status(400).json({ error: 'Bolsa agotada' });
+    if (bolsa.cantidad_disponible < cantidad)
+      return res.status(400).json({ error: `Solo quedan ${bolsa.cantidad_disponible} unidad(es) disponibles` });
 
     const costoEnvio  = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
-    const precioBolsa = bolsa.precio_descuento;
-    const subtotal    = precioBolsa + costoEnvio;
+    const precioBolsa = bolsa.precio_descuento;                              // precio unitario
+    const subtotal    = Math.round(precioBolsa * cantidad * 100) / 100 + costoEnvio;
 
     const COMISION_CUBO         = 0.035; // ~3.5% tarifa Cubo Pago Guatemala — cobrada al cliente
-    const comisionBocara        = Math.round(precioBolsa * COMISION_BOCARA * 100) / 100;
+    const comisionBocara        = Math.round(precioBolsa * cantidad * COMISION_BOCARA * 100) / 100;
     const comisionPasarela      = Math.round(subtotal * COMISION_CUBO * 100) / 100;
     const total                 = Math.round((subtotal + comisionPasarela) * 100) / 100;
-    const montoNetoRestaurante  = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
+    const montoNetoRestaurante  = Math.round((precioBolsa * cantidad - comisionBocara - comisionPasarela) * 100) / 100;
 
+    console.log('[PAGO] cantidad:', cantidad);
+    console.log('[PAGO] precio unitario:', precioBolsa);
     console.log('[PAGO] subtotal:', subtotal);
     console.log('[PAGO] comisionPasarela:', comisionPasarela);
     console.log('[PAGO] total:', total);
@@ -276,26 +280,33 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     ).join('');
     const referenceCode = `BOC-${Date.now()}-${req.usuario.id.slice(0, 8)}`;
 
-    const { data: pedido, error: pedidoErr } = await supabase
-      .from('pedidos').insert([{
-        usuario_id:             req.usuario.id,
-        bolsa_id,
-        negocio_id:             bolsa.negocios.id,
-        tipo_entrega,
-        direccion_envio:        tipo_entrega === 'envio' ? direccion_envio : null,
-        precio_bolsa:           precioBolsa,
-        costo_envio:            costoEnvio,
-        comision_bocara:        comisionBocara,
-        comision_pasarela:      comisionPasarela,
-        monto_neto_restaurante: montoNetoRestaurante,
-        total,
-        estado:                 'pendiente',
-        estado_pago:            'pendiente',
-        codigo_recogida:        codigoRecogida,
-        payu_reference_code:    referenceCode,
-        hora_recogida_inicio:   bolsa.hora_recogida_inicio,
-        hora_recogida_fin:      bolsa.hora_recogida_fin,
-      }]).select().single();
+    const insertBase = {
+      usuario_id:             req.usuario.id,
+      bolsa_id,
+      negocio_id:             bolsa.negocios.id,
+      tipo_entrega,
+      direccion_envio:        tipo_entrega === 'envio' ? direccion_envio : null,
+      precio_bolsa:           precioBolsa,   // precio unitario
+      costo_envio:            costoEnvio,
+      comision_bocara:        comisionBocara,
+      comision_pasarela:      comisionPasarela,
+      monto_neto_restaurante: montoNetoRestaurante,
+      total,
+      estado:                 'pendiente',
+      estado_pago:            'pendiente',
+      codigo_recogida:        codigoRecogida,
+      payu_reference_code:    referenceCode,
+      hora_recogida_inicio:   bolsa.hora_recogida_inicio,
+      hora_recogida_fin:      bolsa.hora_recogida_fin,
+    };
+
+    // Intentar guardar cantidad; si la columna no existe aún, reintenta sin ella
+    let { data: pedido, error: pedidoErr } = await supabase
+      .from('pedidos').insert([{ ...insertBase, cantidad }]).select().single();
+    if (pedidoErr) {
+      const r = await supabase.from('pedidos').insert([insertBase]).select().single();
+      pedido = r.data; pedidoErr = r.error;
+    }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
 
     const { data: usuario } = await supabase
@@ -313,6 +324,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
         email:    usuario?.email    || undefined,
         telefono: usuario?.telefono ? `+502${usuario.telefono.replace(/\D/g, '')}` : undefined,
       },
+      items: [{ name: bolsa.nombre, price: precioBolsa.toFixed(2), quantity: cantidad }],
     });
 
     res.json({

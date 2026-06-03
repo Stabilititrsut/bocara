@@ -7,23 +7,19 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Busca un pedido por UUID directo (metadata.orderId) o por referenceCode (metadata.referencia)
 async function buscarPedido(orderId, referencia) {
+  const SELECT = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
+
   // Estrategia 1: orderId es un UUID real de pedido
   if (orderId && UUID_RE.test(orderId)) {
     const { data } = await supabase
-      .from('pedidos')
-      .select('id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)')
-      .eq('id', orderId)
-      .single();
+      .from('pedidos').select(SELECT).eq('id', orderId).single();
     if (data) return data;
   }
 
   // Estrategia 2: buscar por payu_reference_code (la referencia enviada al crear el link)
   if (referencia) {
     const { data } = await supabase
-      .from('pedidos')
-      .select('id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)')
-      .eq('payu_reference_code', referencia)
-      .single();
+      .from('pedidos').select(SELECT).eq('payu_reference_code', referencia).single();
     if (data) return data;
   }
 
@@ -78,13 +74,15 @@ router.post('/cubo', async (req, res) => {
         console.log('[CUBO WEBHOOK] Pedido actualizado:', updatedPedido?.id, '→ estado: confirmado, estado_pago: pagado');
       }
 
-      // Decrementar stock de la bolsa
+      // Decrementar stock de la bolsa según la cantidad comprada
       const cantDisp = pedido.bolsas?.cantidad_disponible ?? 0;
+      const cantidadComprada = pedido.cantidad || 1;
+      const nuevoStock = Math.max(0, cantDisp - cantidadComprada);
       if (cantDisp > 0) {
         await supabase.from('bolsas')
-          .update({ cantidad_disponible: cantDisp - 1 })
+          .update({ cantidad_disponible: nuevoStock })
           .eq('id', pedido.bolsa_id);
-        console.log(`[CUBO WEBHOOK] Stock bolsa ${pedido.bolsa_id}: ${cantDisp} → ${cantDisp - 1}`);
+        console.log(`[CUBO WEBHOOK] Stock bolsa ${pedido.bolsa_id}: ${cantDisp} → ${nuevoStock} (compradas: ${cantidadComprada})`);
       }
 
       // Notificar al cliente
