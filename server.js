@@ -56,7 +56,7 @@ app.use('/api/favoritos',      require('./routes/favoritos'));
 app.use('/api/uploads',        require('./routes/uploads'));
 
 app.get('/', (req, res) => {
-  res.json({ status: '✅ Bocara API funcionando', version: '2.0.0', ambiente: process.env.NODE_ENV });
+  res.json({ status: '✅ Bocara API funcionando', version: '2.0.2', ambiente: process.env.NODE_ENV });
 });
 
 app.use((err, req, res, next) => {
