@@ -350,11 +350,13 @@ router.post('/cubo/crear-link-test', async (req, res) => {
       },
       clientName: 'Cliente Prueba',
       clientEmail: 'test@bocara.com',
-      clientPhone: '55555555',
+      clientPhone: '+50255555555',
       items: [
-        { name: 'Bolsa de comida prueba', price: 100, quantity: 1 },
+        { name: 'Bolsa de comida prueba', price: '1.00', quantity: 1 },
       ],
     };
+
+    console.log('[CUBO TEST] Payload enviado a Cubo:', JSON.stringify(payload, null, 2));
 
     const response = await axios.post(`${baseUrl}/api/v1/links/one-use`, payload, {
       headers: {
