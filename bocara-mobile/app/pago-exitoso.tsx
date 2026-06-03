@@ -67,7 +67,7 @@ export default function PagoExitosoScreen() {
   }, [resultado, pedidoId]);
 
   function irAPedidos()  { stopPolling(); router.replace('/(tabs)/pedidos' as any); }
-  function irAlInicio()  { stopPolling(); router.replace('/(tabs)/index' as any);   }
+  function irAlInicio()  { stopPolling(); router.replace('/' as any);               }
   function irAlCarrito() { stopPolling(); router.replace('/(tabs)/carrito' as any); }
   function irAPago()     { stopPolling(); router.back();                             }
   function stopPolling() { if (pollingRef.current) clearInterval(pollingRef.current); }
