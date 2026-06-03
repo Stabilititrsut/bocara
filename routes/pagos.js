@@ -349,7 +349,9 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     const { data: usuario } = await supabase
       .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
 
-    const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
+    const redirectUri = `${frontendUrl}/pago-exitoso`;
+    console.log('[CUBO] redirectUri:', redirectUri);
 
     // Items para Cubo: todos los productos del carrito
     const titulo = cartItems.length === 1
@@ -366,7 +368,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       referencia:     referenceCode,
       titulo,
       monto:          total,
-      urlRedireccion: `${baseUrl}/api/pagos/respuesta?transactionState=4`,
+      urlRedireccion: redirectUri,
       cliente: {
         nombre:   `${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim() || undefined,
         email:    usuario?.email    || undefined,
