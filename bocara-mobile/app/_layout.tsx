@@ -113,7 +113,7 @@ function AuthGuard() {
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
         (usuario.rol === 'admin' && segments[0] === 'admin');
 
-      if (!inCorrectSection && !['producto', 'pago', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
+      if (!inCorrectSection && !['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
         if (usuario.rol === 'restaurante') router.replace('/restaurante');
         else if (usuario.rol === 'admin') router.replace('/admin');
         else router.replace('/(tabs)/');
@@ -144,6 +144,7 @@ function AuthGuard() {
       <Stack.Screen name="verificar-email" />
       <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
       <Stack.Screen name="pago" options={{ headerShown: false }} />
+      <Stack.Screen name="pago-exitoso" options={{ headerShown: false }} />
       <Stack.Screen name="qr-recogida" options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
       <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
       <Stack.Screen name="soporte" options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
