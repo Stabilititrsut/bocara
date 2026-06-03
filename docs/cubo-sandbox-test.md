@@ -1,231 +1,209 @@
-# Cubo Pago — Evidencia de Prueba Sandbox
+# Cubo Pago — Guía de integración y pruebas
 
 **Proyecto:** Bocara  
-**Ambiente:** Sandbox  
-**Fecha de prueba:** 2026-06-02  
-**Backend desplegado en:** https://bocara.onrender.com  
-**Frontend en:** https://bocara.vercel.app  
+**Backend:** https://bocara.onrender.com  
+**Frontend:** https://bocara.vercel.app  
+**Webhook URL (configurar en Cubo Admin):** `https://bocara.onrender.com/api/webhooks/cubo`
 
 ---
 
-## 1. Endpoint probado: Crear Link de Pago
+## 1. Cómo funciona el flujo completo
 
-### Request
-
-**Método:** `POST`  
-**URL:** `https://bocara.onrender.com/api/pagos/cubo/crear-link-test`  
-**Headers:**
 ```
-Content-Type: application/json
-```
-*(No requiere Authorization — endpoint de prueba sin auth)*
+[App] → POST /api/pagos/cubopago
+          ↓ crea pedido en DB (estado: pendiente, estado_pago: pendiente)
+          ↓ crea link de pago en Cubo API con metadata.referencia = payu_reference_code
+          ↓ devuelve visaLinkUrl al frontend
 
-**Body:** *(ninguno requerido — datos de prueba hardcodeados en el backend)*
+[Usuario] → abre visaLinkUrl → paga con tarjeta en Cubo Checkout
 
-### Request enviado de backend → Cubo Sandbox
-
-**URL Cubo:** `POST https://api-payment-sandbox.cubopago.com/api/v1/links/one-use`  
-**Headers enviados a Cubo:**
-```
-Content-Type: application/json
-X-API-KEY: [API Key Sandbox — omitida de esta evidencia]
-```
-**Body enviado a Cubo:**
-```json
-{
-  "description": "Prueba Bocara Sandbox",
-  "amount": 100,
-  "redirectUri": "https://bocara.vercel.app/pago-exitoso",
-  "metadata": {
-    "orderId": "TEST-CUBO-001",
-    "source": "bocara",
-    "environment": "sandbox"
-  },
-  "clientName": "Cliente Prueba",
-  "clientEmail": "test@bocara.com",
-  "clientPhone": "55555555",
-  "items": [
-    {
-      "name": "Bolsa de comida prueba",
-      "price": 100,
-      "quantity": 1
-    }
-  ]
-}
-```
-
-### Response de Cubo Sandbox
-
-*(Completar después de ejecutar la prueba)*
-
-**HTTP Status:** `___`  
-**Body de respuesta:**
-```json
-{
-  // Pegar aquí la respuesta real de Cubo
-}
-```
-
-**Link de pago generado:** `___`  
-**paymentIntentToken / identifier:** `___`
-
----
-
-## 2. Simulación de Pago en Sandbox
-
-1. Abrir el link generado en el navegador.
-2. Ingresar los datos de tarjeta de prueba de Cubo Sandbox.
-3. Confirmar el pago.
-
-**Resultado del pago:** `SUCCEEDED / REJECTED` *(completar)*
-
----
-
-## 3. Webhook recibido
-
-**URL de webhook configurada en Cubo Admin:**
-```
-https://bocara.onrender.com/api/webhooks/cubo
-```
-
-**Body recibido del webhook de Cubo:**
-```json
-{
-  // Pegar aquí el body del webhook recibido (visible en logs de Render)
-}
-```
-
-**Campos extraídos:**
-| Campo | Valor |
-|-------|-------|
-| `status` | `___` |
-| `amount` | `___` |
-| `identifier` | `___` |
-| `referenceId` | `___` |
-| `authorizationCode` | `___` |
-| `processedAt` | `___` |
-| `metadata.orderId` | `TEST-CUBO-001` |
-
----
-
-## 4. Estado final del pedido
-
-*(Para pruebas TEST-CUBO-001 no se actualiza la DB — solo se simula en logs)*
-
-**Log esperado en Render si pago exitoso:**
-```
-[CUBO WEBHOOK] Evento recibido: { ... }
-[CUBO WEBHOOK] Pago APROBADO — orderId: TEST-CUBO-001
-[CUBO WEBHOOK] TEST — Pedido TEST-CUBO-001 simulado como PAGADO (no se actualiza DB)
+[Cubo] → POST /api/webhooks/cubo  (webhook)
+          ↓ busca pedido por metadata.referencia (= payu_reference_code)
+          ↓ actualiza: estado = "confirmado", estado_pago = "pagado"
+          ↓ decrementa stock de la bolsa
+          ↓ envía notificación push al cliente
+          ↓ envía notificación push al restaurante
+          ↓ responde 200 OK a Cubo
 ```
 
 ---
 
-## 5. Comandos cURL para reproducir la prueba
+## 2. Tabla y campos que se actualizan
 
-### 5.1 Crear link de pago (prueba local)
+**Tabla:** `pedidos`
+
+| Campo | Al aprobar (SUCCEEDED) | Al rechazar (REJECTED/FAILED/CANCELLED) |
+|-------|------------------------|------------------------------------------|
+| `estado` | `"confirmado"` | `"cancelado"` |
+| `estado_pago` | `"pagado"` | `"fallido"` |
+
+**Tabla secundaria:** `bolsas`
+
+| Campo | Acción |
+|-------|--------|
+| `cantidad_disponible` | Se decrementa en 1 cuando `estado_pago = "pagado"` |
+
+---
+
+## 3. Lógica de búsqueda del pedido en el webhook
+
+El webhook intenta encontrar el pedido en este orden:
+
+1. **Por UUID directo** (`metadata.orderId` si es un UUID válido):
+   ```sql
+   SELECT * FROM pedidos WHERE id = metadata.orderId
+   ```
+
+2. **Por código de referencia** (`metadata.referencia || referenceId`):
+   ```sql
+   SELECT * FROM pedidos WHERE payu_reference_code = referencia
+   ```
+
+Para pagos reales de Cubo, siempre entra por la estrategia 2 (la app envía `metadata.referencia` al crear el link).
+
+---
+
+## 4. Variables de entorno requeridas en Render
+
+| Variable | Descripción |
+|----------|-------------|
+| `CUBOPAGO_API_KEY` | API Key de Cubo Pago (sandbox o producción) |
+| `VISALINK_API_URL` | `https://api-payment-sandbox.cubopago.com` (sandbox) |
+| `SUPABASE_URL` | URL del proyecto Supabase |
+| `SUPABASE_SERVICE_KEY` | Service Role Key de Supabase |
+
+---
+
+## 5. Comandos de prueba
+
+### 5.1 Verificar que el backend está vivo
+```bash
+curl https://bocara.onrender.com/
+```
+
+### 5.2 Crear link de pago de prueba (sin auth)
 ```bash
 curl -X POST https://bocara.onrender.com/api/pagos/cubo/crear-link-test \
   -H "Content-Type: application/json"
 ```
 
-### 5.2 Crear link de pago (local en desarrollo)
-```bash
-curl -X POST http://localhost:3000/api/pagos/cubo/crear-link-test \
-  -H "Content-Type: application/json"
+### 5.3 Simular webhook con un pedido REAL (recomendado para testing)
+
+Primero, obtén el `payu_reference_code` de un pedido existente en Supabase:
+```sql
+SELECT id, payu_reference_code, estado, estado_pago
+FROM pedidos
+WHERE estado_pago = 'pendiente'
+ORDER BY created_at DESC
+LIMIT 5;
 ```
 
-### 5.3 Simular webhook de Cubo (prueba manual)
+Luego simula el webhook usando ese valor como `metadata.referencia`:
 ```bash
 curl -X POST https://bocara.onrender.com/api/webhooks/cubo \
   -H "Content-Type: application/json" \
   -d '{
     "status": "SUCCEEDED",
-    "amount": 100,
-    "identifier": "test-identifier-001",
-    "referenceId": "TEST-CUBO-001",
-    "authorizationCode": "AUTH-TEST-001",
-    "processedAt": "2026-06-02T12:00:00Z",
+    "amount": 3623,
+    "identifier": "cubo-identifier-real-001",
+    "referenceId": "BOC-XXXXXXXXXX-YYYYYYYY",
+    "authorizationCode": "AUTH123456",
+    "processedAt": "2026-06-03T20:00:00Z",
     "metadata": {
-      "orderId": "TEST-CUBO-001",
-      "source": "bocara",
-      "environment": "sandbox"
+      "referencia": "BOC-XXXXXXXXXX-YYYYYYYY"
     }
   }'
 ```
+> Reemplaza `BOC-XXXXXXXXXX-YYYYYYYY` con el valor real de `payu_reference_code`.
 
-### 5.4 Simular webhook de pago rechazado
+### 5.4 Simular webhook con ID directo de pedido (alternativa)
+
+Si conoces el UUID del pedido:
+```bash
+curl -X POST https://bocara.onrender.com/api/webhooks/cubo \
+  -H "Content-Type: application/json" \
+  -d '{
+    "status": "SUCCEEDED",
+    "amount": 3623,
+    "identifier": "cubo-identifier-real-001",
+    "authorizationCode": "AUTH123456",
+    "processedAt": "2026-06-03T20:00:00Z",
+    "metadata": {
+      "orderId": "UUID-REAL-DEL-PEDIDO"
+    }
+  }'
+```
+> Reemplaza `UUID-REAL-DEL-PEDIDO` con el `id` real del pedido en la tabla `pedidos`.
+
+### 5.5 Simular webhook de pago rechazado
 ```bash
 curl -X POST https://bocara.onrender.com/api/webhooks/cubo \
   -H "Content-Type: application/json" \
   -d '{
     "status": "REJECTED",
-    "amount": 100,
-    "identifier": "test-identifier-002",
-    "referenceId": "TEST-CUBO-001",
-    "processedAt": "2026-06-02T12:01:00Z",
+    "amount": 3623,
+    "identifier": "cubo-identifier-rejected-001",
+    "processedAt": "2026-06-03T20:01:00Z",
     "metadata": {
-      "orderId": "TEST-CUBO-001"
+      "referencia": "BOC-XXXXXXXXXX-YYYYYYYY"
     }
   }'
 ```
 
 ---
 
-## 6. Logs a revisar en Render
+## 6. Logs esperados en Render
 
-Ir a: **Render Dashboard → bocara (servicio) → Logs**
-
-Buscar las siguientes líneas:
+### Pago aprobado exitoso:
 ```
-[CUBO TEST] Creando link de pago...
-[CUBO TEST] API Key (8 chars): xxxxxxxx...
-[CUBO TEST] Base URL: https://api-payment-sandbox.cubopago.com
-[CUBO TEST] Response Cubo: { ... }
 [CUBO WEBHOOK] Evento recibido: { ... }
-[CUBO WEBHOOK] Pago APROBADO — orderId: TEST-CUBO-001
+[CUBO WEBHOOK] orderId: undefined
+[CUBO WEBHOOK] status: SUCCEEDED
+[CUBO WEBHOOK] referencia: BOC-XXXXXXXXXX-YYYYYYYY
+[CUBO WEBHOOK] identifier: cubo-identifier-real-001
+[CUBO WEBHOOK] authorizationCode: AUTH123456
+[CUBO WEBHOOK] Pedido actualizado: <uuid> → estado: confirmado, estado_pago: pagado
+[CUBO WEBHOOK] Stock bolsa <bolsa-id>: 3 → 2
+[CUBO WEBHOOK] Pedido <uuid> (BOC-XXXXXX) marcado PAGADO — notificaciones enviadas
+```
+
+### Pedido no encontrado:
+```
+[CUBO WEBHOOK] Pedido no encontrado — orderId: undefined, referencia: BOC-XXXXXXXXXX-YYYYYYYY
 ```
 
 ---
 
-## 7. Variable de entorno requerida en Render
+## 7. Migración SQL opcional (campos extra de Cubo)
 
-En **Render Dashboard → bocara → Environment → Environment Variables**, agregar:
+Si quieres guardar el `identifier` y `authorizationCode` de Cubo en la tabla `pedidos`, ejecuta en Supabase:
 
-| Variable | Valor |
-|----------|-------|
-| `CUBO_API_KEY_SANDBOX` | *(tu API Key de Cubo Admin Sandbox)* |
-| `VISALINK_API_URL` | `https://api-payment-sandbox.cubopago.com` |
+```sql
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_identifier text;
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_authorization_code text;
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_reference_id text;
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pagado_en timestamptz;
+```
+
+Después de correr la migración, agregar estos campos al UPDATE en `routes/webhooks.js`.
 
 ---
 
-## 8. URL de webhook a configurar en Cubo Admin Sandbox
+## 8. URL del webhook en Cubo Admin
 
-En **Cubo Admin Sandbox → Developers → Webhooks**, agregar:
+En **Cubo Admin → Developers → Webhooks**, configurar:
 
 ```
 https://bocara.onrender.com/api/webhooks/cubo
 ```
 
-Eventos a suscribir: `payment.succeeded`, `payment.rejected`, `payment.failed`
+Eventos a suscribir: `payment.succeeded`, `payment.rejected`, `payment.failed`, `payment.cancelled`
 
 ---
 
-## 9. Checklist de evidencia para solicitar producción
+## 9. Notas de seguridad
 
-- [ ] Screenshot del link de pago generado en Cubo Sandbox
-- [ ] Screenshot del checkout de Cubo con los datos de la bolsa
-- [ ] Screenshot del pago completado (estado SUCCEEDED)
-- [ ] Log de Render mostrando `[CUBO TEST] Response Cubo:` con la respuesta
-- [ ] Log de Render mostrando `[CUBO WEBHOOK] Pago APROBADO`
-- [ ] Screenshot de Cubo Admin mostrando el pago como completado
-- [ ] Response JSON completa de `POST /api/v1/links/one-use` (pegar en sección 1)
-- [ ] Body completo del webhook recibido (pegar en sección 3)
-
----
-
-## 10. Notas de seguridad
-
-- La API Key nunca se expone en frontend ni en logs completos.
-- El `.env` está en `.gitignore` — la key no se sube al repositorio.
-- En producción, usar `CUBO_API_KEY_PROD` (distinta key) y cambiar `VISALINK_API_URL`.
+- Las API Keys nunca se exponen en frontend ni en logs completos.
+- El `.env` está en `.gitignore`.
+- En producción: cambiar `VISALINK_API_URL` a la URL de producción de Cubo.
+- El webhook siempre responde `200 OK` a Cubo aunque ocurra un error interno (evita reintentos infinitos).

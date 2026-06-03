@@ -1,79 +1,142 @@
 const express = require('express');
 const supabase = require('../config/supabase');
+const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const router = express.Router();
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Busca un pedido por UUID directo (metadata.orderId) o por referenceCode (metadata.referencia)
+async function buscarPedido(orderId, referencia) {
+  // Estrategia 1: orderId es un UUID real de pedido
+  if (orderId && UUID_RE.test(orderId)) {
+    const { data } = await supabase
+      .from('pedidos')
+      .select('id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)')
+      .eq('id', orderId)
+      .single();
+    if (data) return data;
+  }
+
+  // Estrategia 2: buscar por payu_reference_code (la referencia enviada al crear el link)
+  if (referencia) {
+    const { data } = await supabase
+      .from('pedidos')
+      .select('id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)')
+      .eq('payu_reference_code', referencia)
+      .single();
+    if (data) return data;
+  }
+
+  return null;
+}
 
 // POST /api/webhooks/cubo — Cubo Pago notifica aquí cada evento de pago
 // Configurar en Cubo Admin → Developers → Webhooks → URL: https://bocara.onrender.com/api/webhooks/cubo
 router.post('/cubo', async (req, res) => {
+  // Siempre responder 200 al final para que Cubo no reintente indefinidamente
   try {
     const body = req.body;
     console.log('[CUBO WEBHOOK] Evento recibido:', JSON.stringify(body, null, 2));
 
-    const {
-      status,
-      amount,
-      identifier,
-      referenceId,
-      authorizationCode,
-      processedAt,
-      metadata,
-    } = body;
+    const { status, amount, identifier, referenceId, authorizationCode, processedAt, metadata } = body;
 
     const orderId    = metadata?.orderId;
     const referencia = metadata?.referencia || referenceId;
 
-    console.log('[CUBO WEBHOOK] Campos clave:', {
-      status,
-      amount,
-      identifier,
-      referenceId,
-      authorizationCode,
-      processedAt,
-      'metadata.orderId': orderId,
-    });
+    console.log('[CUBO WEBHOOK] orderId:', orderId);
+    console.log('[CUBO WEBHOOK] status:', status);
+    console.log('[CUBO WEBHOOK] referencia:', referencia);
+    console.log('[CUBO WEBHOOK] identifier:', identifier);
+    console.log('[CUBO WEBHOOK] authorizationCode:', authorizationCode);
+    console.log('[CUBO WEBHOOK] amount:', amount);
 
+    if (!orderId && !referencia) {
+      console.warn('[CUBO WEBHOOK] Sin orderId ni referencia — ignorando evento');
+      return res.status(200).json({ received: true, warning: 'metadata.orderId missing' });
+    }
+
+    // ── PAGO APROBADO ──────────────────────────────────────────────────────
     if (status === 'SUCCEEDED') {
-      console.log(`[CUBO WEBHOOK] Pago APROBADO — orderId: ${orderId || 'N/A'}, referencia: ${referencia || 'N/A'}`);
+      const pedido = await buscarPedido(orderId, referencia);
 
-      if (referencia && orderId !== 'TEST-CUBO-001') {
-        const { data: pedido, error } = await supabase
-          .from('pedidos')
-          .select('id, codigo_recogida, total')
-          .eq('payu_reference_code', referencia)
-          .single();
-
-        if (error || !pedido) {
-          console.warn('[CUBO WEBHOOK] Pedido no encontrado para referencia:', referencia);
-        } else {
-          await supabase.from('pedidos')
-            .update({ estado_pago: 'pagado', estado: 'confirmado' })
-            .eq('id', pedido.id);
-          console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} (${pedido.codigo_recogida}) marcado como PAGADO`);
-        }
-      } else {
-        console.log('[CUBO WEBHOOK] TEST — Pedido TEST-CUBO-001 simulado como PAGADO (no se actualiza DB)');
+      if (!pedido) {
+        console.warn(`[CUBO WEBHOOK] Pedido no encontrado — orderId: ${orderId}, referencia: ${referencia}`);
+        return res.status(200).json({ received: true, warning: 'Pedido no encontrado' });
       }
 
+      // Actualizar estado del pedido
+      const { data: updatedPedido, error: updateErr } = await supabase
+        .from('pedidos')
+        .update({ estado_pago: 'pagado', estado: 'confirmado' })
+        .eq('id', pedido.id)
+        .select()
+        .single();
+
+      if (updateErr) {
+        console.error('[CUBO WEBHOOK] Error actualizando pedido:', updateErr);
+      } else {
+        console.log('[CUBO WEBHOOK] Pedido actualizado:', updatedPedido?.id, '→ estado: confirmado, estado_pago: pagado');
+      }
+
+      // Decrementar stock de la bolsa
+      const cantDisp = pedido.bolsas?.cantidad_disponible ?? 0;
+      if (cantDisp > 0) {
+        await supabase.from('bolsas')
+          .update({ cantidad_disponible: cantDisp - 1 })
+          .eq('id', pedido.bolsa_id);
+        console.log(`[CUBO WEBHOOK] Stock bolsa ${pedido.bolsa_id}: ${cantDisp} → ${cantDisp - 1}`);
+      }
+
+      // Notificar al cliente
+      const mensajeCliente = pedido.tipo_entrega === 'recogida'
+        ? `Código de recogida: ${pedido.codigo_recogida} — ¡Ya puedes ir!`
+        : 'Tu pedido está siendo preparado. Te avisamos cuando salga.';
+
+      await enviarNotificacionPush(
+        pedido.usuarios?.expo_push_token,
+        '✅ ¡Pago confirmado!', mensajeCliente,
+        { pedidoId: pedido.id, screen: 'pedidos' }
+      ).catch(() => {});
+
+      await guardarNotificacion(
+        supabase, pedido.usuario_id, 'pago_confirmado',
+        '✅ Pago confirmado', mensajeCliente, { pedidoId: pedido.id }
+      ).catch(() => {});
+
+      // Notificar al restaurante
+      if (pedido.negocios?.propietario_id) {
+        const { data: propietario } = await supabase
+          .from('usuarios').select('expo_push_token').eq('id', pedido.negocios.propietario_id).single();
+        const mensajeRest = `Pedido ${pedido.codigo_recogida} — Q${pedido.total}`;
+        await enviarNotificacionPush(
+          propietario?.expo_push_token,
+          '🛍️ Nuevo pedido', mensajeRest,
+          { pedidoId: pedido.id, screen: 'restaurante' }
+        ).catch(() => {});
+        await guardarNotificacion(
+          supabase, pedido.negocios.propietario_id, 'nuevo_pedido',
+          '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id }
+        ).catch(() => {});
+      }
+
+      console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} (${pedido.codigo_recogida}) marcado PAGADO — notificaciones enviadas`);
+
+    // ── PAGO RECHAZADO / FALLIDO / CANCELADO ───────────────────────────────
     } else if (status === 'REJECTED' || status === 'FAILED' || status === 'CANCELLED') {
-      console.log(`[CUBO WEBHOOK] Pago ${status} — orderId: ${orderId || 'N/A'}, referencia: ${referencia || 'N/A'}`);
+      const pedido = await buscarPedido(orderId, referencia);
 
-      if (referencia && orderId !== 'TEST-CUBO-001') {
-        const { data: pedido } = await supabase
-          .from('pedidos')
-          .select('id')
-          .eq('payu_reference_code', referencia)
-          .single();
-
-        if (pedido) {
-          await supabase.from('pedidos')
-            .update({ estado_pago: 'fallido', estado: 'cancelado' })
-            .eq('id', pedido.id);
-          console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} marcado como RECHAZADO`);
-        }
-      } else {
-        console.log('[CUBO WEBHOOK] TEST — Pedido TEST-CUBO-001 simulado como RECHAZADO (no se actualiza DB)');
+      if (!pedido) {
+        console.warn(`[CUBO WEBHOOK] Pedido no encontrado para estado ${status}`);
+        return res.status(200).json({ received: true, warning: 'Pedido no encontrado' });
       }
 
+      await supabase.from('pedidos')
+        .update({ estado_pago: 'fallido', estado: 'cancelado' })
+        .eq('id', pedido.id);
+
+      console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} marcado como ${status} → estado: cancelado, estado_pago: fallido`);
+
+    // ── ESTADO NO RECONOCIDO ───────────────────────────────────────────────
     } else {
       console.log(`[CUBO WEBHOOK] Estado no manejado: ${status}`);
     }
