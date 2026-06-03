@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
 
   let query = supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,permite_envio)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
     .eq('activo', true)
     .order('created_at', { ascending: false });
 
@@ -85,10 +85,16 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { data, error } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,permite_envio)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud)')
     .eq('id', req.params.id)
     .single();
-  if (error || !data) return res.status(404).json({ error: 'Bolsa no encontrada' });
+  if (error) {
+    // PGRST116 = 0 rows (not found); cualquier otro código es un error real de DB
+    if (error.code === 'PGRST116') return res.status(404).json({ error: 'Bolsa no encontrada' });
+    console.error('❌ bolsas/:id Supabase error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+  if (!data) return res.status(404).json({ error: 'Bolsa no encontrada' });
   res.json(data);
 });
 
