@@ -27,8 +27,13 @@ export default function PagoScreen() {
 
   const bolsa = items[0]?.bolsa;
   const costoEnvio = tipo === 'envio' ? 25 : 0;
-  const totalFinal = total + costoEnvio;
-  const comisionServicio = totalFinal * 0.035;
+  const comisionServicio = Math.round((total + costoEnvio) * 0.035 * 100) / 100;
+  const totalFinal = total + costoEnvio + comisionServicio;
+
+  console.log('[PAGO] subtotal:', total);
+  console.log('[PAGO] envio:', costoEnvio);
+  console.log('[PAGO] comisionServicio:', comisionServicio);
+  console.log('[PAGO] total:', totalFinal);
 
   const distanciaRestaurante = useMemo(() => {
     if (!bolsa?.negocios) return null;

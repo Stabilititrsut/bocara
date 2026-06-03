@@ -257,12 +257,18 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
 
     const costoEnvio  = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
     const precioBolsa = bolsa.precio_descuento;
-    const total       = precioBolsa + costoEnvio;
+    const subtotal    = precioBolsa + costoEnvio;
 
-    const COMISION_CUBO         = 0.035; // ~3.5% tarifa Cubo Pago Guatemala
+    const COMISION_CUBO         = 0.035; // ~3.5% tarifa Cubo Pago Guatemala — cobrada al cliente
     const comisionBocara        = Math.round(precioBolsa * COMISION_BOCARA * 100) / 100;
-    const comisionPasarela      = Math.round(total * COMISION_CUBO * 100) / 100;
+    const comisionPasarela      = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const total                 = Math.round((subtotal + comisionPasarela) * 100) / 100;
     const montoNetoRestaurante  = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
+
+    console.log('[PAGO] subtotal:', subtotal);
+    console.log('[PAGO] comisionPasarela:', comisionPasarela);
+    console.log('[PAGO] total:', total);
+    console.log('[PAGO] amount enviado a Cubo (centavos):', Math.round(total * 100));
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
