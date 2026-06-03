@@ -240,39 +240,58 @@ router.post('/webhook', async (req, res) => {
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/cubopago', authMiddleware, async (req, res) => {
   try {
-    const { bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq } = req.body;
-    if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
-    const cantidad = Math.max(1, parseInt(cantidadReq) || 1);
+    const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq } = req.body;
 
     if (!process.env.CUBOPAGO_API_KEY) {
       return res.status(500).json({ error: 'CUBOPAGO_API_KEY no configurada en el servidor' });
     }
 
-    const { data: bolsa, error: bolsaErr } = await supabase
-      .from('bolsas')
-      .select('*, negocios(id,nombre,propietario_id)')
-      .eq('id', bolsa_id)
-      .single();
-    if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-    if (bolsa.cantidad_disponible < cantidad)
-      return res.status(400).json({ error: `Solo quedan ${bolsa.cantidad_disponible} unidad(es) disponibles` });
+    // Normalizar: soportar modo carrito (items[]) y modo legado (bolsa_id + cantidad)
+    let cartItems;
+    if (Array.isArray(itemsReq) && itemsReq.length > 0) {
+      cartItems = itemsReq;
+    } else if (bolsa_id) {
+      cartItems = [{ bolsa_id, cantidad: Math.max(1, parseInt(cantidadReq) || 1) }];
+    } else {
+      return res.status(400).json({ error: 'Se requiere items[] o bolsa_id' });
+    }
 
-    const costoEnvio  = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
-    const precioBolsa = bolsa.precio_descuento;                              // precio unitario
-    const subtotal    = Math.round(precioBolsa * cantidad * 100) / 100 + costoEnvio;
+    // Buscar todas las bolsas en paralelo
+    const bolsasResults = await Promise.all(
+      cartItems.map(item =>
+        supabase.from('bolsas').select('*, negocios(id,nombre,propietario_id)').eq('id', item.bolsa_id).single()
+      )
+    );
 
-    const COMISION_CUBO         = 0.035; // ~3.5% tarifa Cubo Pago Guatemala — cobrada al cliente
-    const comisionBocara        = Math.round(precioBolsa * cantidad * COMISION_BOCARA * 100) / 100;
-    const comisionPasarela      = Math.round(subtotal * COMISION_CUBO * 100) / 100;
-    const total                 = Math.round((subtotal + comisionPasarela) * 100) / 100;
-    const montoNetoRestaurante  = Math.round((precioBolsa * cantidad - comisionBocara - comisionPasarela) * 100) / 100;
+    // Validar que todas existan y tengan stock suficiente
+    const bolsas = [];
+    for (let i = 0; i < cartItems.length; i++) {
+      const { data: bolsa, error } = bolsasResults[i];
+      if (error || !bolsa) return res.status(404).json({ error: `Bolsa ${cartItems[i].bolsa_id} no encontrada` });
+      if (bolsa.cantidad_disponible < cartItems[i].cantidad)
+        return res.status(400).json({ error: `"${bolsa.nombre}": solo quedan ${bolsa.cantidad_disponible} unidad(es)` });
+      bolsas.push(bolsa);
+    }
 
-    console.log('[PAGO] cantidad:', cantidad);
-    console.log('[PAGO] precio unitario:', precioBolsa);
-    console.log('[PAGO] subtotal:', subtotal);
+    const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
+
+    // Subtotal = suma de (precio_unitario × cantidad) de todos los items
+    const subtotalProductos = Math.round(
+      cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
+    ) / 100;
+    const subtotal = subtotalProductos + costoEnvio;
+
+    const COMISION_CUBO        = 0.035;
+    const comisionBocara       = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
+    const comisionPasarela     = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const total                = Math.round((subtotal + comisionPasarela) * 100) / 100;
+    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela) * 100) / 100;
+
+    console.log('[PAGO] items recibidos:', JSON.stringify(cartItems));
+    console.log('[PAGO] subtotalProductos:', subtotalProductos);
     console.log('[PAGO] comisionPasarela:', comisionPasarela);
     console.log('[PAGO] total:', total);
-    console.log('[PAGO] amount enviado a Cubo (centavos):', Math.round(total * 100));
+    console.log('[PAGO] amount Cubo (centavos):', Math.round(total * 100));
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
@@ -280,13 +299,17 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     ).join('');
     const referenceCode = `BOC-${Date.now()}-${req.usuario.id.slice(0, 8)}`;
 
+    // Pedido principal — usa la primera bolsa para compatibilidad con columnas existentes
+    const bolsaPrincipal  = bolsas[0];
+    const itemPrincipal   = cartItems[0];
+
     const insertBase = {
       usuario_id:             req.usuario.id,
-      bolsa_id,
-      negocio_id:             bolsa.negocios.id,
+      bolsa_id:               bolsaPrincipal.id,
+      negocio_id:             bolsaPrincipal.negocios.id,
       tipo_entrega,
       direccion_envio:        tipo_entrega === 'envio' ? direccion_envio : null,
-      precio_bolsa:           precioBolsa,   // precio unitario
+      precio_bolsa:           bolsaPrincipal.precio_descuento,
       costo_envio:            costoEnvio,
       comision_bocara:        comisionBocara,
       comision_pasarela:      comisionPasarela,
@@ -296,39 +319,64 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       estado_pago:            'pendiente',
       codigo_recogida:        codigoRecogida,
       payu_reference_code:    referenceCode,
-      hora_recogida_inicio:   bolsa.hora_recogida_inicio,
-      hora_recogida_fin:      bolsa.hora_recogida_fin,
+      hora_recogida_inicio:   bolsaPrincipal.hora_recogida_inicio,
+      hora_recogida_fin:      bolsaPrincipal.hora_recogida_fin,
     };
 
-    // Intentar guardar cantidad; si la columna no existe aún, reintenta sin ella
+    // Intentar con columna cantidad; si no existe, reintenta sin ella
     let { data: pedido, error: pedidoErr } = await supabase
-      .from('pedidos').insert([{ ...insertBase, cantidad }]).select().single();
+      .from('pedidos').insert([{ ...insertBase, cantidad: itemPrincipal.cantidad }]).select().single();
     if (pedidoErr) {
       const r = await supabase.from('pedidos').insert([insertBase]).select().single();
       pedido = r.data; pedidoErr = r.error;
     }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
 
+    // Guardar todos los items del carrito en pedido_items
+    const pedidoItemsData = cartItems.map((item, i) => ({
+      pedido_id:       pedido.id,
+      bolsa_id:        item.bolsa_id,
+      cantidad:        item.cantidad,
+      precio_unitario: bolsas[i].precio_descuento,
+      subtotal:        Math.round(bolsas[i].precio_descuento * item.cantidad * 100) / 100,
+    }));
+    const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
+    if (itemsInsertErr) {
+      // Tabla pedido_items no existe aún — ejecutar migración SQL (ver docs)
+      console.warn('[PAGO] pedido_items no disponible, stock se gestionará por bolsa_id principal:', itemsInsertErr.message);
+    }
+
     const { data: usuario } = await supabase
       .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
 
     const baseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
 
+    // Items para Cubo: todos los productos del carrito
+    const titulo = cartItems.length === 1
+      ? `Bocara - ${bolsaPrincipal.nombre}`
+      : `Bocara - ${cartItems.length} productos`;
+    const cuboItems = cartItems.map((item, i) => ({
+      name:     bolsas[i].nombre,
+      price:    bolsas[i].precio_descuento.toFixed(2),
+      quantity: item.cantidad,
+    }));
+    console.log('[PAGO] items Cubo:', JSON.stringify(cuboItems));
+
     const { url: visaLinkUrl } = await generarLinkPago({
-      referencia:    referenceCode,
-      titulo:        `Bocara - ${bolsa.nombre}`,
-      monto:         total,
+      referencia:     referenceCode,
+      titulo,
+      monto:          total,
       urlRedireccion: `${baseUrl}/api/pagos/respuesta?transactionState=4`,
       cliente: {
         nombre:   `${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim() || undefined,
         email:    usuario?.email    || undefined,
         telefono: usuario?.telefono ? `+502${usuario.telefono.replace(/\D/g, '')}` : undefined,
       },
-      items: [{ name: bolsa.nombre, price: precioBolsa.toFixed(2), quantity: cantidad }],
+      items: cuboItems,
     });
 
     res.json({
-      pedidoId:              pedido.id,
+      pedidoId: pedido.id,
       codigoRecogida,
       total,
       costoEnvio,

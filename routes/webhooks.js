@@ -74,15 +74,29 @@ router.post('/cubo', async (req, res) => {
         console.log('[CUBO WEBHOOK] Pedido actualizado:', updatedPedido?.id, '→ estado: confirmado, estado_pago: pagado');
       }
 
-      // Decrementar stock de la bolsa según la cantidad comprada
-      const cantDisp = pedido.bolsas?.cantidad_disponible ?? 0;
-      const cantidadComprada = pedido.cantidad || 1;
-      const nuevoStock = Math.max(0, cantDisp - cantidadComprada);
-      if (cantDisp > 0) {
-        await supabase.from('bolsas')
-          .update({ cantidad_disponible: nuevoStock })
-          .eq('id', pedido.bolsa_id);
-        console.log(`[CUBO WEBHOOK] Stock bolsa ${pedido.bolsa_id}: ${cantDisp} → ${nuevoStock} (compradas: ${cantidadComprada})`);
+      // Decrementar stock — primero intenta con pedido_items (multi-bolsa)
+      const { data: pedidoItems } = await supabase
+        .from('pedido_items').select('bolsa_id, cantidad').eq('pedido_id', pedido.id);
+
+      if (pedidoItems && pedidoItems.length > 0) {
+        // Carrito con múltiples bolsas: descontar cada una
+        for (const pi of pedidoItems) {
+          const { data: b } = await supabase.from('bolsas').select('cantidad_disponible').eq('id', pi.bolsa_id).single();
+          if (b) {
+            const nuevoStock = Math.max(0, b.cantidad_disponible - pi.cantidad);
+            await supabase.from('bolsas').update({ cantidad_disponible: nuevoStock }).eq('id', pi.bolsa_id);
+            console.log(`[CUBO WEBHOOK] Stock bolsa ${pi.bolsa_id}: ${b.cantidad_disponible} → ${nuevoStock} (compradas: ${pi.cantidad})`);
+          }
+        }
+      } else {
+        // Fallback: pedido antiguo con una sola bolsa
+        const cantDisp = pedido.bolsas?.cantidad_disponible ?? 0;
+        const cantidadComprada = pedido.cantidad || 1;
+        const nuevoStock = Math.max(0, cantDisp - cantidadComprada);
+        if (cantDisp > 0) {
+          await supabase.from('bolsas').update({ cantidad_disponible: nuevoStock }).eq('id', pedido.bolsa_id);
+          console.log(`[CUBO WEBHOOK] Stock bolsa ${pedido.bolsa_id}: ${cantDisp} → ${nuevoStock} (fallback)`);
+        }
       }
 
       // Notificar al cliente

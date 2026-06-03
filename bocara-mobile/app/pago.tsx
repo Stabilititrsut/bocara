@@ -59,13 +59,10 @@ export default function PagoScreen() {
     if (items.length === 0) return;
     setLoading(true);
     try {
-      const item = items[0];
-      const cantidad = item.cantidad;
-      console.log('[PAGO] cantidad recibida:', cantidad);
-      console.log('[PAGO] precio unitario:', item.bolsa.precio_descuento);
+      const cuboItems = items.map(i => ({ bolsa_id: i.bolsa.id, cantidad: i.cantidad }));
+      console.log('[PAGO] items recibidos:', JSON.stringify(cuboItems));
       const res = await pagosAPI.cubopago({
-        bolsa_id: item.bolsa.id,
-        cantidad,
+        items: cuboItems,
         tipo_entrega: tipo,
         direccion_envio: tipo === 'envio' ? direccion : undefined,
       });
