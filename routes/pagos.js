@@ -50,6 +50,16 @@ router.post('/crear-intent', authMiddleware, async (req, res) => {
     const comisionPasarela     = Math.round(total * COMISION_PAYU * 100) / 100;
     const montoNetoRestaurante = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
 
+    // Cancelar pedidos pendientes anteriores del mismo usuario (pagos no completados)
+    const { data: viejos } = await supabase
+      .from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('usuario_id', req.usuario.id)
+      .eq('estado', 'pendiente')
+      .eq('estado_pago', 'pendiente')
+      .select('id');
+    console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
+
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
       chars[Math.floor(Math.random() * chars.length)]
@@ -292,6 +302,16 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     console.log('[PAGO] comisionPasarela:', comisionPasarela);
     console.log('[PAGO] total:', total);
     console.log('[PAGO] amount Cubo (centavos):', Math.round(total * 100));
+
+    // Cancelar pedidos pendientes anteriores del mismo usuario (pagos no completados)
+    const { data: viejos } = await supabase
+      .from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('usuario_id', req.usuario.id)
+      .eq('estado', 'pendiente')
+      .eq('estado_pago', 'pendiente')
+      .select('id');
+    console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>

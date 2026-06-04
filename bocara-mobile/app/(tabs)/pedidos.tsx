@@ -143,6 +143,7 @@ export default function PedidosScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [resenasEnviadas, setResenasEnviadas] = useState<Set<string>>(new Set());
   const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false });
+  const [showCancelados, setShowCancelados] = useState(false);
   const pollingRef = useRef<any>(null);
 
   useEffect(() => {
@@ -204,8 +205,9 @@ export default function PedidosScreen() {
   );
 
   const activos = pedidos.filter(p => p.estado === 'confirmado' || p.estado === 'listo');
-  const historial = pedidos.filter(p => p.estado === 'recogido' || p.estado === 'cancelado');
   const pendientes = pedidos.filter(p => p.estado === 'pendiente');
+  const historial = pedidos.filter(p => p.estado === 'recogido');
+  const cancelados = pedidos.filter(p => p.estado === 'cancelado');
 
   return (
     <SafeAreaView style={s.root}>
@@ -251,6 +253,15 @@ export default function PedidosScreen() {
               {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} />)}
             </>
           )}
+          {cancelados.length > 0 && (
+            <>
+              <TouchableOpacity style={s.canceladosToggle} onPress={() => setShowCancelados(v => !v)}>
+                <Text style={s.seccionLabel}>Cancelados ({cancelados.length})</Text>
+                <Ionicons name={showCancelados ? 'chevron-up-outline' : 'chevron-down-outline'} size={14} color={Colors.textSecondary} />
+              </TouchableOpacity>
+              {showCancelados && cancelados.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} />)}
+            </>
+          )}
           <View style={{ height: 30 }} />
         </ScrollView>
       )}
@@ -277,6 +288,7 @@ const s = StyleSheet.create({
 
   scroll: { padding: 16, paddingTop: 20 },
   seccionLabel: { fontSize: 12, fontWeight: '800', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 14, marginTop: 4 },
+  canceladosToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
 
   card: { backgroundColor: Colors.white, borderRadius: 24, padding: 18, marginBottom: 16, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.09, shadowRadius: 14 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
