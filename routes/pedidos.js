@@ -78,10 +78,12 @@ router.get('/', authMiddleware, async (req, res) => {
       .eq('usuario_id', req.usuario.id)
       .order('created_at', { ascending: false });
     if (error) {
+      console.warn('[PEDIDOS API] join failed, fallback:', error.message);
       const r = await supabase.from('pedidos').select('*').eq('usuario_id', req.usuario.id);
       data = r.data; error = r.error;
     }
     if (error) return res.status(500).json({ error: error.message });
+    console.log('[PEDIDOS API] usuario:', req.usuario.id, 'rows:', data?.length, 'ids:', data?.map(p => p.id));
     res.json(data || []);
   } catch (err) {
     res.status(500).json({ error: err.message });

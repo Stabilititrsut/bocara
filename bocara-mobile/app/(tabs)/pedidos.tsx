@@ -59,6 +59,7 @@ function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: 
         <View style={s.infoItem}>
           <Text style={s.infoLabel}>Fecha</Text>
           <Text style={s.infoVal}>{new Date(pedido.created_at).toLocaleDateString('es-GT', { day: 'numeric', month: 'short' })}</Text>
+          <Text style={s.infoHora}>{new Date(pedido.created_at).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' })}</Text>
         </View>
       </View>
 
@@ -73,6 +74,10 @@ function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: 
             </Text>
           </View>
         </View>
+      )}
+
+      {pedido.estado !== 'confirmado' && pedido.estado !== 'listo' && (
+        <Text style={s.refCode}>{pedido.codigo_recogida}</Text>
       )}
 
       {pedido.estado === 'recogido' && !yaReseno && (
@@ -150,7 +155,10 @@ export default function PedidosScreen() {
     try {
       const res = await pedidosAPI.listar();
       const data: Pedido[] = res.data || [];
-      setPedidos(Array.from(new Map(data.map(p => [p.id, p])).values()));
+      console.log('[PEDIDOS] backend rows:', data.length, 'ids:', data.map(p => p.id));
+      const dedup = Array.from(new Map(data.map(p => [String(p.id), p])).values());
+      console.log('[PEDIDOS] after dedup:', dedup.length, 'ids:', dedup.map(p => p.id));
+      setPedidos(dedup);
     } catch { setPedidos([]); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
@@ -282,6 +290,8 @@ const s = StyleSheet.create({
   infoDivider: { width: 1, height: 36, backgroundColor: Colors.border },
   infoLabel: { fontSize: 10, color: Colors.textLight, fontWeight: '600', marginBottom: 5 },
   infoVal: { fontSize: 14, fontWeight: '900', color: Colors.textPrimary, textAlign: 'center' },
+  infoHora: { fontSize: 10, color: Colors.textLight, fontWeight: '500', textAlign: 'center', marginTop: 2 },
+  refCode: { fontSize: 11, color: Colors.textLight, fontWeight: '600', textAlign: 'center', letterSpacing: 1, marginTop: 4, marginBottom: 2 },
 
   codigoBox: { backgroundColor: Colors.surface, borderRadius: 20, padding: 18, alignItems: 'center' },
   codigoBoxListo: { backgroundColor: Colors.primary },
