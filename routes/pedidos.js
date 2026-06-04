@@ -74,7 +74,7 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     let { data, error } = await supabase
       .from('pedidos')
-      .select('*, bolsas(id,nombre), negocios(id,nombre,zona)')
+      .select('*, bolsas!bolsa_id(id,nombre), negocios!negocio_id(id,nombre,zona)')
       .eq('usuario_id', req.usuario.id)
       .order('created_at', { ascending: false });
     if (error) {
@@ -98,7 +98,7 @@ router.get('/restaurante', authMiddleware, async (req, res) => {
     if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
     let { data, error } = await supabase
       .from('pedidos')
-      .select('*, bolsas(id,nombre), usuarios(id,nombre,telefono)')
+      .select('*, bolsas!bolsa_id(id,nombre), usuarios!usuario_id(id,nombre,telefono)')
       .eq('negocio_id', negocio.id)
       .order('created_at', { ascending: false });
     if (error) {

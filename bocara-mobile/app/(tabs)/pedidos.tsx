@@ -149,7 +149,8 @@ export default function PedidosScreen() {
   const cargar = useCallback(async () => {
     try {
       const res = await pedidosAPI.listar();
-      setPedidos(res.data || []);
+      const data: Pedido[] = res.data || [];
+      setPedidos(Array.from(new Map(data.map(p => [p.id, p])).values()));
     } catch { setPedidos([]); }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
