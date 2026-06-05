@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/src/context/AuthContext';
 import { negociosAPI, uploadsAPI, authAPI } from '@/src/services/api';
 import { supabase } from '@/src/services/supabase';
@@ -227,6 +228,13 @@ export default function RegistroRestauranteScreen() {
         setErrors(e => ({ ...e, email: 'Este correo ya tiene una cuenta registrada. Inicia sesión o usa otro correo.' }));
         return;
       }
+      // Guardar intención antes del OTP para que auth/callback pueda redirigir correctamente
+      // si el usuario hace clic en el link del email en lugar de ingresar el código
+      await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify({
+        role: 'restaurante',
+        returnTo: '/registro-restaurante',
+      }));
+
       console.log('[EMAIL VERIFY] enviando código a:', email);
       const { error } = await supabase.auth.signInWithOtp({
         email,
@@ -237,6 +245,7 @@ export default function RegistroRestauranteScreen() {
       });
       if (error) {
         console.log('[EMAIL VERIFY] error enviando correo:', error.message);
+        await AsyncStorage.removeItem('bocara_pending_intent');
         setErrors(e => ({ ...e, email: 'No se pudo enviar el código de verificación. Verifica el correo e intenta de nuevo.' }));
         return;
       }
@@ -373,6 +382,8 @@ export default function RegistroRestauranteScreen() {
         } catch { /* no bloquear registro si falla subida de fotos */ }
       }
 
+      // Limpiar intención — el registro se completó correctamente
+      await AsyncStorage.removeItem('bocara_pending_intent');
       // Confirmación en pantalla — no usamos Alert.alert porque browsers bloquean
       // window.alert() llamado desde contextos async largos
       setSubmitted(true);

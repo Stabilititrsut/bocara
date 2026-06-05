@@ -97,6 +97,7 @@ function AuthGuard() {
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!usuario && !inAuth && !inOnboarding) {
+      console.log('[AUTH GUARD] sin sesión, redirigiendo a /login desde:', segments[0]);
       router.replace('/login');
       return;
     }
@@ -113,10 +114,14 @@ function AuthGuard() {
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
         (usuario.rol === 'admin' && segments[0] === 'admin');
 
-      if (!inCorrectSection && !['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'].includes(segments[0] as string)) {
-        if (usuario.rol === 'restaurante') router.replace('/restaurante');
-        else if (usuario.rol === 'admin') router.replace('/admin');
-        else router.replace('/(tabs)/');
+      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'];
+
+      if (!inCorrectSection && !allowedSections.includes(segments[0] as string)) {
+        let rutaDestino = '/(tabs)/';
+        if (usuario.rol === 'restaurante') rutaDestino = '/restaurante';
+        else if (usuario.rol === 'admin') rutaDestino = '/admin';
+        console.log('[AUTH GUARD] redirect decision:', rutaDestino, '| rol:', usuario.rol, '| segment:', segments[0]);
+        router.replace(rutaDestino as any);
       }
     }
   }, [usuario, loading, segments, onboardingChecked, onboardingDone]);

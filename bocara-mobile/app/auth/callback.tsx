@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '@/src/services/supabase';
 import { authAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
@@ -9,6 +10,7 @@ import { Colors } from '@/constants/Colors';
 export default function AuthCallbackScreen() {
   const [errorMsg, setErrorMsg] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [intentRole, setIntentRole] = useState<string | null>(null);
   const { setSession } = useAuth();
   const router = useRouter();
 
@@ -18,6 +20,12 @@ export default function AuthCallbackScreen() {
 
   async function processCallback() {
     try {
+      // Leer intención guardada antes del OTP (ej. 'restaurante')
+      const intentRaw = await AsyncStorage.getItem('bocara_pending_intent');
+      const intent = intentRaw ? JSON.parse(intentRaw) : null;
+      console.log('[AUTH CALLBACK] intendedRole:', intent?.role ?? null);
+      console.log('[AUTH CALLBACK] returnTo:', intent?.returnTo ?? null);
+
       if (Platform.OS === 'web') {
         console.log('[AUTH CALLBACK] URL:', window.location.href);
         const url = new URL(window.location.href);
@@ -27,20 +35,28 @@ export default function AuthCallbackScreen() {
         const tokenHash = url.searchParams.get('token_hash');
         const type      = url.searchParams.get('type') as any;
 
-        // ── Confirmación de email por link (Supabase envía token_hash + type) ──
+        // ── Confirmación de email por link (Supabase envía token_hash + type en query params) ──
         if (tokenHash && type) {
           console.log('[AUTH CALLBACK] procesando confirmación de email, type:', type);
           const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
           if (error) {
             console.error('[AUTH CALLBACK] verifyOtp error:', error.message);
-            setErrorMsg('El enlace de confirmación expiró o ya fue usado. Vuelve a la app e inicia sesión.');
-            setTimeout(() => router.replace('/login'), 4000);
+            await AsyncStorage.removeItem('bocara_pending_intent');
+            setErrorMsg('El enlace de confirmación expiró o ya fue usado. Vuelve a continuar el registro.');
+            const fallback = intent?.returnTo || '/login';
+            setTimeout(() => router.replace(fallback as any), 4000);
             return;
           }
-          // Cerrar sesión automática — el usuario debe iniciar sesión en la app
+
+          // Cerrar sesión de Supabase — el usuario debe completar el flujo en la app
           await supabase.auth.signOut();
+          await AsyncStorage.removeItem('bocara_pending_intent');
+
+          const returnTo = intent?.returnTo || '/login';
+          console.log('[AUTH CALLBACK] email confirmado, redirigiendo a:', returnTo);
+          setIntentRole(intent?.role ?? null);
           setConfirmed(true);
-          setTimeout(() => router.replace('/login'), 3000);
+          setTimeout(() => router.replace(returnTo as any), 3000);
           return;
         }
       }
@@ -98,8 +114,10 @@ export default function AuthCallbackScreen() {
       console.log('[OAuth Callback] backend response:', res.data);
 
       await setSession(res.data.token, res.data.usuario);
+      await AsyncStorage.removeItem('bocara_pending_intent');
 
       const rol = res.data.usuario?.rol;
+      console.log('[AUTH CALLBACK] user role:', rol);
       if (rol === 'restaurante') router.replace('/restaurante');
       else if (rol === 'admin') router.replace('/admin');
       else router.replace('/(tabs)/');
@@ -111,11 +129,16 @@ export default function AuthCallbackScreen() {
   }
 
   if (confirmed) {
+    const esRestaurante = intentRole === 'restaurante';
     return (
       <View style={s.root}>
         <Text style={s.successIcon}>✅</Text>
         <Text style={s.successTitle}>¡Correo confirmado!</Text>
-        <Text style={s.successText}>Tu cuenta está activa. Vuelve a la app e inicia sesión.</Text>
+        <Text style={s.successText}>
+          {esRestaurante
+            ? 'Tu correo está verificado. Continuando con el registro de tu negocio...'
+            : 'Tu cuenta está activa. Vuelve a la app e inicia sesión.'}
+        </Text>
         <Text style={s.hint}>Redirigiendo...</Text>
       </View>
     );
@@ -125,7 +148,7 @@ export default function AuthCallbackScreen() {
     return (
       <View style={s.root}>
         <Text style={s.errorText}>{errorMsg}</Text>
-        <Text style={s.hint}>Redirigiendo al login...</Text>
+        <Text style={s.hint}>Redirigiendo...</Text>
       </View>
     );
   }
