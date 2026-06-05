@@ -227,18 +227,27 @@ export default function RegistroRestauranteScreen() {
         setErrors(e => ({ ...e, email: 'Este correo ya tiene una cuenta registrada. Inicia sesión o usa otro correo.' }));
         return;
       }
-      // Send OTP
-      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      console.log('[EMAIL VERIFY] enviando código a:', email);
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
+        },
+      });
       if (error) {
+        console.log('[EMAIL VERIFY] error enviando correo:', error.message);
         setErrors(e => ({ ...e, email: 'No se pudo enviar el código de verificación. Verifica el correo e intenta de nuevo.' }));
         return;
       }
+      console.log('[EMAIL VERIFY] código generado y enviado correctamente');
       setOtpCodigo('');
       setOtpError('');
       setShowOtpModal(true);
       startOtpCountdown();
     } catch (err: any) {
-      setErrors(e => ({ ...e, email: err.message || 'Error al verificar el correo' }));
+      console.log('[EMAIL VERIFY] error enviando correo:', err.message);
+      setErrors(e => ({ ...e, email: err.message || 'No se pudo enviar el código. Intenta nuevamente.' }));
     } finally {
       setLoading(false);
     }
@@ -273,13 +282,22 @@ export default function RegistroRestauranteScreen() {
     setOtpLoading(true);
     setOtpError('');
     try {
+      const email = form.email.trim().toLowerCase();
+      console.log('[EMAIL VERIFY] reenviando código a:', email);
       const { error } = await supabase.auth.signInWithOtp({
-        email: form.email.trim().toLowerCase(),
-        options: { shouldCreateUser: true },
+        email,
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
+        },
       });
-      if (error) { setOtpError('No se pudo reenviar el código. Intenta más tarde.'); return; }
+      if (error) {
+        console.log('[EMAIL VERIFY] error reenviando correo:', error.message);
+        setOtpError('No se pudo reenviar el código. Intenta más tarde.');
+        return;
+      }
       startOtpCountdown();
-    } catch { setOtpError('Error al reenviar el código'); }
+    } catch { setOtpError('No se pudo enviar el código. Intenta nuevamente.'); }
     finally { setOtpLoading(false); }
   }
 

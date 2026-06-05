@@ -82,15 +82,21 @@ export default function RegistroClienteScreen() {
       await AsyncStorage.setItem('bocara_pending_registro', JSON.stringify(form));
 
       // Enviar OTP al email vía Supabase Auth
+      console.log('[EMAIL VERIFY] enviando código a:', form.email.trim().toLowerCase());
       const { error } = await supabase.auth.signInWithOtp({
         email: form.email.trim().toLowerCase(),
-        options: { shouldCreateUser: true },
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
+        },
       });
 
       if (error) {
+        console.log('[EMAIL VERIFY] error enviando correo:', error.message);
         setErrors({ email: 'No se pudo enviar el código. Verifica el correo e intenta de nuevo.' });
         return;
       }
+      console.log('[EMAIL VERIFY] código generado y enviado correctamente');
 
       // Navegar a pantalla de verificación
       router.push(`/verificar-email?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);

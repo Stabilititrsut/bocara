@@ -85,10 +85,16 @@ export default function VerificarEmailScreen() {
     setErrorMsg('');
     setReenvioSegundos(60);
     try {
-      const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          shouldCreateUser: true,
+          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
+        },
+      });
       if (error) setErrorMsg('No se pudo reenviar el código. Intenta más tarde.');
     } catch {
-      setErrorMsg('Error al reenviar. Intenta más tarde.');
+      setErrorMsg('No se pudo enviar el código. Intenta nuevamente.');
     }
   }
 
