@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, Modal,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -62,18 +62,16 @@ export default function RegistroRestauranteScreen() {
   const [submitError, setSubmitError] = useState('');
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
 
-  // OTP email verification (step 1 → step 2 gate)
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const [otpCodigo, setOtpCodigo] = useState('');
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [otpError, setOtpError] = useState('');
-  const [otpReenvioSeg, setOtpReenvioSeg] = useState(60);
-  const otpCountdownRef = useRef<any>(null);
+  // Email confirmation flow (magic link, no OTP code)
+  const [emailEnviado, setEmailEnviado] = useState(false);
+  const [reenvioSeg, setReenvioSeg] = useState(0);
+  const reenvioRef = useRef<any>(null);
 
   const { registroRestaurante } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
+    checkReturnFromConfirmation();
     negociosAPI.miNegocio()
       .then(res => {
         const neg = res.data;
@@ -89,11 +87,28 @@ export default function RegistroRestauranteScreen() {
       .catch(() => {});
   }, []);
 
-  function startOtpCountdown() {
-    setOtpReenvioSeg(60);
-    clearInterval(otpCountdownRef.current);
-    otpCountdownRef.current = setInterval(() => {
-      setOtpReenvioSeg(s => { if (s <= 1) { clearInterval(otpCountdownRef.current); return 0; } return s - 1; });
+  async function checkReturnFromConfirmation() {
+    try {
+      const intentRaw = await AsyncStorage.getItem('bocara_pending_intent');
+      const intent = intentRaw ? JSON.parse(intentRaw) : null;
+      if (intent?.role === 'restaurante' && intent?.emailConfirmed) {
+        const savedRaw = await AsyncStorage.getItem('bocara_pending_restaurante_form');
+        if (savedRaw) {
+          const savedForm = JSON.parse(savedRaw);
+          setForm(f => ({ ...f, ...savedForm }));
+          await AsyncStorage.removeItem('bocara_pending_restaurante_form');
+        }
+        await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify({ ...intent, emailConfirmed: false }));
+        setStep(2);
+      }
+    } catch { /* ignorar error de AsyncStorage */ }
+  }
+
+  function startReenvioCountdown() {
+    setReenvioSeg(60);
+    clearInterval(reenvioRef.current);
+    reenvioRef.current = setInterval(() => {
+      setReenvioSeg(s => { if (s <= 1) { clearInterval(reenvioRef.current); return 0; } return s - 1; });
     }, 1000);
   }
 
@@ -228,32 +243,41 @@ export default function RegistroRestauranteScreen() {
         setErrors(e => ({ ...e, email: 'Este correo ya tiene una cuenta registrada. Inicia sesión o usa otro correo.' }));
         return;
       }
-      // Guardar intención antes del OTP para que auth/callback pueda redirigir correctamente
-      // si el usuario hace clic en el link del email en lugar de ingresar el código
+      const emailRedirectTo = 'https://bocara.vercel.app/auth/callback';
+      const metadata = { rol: 'restaurante', role: 'restaurante', flow: 'restaurant-signup' };
+      console.log('[RESTAURANTE SIGNUP] emailRedirectTo:', emailRedirectTo);
+      console.log('[RESTAURANTE SIGNUP] metadata:', metadata);
+
+      // Guardar formulario de paso 1 para recuperarlo al volver del link de confirmación
+      await AsyncStorage.setItem('bocara_pending_restaurante_form', JSON.stringify({
+        nombre: form.nombre, apellido: form.apellido, email,
+        password: form.password, confirmPassword: form.confirmPassword, telefono: form.telefono,
+      }));
       await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify({
         role: 'restaurante',
         returnTo: '/registro-restaurante',
+        flow: 'restaurant-signup',
+        emailConfirmed: false,
       }));
 
-      console.log('[EMAIL VERIFY] enviando código a:', email);
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
           shouldCreateUser: true,
-          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
+          emailRedirectTo,
+          data: metadata,
         },
       });
       if (error) {
-        console.log('[EMAIL VERIFY] error enviando correo:', error.message);
+        console.log('[RESTAURANTE SIGNUP] error enviando correo:', error.message);
         await AsyncStorage.removeItem('bocara_pending_intent');
-        setErrors(e => ({ ...e, email: 'No se pudo enviar el código de verificación. Verifica el correo e intenta de nuevo.' }));
+        await AsyncStorage.removeItem('bocara_pending_restaurante_form');
+        setErrors(e => ({ ...e, email: 'No se pudo enviar el correo de confirmación. Verifica el correo e intenta de nuevo.' }));
         return;
       }
-      console.log('[EMAIL VERIFY] código generado y enviado correctamente');
-      setOtpCodigo('');
-      setOtpError('');
-      setShowOtpModal(true);
-      startOtpCountdown();
+      console.log('[RESTAURANTE SIGNUP] correo de confirmación enviado correctamente');
+      setEmailEnviado(true);
+      startReenvioCountdown();
     } catch (err: any) {
       console.log('[EMAIL VERIFY] error enviando correo:', err.message);
       setErrors(e => ({ ...e, email: err.message || 'No se pudo enviar el código. Intenta nuevamente.' }));
@@ -262,52 +286,29 @@ export default function RegistroRestauranteScreen() {
     }
   }
 
-  async function verificarOtp() {
-    if (otpCodigo.length !== 6) { setOtpError('Ingresa el código de 6 dígitos'); return; }
-    setOtpLoading(true);
-    setOtpError('');
-    try {
-      const { error } = await supabase.auth.verifyOtp({
-        email: form.email.trim().toLowerCase(),
-        token: otpCodigo.trim(),
-        type: 'email',
-      });
-      if (error) {
-        setOtpError('Código incorrecto o expirado. Verifica tu correo e intenta de nuevo.');
-        return;
-      }
-      clearInterval(otpCountdownRef.current);
-      setShowOtpModal(false);
-      setStep(2);
-    } catch (err: any) {
-      setOtpError(err.message || 'Error al verificar el código');
-    } finally {
-      setOtpLoading(false);
-    }
-  }
-
-  async function reenviarOtp() {
-    if (otpReenvioSeg > 0) return;
-    setOtpLoading(true);
-    setOtpError('');
+  async function reenviarEmail() {
+    if (reenvioSeg > 0) return;
+    setLoading(true);
     try {
       const email = form.email.trim().toLowerCase();
-      console.log('[EMAIL VERIFY] reenviando código a:', email);
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
           shouldCreateUser: true,
           emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
+          data: { rol: 'restaurante', role: 'restaurante', flow: 'restaurant-signup' },
         },
       });
       if (error) {
-        console.log('[EMAIL VERIFY] error reenviando correo:', error.message);
-        setOtpError('No se pudo reenviar el código. Intenta más tarde.');
+        setErrors(e => ({ ...e, email: 'No se pudo reenviar el correo. Intenta más tarde.' }));
         return;
       }
-      startOtpCountdown();
-    } catch { setOtpError('No se pudo enviar el código. Intenta nuevamente.'); }
-    finally { setOtpLoading(false); }
+      startReenvioCountdown();
+    } catch {
+      setErrors(e => ({ ...e, email: 'No se pudo enviar el correo. Intenta nuevamente.' }));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function subirFotoBase64(base64: string, path: string): Promise<string | null> {
@@ -398,6 +399,47 @@ export default function RegistroRestauranteScreen() {
   const steps = ['Propietario', 'Negocio', 'Bancario', 'Documentos'];
   const nitLen = form.nit.length;
   const dpiLen = form.dpi.replace(/\s/g, '').length;
+
+  // ── Pantalla: correo de confirmación enviado (esperando que el usuario haga clic en el link) ─
+  if (emailEnviado) {
+    return (
+      <SafeAreaView style={s.root}>
+        <ScrollView contentContainerStyle={se.scroll}>
+          <Text style={se.icon}>📧</Text>
+          <Text style={se.title}>Revisa tu correo</Text>
+          <Text style={se.sub}>
+            Enviamos un enlace de confirmación a:{'\n'}
+            <Text style={se.email}>{form.email}</Text>
+          </Text>
+
+          <View style={se.infoBox}>
+            <Text style={se.infoText}>
+              Abre el correo y presiona{' '}
+              <Text style={se.infoBold}>"Confirmar mi cuenta"</Text>
+              {' '}para continuar con el registro de tu negocio.
+            </Text>
+            <Text style={se.infoHint}>Revisa también tu carpeta de spam.</Text>
+          </View>
+
+          {errors.email ? <Text style={se.error}>{errors.email}</Text> : null}
+
+          <TouchableOpacity
+            style={[se.reenvioBtn, reenvioSeg > 0 && se.reenvioDisabled]}
+            onPress={reenviarEmail}
+            disabled={reenvioSeg > 0 || loading}
+          >
+            <Text style={[se.reenvioText, reenvioSeg > 0 && se.reenvioTextDisabled]}>
+              {reenvioSeg > 0 ? `Reenviar correo en ${reenvioSeg}s` : 'Reenviar correo'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={se.volverBtn} onPress={() => setEmailEnviado(false)}>
+            <Text style={se.volverText}>← Volver y editar correo</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   // ── Pantalla de confirmación (en lugar de Alert.alert que browsers bloquean) ─
   if (submitted) {
@@ -846,56 +888,6 @@ export default function RegistroRestauranteScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      {/* ── Modal OTP verificación de correo ── */}
-      <Modal visible={showOtpModal} transparent animationType="slide" onRequestClose={() => setShowOtpModal(false)}>
-        <View style={s.otpOverlay}>
-          <View style={s.otpCard}>
-            <Text style={s.otpTitle}>Verifica tu correo</Text>
-            <Text style={s.otpSub}>
-              Enviamos un código de 6 dígitos a{'\n'}
-              <Text style={{ fontWeight: '800', color: Colors.brown }}>{form.email}</Text>
-            </Text>
-            <Text style={s.otpHint}>Revisa también tu carpeta de spam.</Text>
-
-            <TextInput
-              style={[s.otpInput, otpError ? s.otpInputError : null]}
-              placeholder="123456"
-              placeholderTextColor={Colors.textLight}
-              keyboardType="number-pad"
-              maxLength={6}
-              value={otpCodigo}
-              onChangeText={v => { setOtpCodigo(v.replace(/\D/g, '')); setOtpError(''); }}
-              autoFocus
-            />
-            {otpError ? <Text style={s.otpError}>{otpError}</Text> : null}
-
-            <TouchableOpacity
-              style={[s.otpBtn, (otpLoading || otpCodigo.length < 6) && s.otpBtnDisabled]}
-              onPress={verificarOtp}
-              disabled={otpLoading || otpCodigo.length < 6}
-            >
-              {otpLoading
-                ? <ActivityIndicator color={Colors.white} />
-                : <Text style={s.otpBtnText}>Verificar y continuar →</Text>
-              }
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[s.otpReenvio, otpReenvioSeg > 0 && s.otpReenvioDisabled]}
-              onPress={reenviarOtp}
-              disabled={otpReenvioSeg > 0 || otpLoading}
-            >
-              <Text style={[s.otpReenvioText, otpReenvioSeg > 0 && { color: Colors.textLight }]}>
-                {otpReenvioSeg > 0 ? `Reenviar código en ${otpReenvioSeg}s` : 'Reenviar código'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={s.otpCancelar} onPress={() => setShowOtpModal(false)}>
-              <Text style={s.otpCancelarText}>← Volver y editar correo</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -1002,22 +994,25 @@ const s = StyleSheet.create({
   rechazoSub:      { fontSize: 13, color: '#7F1D1D', fontWeight: '600', marginBottom: 4 },
   rechazoItem:     { fontSize: 13, color: '#991B1B', paddingVertical: 2, lineHeight: 20 },
   rechazoMotivo:   { fontSize: 12, color: '#7F1D1D', marginTop: 8, fontStyle: 'italic' },
-  otpOverlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  otpCard:         { backgroundColor: Colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 28, paddingBottom: 40 },
-  otpTitle:        { fontSize: 22, fontWeight: '900', color: Colors.brown, marginBottom: 8 },
-  otpSub:          { fontSize: 14, color: Colors.textSecondary, lineHeight: 22, marginBottom: 4 },
-  otpHint:         { fontSize: 12, color: Colors.textLight, marginBottom: 24 },
-  otpInput:        { backgroundColor: Colors.background, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 14, padding: 16, fontSize: 28, letterSpacing: 10, color: Colors.textPrimary, textAlign: 'center', marginBottom: 8 },
-  otpInputError:   { borderColor: Colors.error },
-  otpError:        { fontSize: 12, color: Colors.error, marginBottom: 12, textAlign: 'center' },
-  otpBtn:          { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center', marginTop: 8 },
-  otpBtnDisabled:  { opacity: 0.5 },
-  otpBtnText:      { color: Colors.white, fontWeight: '800', fontSize: 16 },
-  otpReenvio:      { marginTop: 16, alignItems: 'center', padding: 10 },
-  otpReenvioDisabled: {},
-  otpReenvioText:  { color: Colors.orange, fontWeight: '600', fontSize: 14 },
-  otpCancelar:     { marginTop: 8, alignItems: 'center', padding: 10 },
-  otpCancelarText: { color: Colors.textSecondary, fontSize: 13 },
+});
+
+const se = StyleSheet.create({
+  scroll:           { padding: 24, paddingTop: 56, alignItems: 'center' },
+  icon:             { fontSize: 64, marginBottom: 16 },
+  title:            { fontSize: 26, fontWeight: '900', color: Colors.brown, marginBottom: 12, textAlign: 'center' },
+  sub:              { fontSize: 15, color: Colors.textSecondary, lineHeight: 22, textAlign: 'center', marginBottom: 24 },
+  email:            { fontWeight: '800', color: Colors.brown },
+  infoBox:          { backgroundColor: '#EFF6FF', borderRadius: 16, padding: 20, marginBottom: 24, width: '100%', borderWidth: 1, borderColor: '#BFDBFE' },
+  infoText:         { fontSize: 14, color: '#1D4ED8', lineHeight: 22, textAlign: 'center' },
+  infoBold:         { fontWeight: '800' },
+  infoHint:         { fontSize: 12, color: '#3B82F6', marginTop: 8, textAlign: 'center' },
+  error:            { color: '#e53e3e', fontSize: 13, marginBottom: 12, textAlign: 'center' },
+  reenvioBtn:       { paddingVertical: 14, paddingHorizontal: 28, borderRadius: 14, borderWidth: 1.5, borderColor: Colors.primary, marginBottom: 16 },
+  reenvioDisabled:  { borderColor: Colors.border },
+  reenvioText:      { color: Colors.primary, fontWeight: '700', fontSize: 14 },
+  reenvioTextDisabled: { color: Colors.textLight },
+  volverBtn:        { padding: 12, marginTop: 4 },
+  volverText:       { color: Colors.textSecondary, fontWeight: '600', fontSize: 14 },
 });
 
 const sc = StyleSheet.create({
