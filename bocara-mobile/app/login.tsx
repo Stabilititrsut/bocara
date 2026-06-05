@@ -216,10 +216,6 @@ export default function LoginScreen() {
                   <Ionicons name="person-add-outline" size={16} color={Colors.primary} />
                   <Text style={s.btnOutlineText}>Crear cuenta gratis</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.btnOutline, { marginTop: 10, borderColor: Colors.border }]} onPress={() => router.push('/registro-telefono')}>
-                  <Ionicons name="phone-portrait-outline" size={16} color={Colors.textSecondary} />
-                  <Text style={[s.btnOutlineText, { color: Colors.textSecondary }]}>Ingresar con teléfono</Text>
-                </TouchableOpacity>
               </>
             )}
 
