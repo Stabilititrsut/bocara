@@ -7,7 +7,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // Busca un pedido por UUID directo (metadata.orderId) o por referenceCode (metadata.referencia)
 async function buscarPedido(orderId, referencia) {
-  const SELECT = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
+  const SELECT = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
 
   // Estrategia 1: orderId es un UUID real de pedido
   if (orderId && UUID_RE.test(orderId)) {
@@ -60,7 +60,14 @@ router.post('/cubo', async (req, res) => {
         return res.status(200).json({ received: true, warning: 'Pedido no encontrado' });
       }
 
-      // Actualizar estado del pedido
+      // Idempotencia: si el pedido ya fue procesado no descontar stock de nuevo
+      if (pedido.estado_pago === 'pagado') {
+        console.log('[CUBO WEBHOOK] Pedido ya estaba pagado, no se descuenta stock nuevamente:', pedido.id);
+        return res.status(200).json({ received: true, warning: 'pedido ya procesado' });
+      }
+
+      // Marcar como pagado ANTES de descontar stock para que un segundo webhook
+      // quede bloqueado por el chequeo anterior aunque llegue casi simultáneamente
       const { data: updatedPedido, error: updateErr } = await supabase
         .from('pedidos')
         .update({ estado_pago: 'pagado', estado: 'confirmado' })
@@ -79,13 +86,14 @@ router.post('/cubo', async (req, res) => {
         .from('pedido_items').select('bolsa_id, cantidad').eq('pedido_id', pedido.id);
 
       if (pedidoItems && pedidoItems.length > 0) {
+        console.log('[CUBO WEBHOOK] Descontando stock por pedido_items:', pedidoItems);
         // Carrito con múltiples bolsas: descontar cada una
         for (const pi of pedidoItems) {
           const { data: b } = await supabase.from('bolsas').select('cantidad_disponible').eq('id', pi.bolsa_id).single();
           if (b) {
             const nuevoStock = Math.max(0, b.cantidad_disponible - pi.cantidad);
             await supabase.from('bolsas').update({ cantidad_disponible: nuevoStock }).eq('id', pi.bolsa_id);
-            console.log(`[CUBO WEBHOOK] Stock bolsa ${pi.bolsa_id}: ${b.cantidad_disponible} → ${nuevoStock} (compradas: ${pi.cantidad})`);
+            console.log('[CUBO WEBHOOK] Bolsa:', pi.bolsa_id, 'stock anterior:', b.cantidad_disponible, 'cantidad comprada:', pi.cantidad, 'stock nuevo:', nuevoStock);
           }
         }
       } else {
@@ -95,7 +103,7 @@ router.post('/cubo', async (req, res) => {
         const nuevoStock = Math.max(0, cantDisp - cantidadComprada);
         if (cantDisp > 0) {
           await supabase.from('bolsas').update({ cantidad_disponible: nuevoStock }).eq('id', pedido.bolsa_id);
-          console.log(`[CUBO WEBHOOK] Stock bolsa ${pedido.bolsa_id}: ${cantDisp} → ${nuevoStock} (fallback)`);
+          console.log('[CUBO WEBHOOK] Bolsa:', pedido.bolsa_id, 'stock anterior:', cantDisp, 'cantidad comprada:', cantidadComprada, 'stock nuevo:', nuevoStock, '(fallback)');
         }
       }
 
