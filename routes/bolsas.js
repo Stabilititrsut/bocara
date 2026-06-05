@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
 const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
+const { getReservadoPendiente, getReservasMap } = require('../services/stock');
 const router = express.Router();
 
 // GET /api/bolsas — listar bolsas disponibles con distancia opcional
@@ -45,6 +46,22 @@ router.get('/', async (req, res) => {
   // Solo bolsas de negocios activos/aprobados (excepto cuando el restaurante consulta sus propias bolsas)
   if (mi_negocio !== 'true') {
     resultado = resultado.filter(b => b.negocios?.activo !== false);
+  }
+
+  // Inyectar cantidad_disponible_real = cantidad_disponible DB − reservas de pedidos pendientes
+  try {
+    const reservaMap = await getReservasMap();
+    resultado = resultado.map(b => ({
+      ...b,
+      cantidad_disponible_real: Math.max(0, b.cantidad_disponible - (reservaMap[b.id] || 0)),
+    }));
+    // Para el feed público, filtrar también por disponibilidad real (no solo DB)
+    if (mi_negocio !== 'true') {
+      resultado = resultado.filter(b => b.cantidad_disponible_real > 0);
+    }
+  } catch {
+    // Si falla el cálculo de reservas, seguir con datos DB sin bloquear el feed
+    resultado = resultado.map(b => ({ ...b, cantidad_disponible_real: b.cantidad_disponible }));
   }
 
   // Filtros de texto
@@ -112,6 +129,15 @@ router.get('/:id', async (req, res) => {
   if (error) {
     return res.status(500).json({ error: error.message });
   }
+
+  // Añadir disponibilidad real descontando reservas pendientes
+  try {
+    const reservado = await getReservadoPendiente(data.id);
+    data.cantidad_disponible_real = Math.max(0, data.cantidad_disponible - reservado);
+  } catch {
+    data.cantidad_disponible_real = data.cantidad_disponible;
+  }
+
   res.json(data);
 });
 

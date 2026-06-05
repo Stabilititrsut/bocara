@@ -5,6 +5,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { generarLinkPago } = require('../services/visaLink');
+const { getReservadoPendiente } = require('../services/stock');
 const router = express.Router();
 
 const SANDBOX = process.env.PAYU_SANDBOX !== 'false';
@@ -39,7 +40,29 @@ router.post('/crear-intent', authMiddleware, async (req, res) => {
       .eq('id', bolsa_id)
       .single();
     if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-    if (bolsa.cantidad_disponible < 1) return res.status(400).json({ error: 'Bolsa agotada' });
+
+    // Cancelar pedidos pendientes anteriores del mismo usuario ANTES de validar stock
+    // para que sus reservas no bloqueen la nueva compra
+    const { data: viejos } = await supabase
+      .from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('usuario_id', req.usuario.id)
+      .eq('estado', 'pendiente')
+      .eq('estado_pago', 'pendiente')
+      .select('id');
+    console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
+
+    // Validar stock real = cantidad_disponible DB − reservas de otros usuarios
+    const reservado = await getReservadoPendiente(bolsa_id);
+    const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+    console.log('[STOCK] bolsa:', bolsa_id);
+    console.log('[STOCK] cantidad_disponible DB:', bolsa.cantidad_disponible);
+    console.log('[STOCK] reservado pendiente:', reservado);
+    console.log('[STOCK] disponible real:', disponibleReal);
+    console.log('[STOCK] solicitado:', 1);
+    if (disponibleReal < 1) {
+      return res.status(400).json({ error: 'Esta bolsa ya no tiene unidades disponibles.' });
+    }
 
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
     const precioBolsa = bolsa.precio_descuento;
@@ -49,16 +72,6 @@ router.post('/crear-intent', authMiddleware, async (req, res) => {
     const comisionBocara       = Math.round(precioBolsa * COMISION_BOCARA * 100) / 100;
     const comisionPasarela     = Math.round(total * COMISION_PAYU * 100) / 100;
     const montoNetoRestaurante = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
-
-    // Cancelar pedidos pendientes anteriores del mismo usuario (pagos no completados)
-    const { data: viejos } = await supabase
-      .from('pedidos')
-      .update({ estado: 'cancelado', estado_pago: 'fallido' })
-      .eq('usuario_id', req.usuario.id)
-      .eq('estado', 'pendiente')
-      .eq('estado_pago', 'pendiente')
-      .select('id');
-    console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
@@ -273,14 +286,43 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       )
     );
 
-    // Validar que todas existan y tengan stock suficiente
+    // Verificar que todas las bolsas existan
     const bolsas = [];
     for (let i = 0; i < cartItems.length; i++) {
       const { data: bolsa, error } = bolsasResults[i];
       if (error || !bolsa) return res.status(404).json({ error: `Bolsa ${cartItems[i].bolsa_id} no encontrada` });
-      if (bolsa.cantidad_disponible < cartItems[i].cantidad)
-        return res.status(400).json({ error: `"${bolsa.nombre}": solo quedan ${bolsa.cantidad_disponible} unidad(es)` });
       bolsas.push(bolsa);
+    }
+
+    // Cancelar pedidos pendientes anteriores del mismo usuario ANTES de validar stock
+    // para que sus reservas no bloqueen la nueva compra
+    const { data: viejos } = await supabase
+      .from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('usuario_id', req.usuario.id)
+      .eq('estado', 'pendiente')
+      .eq('estado_pago', 'pendiente')
+      .select('id');
+    console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
+
+    // Validar stock de cada item considerando reservas pendientes de otros usuarios
+    for (let i = 0; i < cartItems.length; i++) {
+      const bolsa = bolsas[i];
+      const cantidadSolicitada = cartItems[i].cantidad;
+      const reservado = await getReservadoPendiente(bolsa.id);
+      const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+      console.log('[STOCK] bolsa:', bolsa.id);
+      console.log('[STOCK] cantidad_disponible DB:', bolsa.cantidad_disponible);
+      console.log('[STOCK] reservado pendiente:', reservado);
+      console.log('[STOCK] disponible real:', disponibleReal);
+      console.log('[STOCK] solicitado:', cantidadSolicitada);
+      if (cantidadSolicitada > disponibleReal) {
+        return res.status(400).json({
+          error: disponibleReal === 0
+            ? `"${bolsa.nombre}": Esta bolsa ya no tiene unidades disponibles.`
+            : `"${bolsa.nombre}": Solo quedan ${disponibleReal} unidad(es) disponibles.`,
+        });
+      }
     }
 
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
@@ -302,16 +344,6 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     console.log('[PAGO] comisionPasarela:', comisionPasarela);
     console.log('[PAGO] total:', total);
     console.log('[PAGO] amount Cubo (centavos):', Math.round(total * 100));
-
-    // Cancelar pedidos pendientes anteriores del mismo usuario (pagos no completados)
-    const { data: viejos } = await supabase
-      .from('pedidos')
-      .update({ estado: 'cancelado', estado_pago: 'fallido' })
-      .eq('usuario_id', req.usuario.id)
-      .eq('estado', 'pendiente')
-      .eq('estado_pago', 'pendiente')
-      .select('id');
-    console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
