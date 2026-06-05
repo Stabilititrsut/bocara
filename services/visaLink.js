@@ -7,18 +7,20 @@ const axios = require('axios');
 
 const BASE_URL = process.env.VISALINK_API_URL || 'https://api-payment-sandbox.cubopago.com';
 
-async function generarLinkPago({ referencia, titulo, monto, urlRedireccion, cliente, items }) {
+async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedireccion, cliente, items }) {
   const apiKey = process.env.CUBO_API_KEY_SANDBOX || process.env.CUBOPAGO_API_KEY;
   if (!apiKey) throw new Error('CUBO_API_KEY_SANDBOX no configurada en el servidor');
 
   // Cubo Pago recibe el monto en centavos (entero)
   const montoCentavos = Math.round(parseFloat(monto) * 100);
 
+  // metadata es devuelta sin cambios por Cubo en el webhook — incluir todos los
+  // identificadores posibles para que buscarPedido() siempre encuentre el pedido
   const body = {
     description: titulo,
     amount:      montoCentavos,
     redirectUri: urlRedireccion,
-    metadata:    { referencia },
+    metadata:    { referencia, orderId: pedidoId, pedidoId },
   };
 
   if (cliente?.nombre)   body.clientName  = cliente.nombre;

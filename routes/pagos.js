@@ -418,6 +418,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
 
     const { url: visaLinkUrl } = await generarLinkPago({
       referencia:     referenceCode,
+      pedidoId:       pedido.id,
       titulo,
       monto:          total,
       urlRedireccion: redirectUri,

@@ -5,21 +5,23 @@ const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Busca un pedido por UUID directo (metadata.orderId) o por referenceCode (metadata.referencia)
+// Busca un pedido usando múltiples estrategias para cubrir variaciones del webhook de Cubo
 async function buscarPedido(orderId, referencia) {
   const SELECT = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
 
-  // Estrategia 1: orderId es un UUID real de pedido
-  if (orderId && UUID_RE.test(orderId)) {
+  // Estrategia 1: cualquier campo que llegue como UUID → buscar por pedidos.id
+  const uuidsACandidatos = [orderId].filter(v => v && UUID_RE.test(v));
+  for (const uuid of uuidsACandidatos) {
     const { data } = await supabase
-      .from('pedidos').select(SELECT).eq('id', orderId).single();
+      .from('pedidos').select(SELECT).eq('id', uuid).single();
     if (data) return data;
   }
 
-  // Estrategia 2: buscar por payu_reference_code (la referencia enviada al crear el link)
-  if (referencia) {
+  // Estrategia 2: buscar por payu_reference_code con cualquier valor tipo BOC-...
+  const refs = [...new Set([referencia].filter(Boolean))];
+  for (const ref of refs) {
     const { data } = await supabase
-      .from('pedidos').select(SELECT).eq('payu_reference_code', referencia).single();
+      .from('pedidos').select(SELECT).eq('payu_reference_code', ref).single();
     if (data) return data;
   }
 
@@ -32,23 +34,24 @@ router.post('/cubo', async (req, res) => {
   // Siempre responder 200 al final para que Cubo no reintente indefinidamente
   try {
     const body = req.body;
-    console.log('[CUBO WEBHOOK] Evento recibido:', JSON.stringify(body, null, 2));
+    console.log('[CUBO WEBHOOK] body completo:', JSON.stringify(body, null, 2));
 
     const { status, amount, identifier, referenceId, authorizationCode, processedAt, metadata } = body;
 
-    const orderId    = metadata?.orderId;
+    // Recopilar todos los posibles identificadores que Cubo puede mandar
+    // metadata.orderId / metadata.pedidoId → UUID del pedido (buscamos por pedidos.id)
+    // metadata.referencia / referenceId → código BOC-... (buscamos por payu_reference_code)
+    const orderId    = metadata?.orderId || metadata?.pedidoId;
     const referencia = metadata?.referencia || referenceId;
 
-    console.log('[CUBO WEBHOOK] orderId:', orderId);
+    console.log('[CUBO WEBHOOK] buscando pedido por:', { orderId, referencia, referenceId, identifier });
     console.log('[CUBO WEBHOOK] status:', status);
-    console.log('[CUBO WEBHOOK] referencia:', referencia);
-    console.log('[CUBO WEBHOOK] identifier:', identifier);
-    console.log('[CUBO WEBHOOK] authorizationCode:', authorizationCode);
     console.log('[CUBO WEBHOOK] amount:', amount);
+    console.log('[CUBO WEBHOOK] authorizationCode:', authorizationCode);
 
     if (!orderId && !referencia) {
-      console.warn('[CUBO WEBHOOK] Sin orderId ni referencia — ignorando evento');
-      return res.status(200).json({ received: true, warning: 'metadata.orderId missing' });
+      console.warn('[CUBO WEBHOOK] Sin orderId ni referencia — ignorando evento. Body:', JSON.stringify(body));
+      return res.status(200).json({ received: true, warning: 'no se encontró identificador de pedido en el webhook' });
     }
 
     // ── PAGO APROBADO ──────────────────────────────────────────────────────
