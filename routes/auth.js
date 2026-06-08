@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { enviarEmail, templateOlvidoContrasena } = require('../services/email');
+const { enviarEmail, templateOlvidoContrasena, templateBienvenidaRestaurante } = require('../services/email');
 const { geocodeAddress } = require('../utils/geo');
 const router = express.Router();
 
@@ -109,6 +109,14 @@ router.post('/registro', async (req, res) => {
           return res.status(400).json({ error: `Error al crear el negocio: ${basicError.message}` });
         }
       }
+    }
+
+    if (rol === 'restaurante' && nombre_negocio) {
+      enviarEmail({
+        to: email.toLowerCase().trim(),
+        subject: '¡Recibimos tu solicitud! — Bocara Food',
+        html: templateBienvenidaRestaurante(nombre, nombre_negocio),
+      }).catch(() => {});
     }
 
     if (rol === 'cliente') {

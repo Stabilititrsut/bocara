@@ -1,14 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { useAuth } from '@/src/context/AuthContext';
-import { negociosAPI, uploadsAPI, authAPI } from '@/src/services/api';
-import { supabase } from '@/src/services/supabase';
+import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { Image } from 'expo-image';
 
@@ -66,16 +64,10 @@ export default function RegistroRestauranteScreen() {
   const [submitError, setSubmitError] = useState('');
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
 
-  // Email confirmation flow (magic link, no OTP code)
-  const [emailEnviado, setEmailEnviado] = useState(false);
-  const [reenvioSeg, setReenvioSeg] = useState(0);
-  const reenvioRef = useRef<any>(null);
-
   const { registroRestaurante } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    checkReturnFromConfirmation();
     negociosAPI.miNegocio()
       .then(res => {
         const neg = res.data;
@@ -91,65 +83,35 @@ export default function RegistroRestauranteScreen() {
       .catch(() => {});
   }, []);
 
-  async function checkReturnFromConfirmation() {
-    try {
-      const intentRaw = await AsyncStorage.getItem('bocara_pending_intent');
-      const intent = intentRaw ? JSON.parse(intentRaw) : null;
-      if (intent?.role === 'restaurante' && intent?.emailConfirmed) {
-        const savedRaw = await AsyncStorage.getItem('bocara_pending_restaurante_form');
-        if (savedRaw) {
-          const savedForm = JSON.parse(savedRaw);
-          setForm(f => ({ ...f, ...savedForm }));
-          await AsyncStorage.removeItem('bocara_pending_restaurante_form');
-        }
-        await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify({ ...intent, emailConfirmed: false }));
-        setStep(2);
-      }
-    } catch { /* ignorar error de AsyncStorage */ }
-  }
-
-  function startReenvioCountdown() {
-    setReenvioSeg(60);
-    clearInterval(reenvioRef.current);
-    reenvioRef.current = setInterval(() => {
-      setReenvioSeg(s => { if (s <= 1) { clearInterval(reenvioRef.current); return 0; } return s - 1; });
-    }, 1000);
-  }
-
   const set = (k: keyof FormState) => (v: string) => {
     setForm(f => ({ ...f, [k]: v }));
     setErrors(e => ({ ...e, [k]: '' }));
   };
 
-  // ── GPS: capturar ubicación actual del negocio ───────────────────────────
+  // ── GPS ──────────────────────────────────────────────────────────────────
   async function capturarUbicacion() {
     setLocCapturando(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(
-          'Permiso de ubicación',
-          'Necesitamos acceso a tu ubicación para registrar las coordenadas del negocio. Puedes ingresarlas manualmente después desde tu panel.',
-        );
+        Alert.alert('Permiso de ubicación', 'Necesitamos acceso a tu ubicación para registrar las coordenadas del negocio.');
         return;
       }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude, longitude } = pos.coords;
-      console.log('[NEGOCIO UBICACION] latitud:', latitude, 'longitud:', longitude);
       setForm(f => ({ ...f, latitud: String(latitude), longitud: String(longitude) }));
     } catch {
-      Alert.alert('Error de GPS', 'No se pudo obtener la ubicación. Verifica que el GPS esté activo o agrégala manualmente desde tu panel después de registrarte.');
+      Alert.alert('Error de GPS', 'No se pudo obtener la ubicación. Puedes agregarla manualmente después.');
     } finally {
       setLocCapturando(false);
     }
   }
 
-  // ── Image picker: web uses HTML file input, mobile uses ImagePicker ──────
+  // ── Foto picker ───────────────────────────────────────────────────────────
   async function seleccionarFoto(tipo: 'dpi' | 'negocio') {
     if (Platform.OS === 'web') {
       const input = (document as any).createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
+      input.type = 'file'; input.accept = 'image/*';
       input.onchange = (e: any) => {
         const file = e.target?.files?.[0];
         if (!file) return;
@@ -157,51 +119,28 @@ export default function RegistroRestauranteScreen() {
         reader.onload = (ev: any) => {
           const dataUrl: string = ev.target.result;
           const base64 = dataUrl.split(',')[1] ?? '';
-          if (tipo === 'dpi') {
-            setForm(f => ({ ...f, dpi_foto_uri: dataUrl, dpi_foto_base64: base64 }));
-            setErrors(er => ({ ...er, dpi_foto: '' }));
-          } else {
-            setForm(f => ({ ...f, foto_negocio_uri: dataUrl, foto_negocio_base64: base64 }));
-            setErrors(er => ({ ...er, foto_negocio: '' }));
-          }
+          if (tipo === 'dpi') setForm(f => ({ ...f, dpi_foto_uri: dataUrl, dpi_foto_base64: base64 }));
+          else setForm(f => ({ ...f, foto_negocio_uri: dataUrl, foto_negocio_base64: base64 }));
         };
         reader.readAsDataURL(file);
       };
-      input.click();
-      return;
+      input.click(); return;
     }
-
-    if (!ImagePicker) {
-      return Alert.alert('No disponible', 'La subida de fotos no está disponible en este dispositivo.');
-    }
-    try {
-      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (perm.status !== 'granted')
-        return Alert.alert('Permiso requerido', 'Necesitamos acceso a tu galería para subir la foto.');
-    } catch { /* web no requiere permisos */ }
-
+    if (!ImagePicker) return Alert.alert('No disponible', 'La subida de fotos no está disponible en este dispositivo.');
+    try { await ImagePicker.requestMediaLibraryPermissionsAsync(); } catch {}
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: tipo === 'dpi' ? [16, 9] : [1, 1],
-      quality: 0.7,
-      base64: true,
+      allowsEditing: true, aspect: tipo === 'dpi' ? [16, 9] : [1, 1], quality: 0.7, base64: true,
     });
     if (result.canceled || !result.assets?.length) return;
     const asset = result.assets[0];
-    if (tipo === 'dpi') {
-      setForm(f => ({ ...f, dpi_foto_uri: asset.uri, dpi_foto_base64: asset.base64 || '' }));
-      setErrors(er => ({ ...er, dpi_foto: '' }));
-    } else {
-      setForm(f => ({ ...f, foto_negocio_uri: asset.uri, foto_negocio_base64: asset.base64 || '' }));
-      setErrors(er => ({ ...er, foto_negocio: '' }));
-    }
+    if (tipo === 'dpi') setForm(f => ({ ...f, dpi_foto_uri: asset.uri, dpi_foto_base64: asset.base64 || '' }));
+    else setForm(f => ({ ...f, foto_negocio_uri: asset.uri, foto_negocio_base64: asset.base64 || '' }));
   }
 
-  // ── Validation (per-step, populates errors state) ────────────────────────
+  // ── Validación por paso ───────────────────────────────────────────────────
   function validarPaso(): boolean {
     const e: Record<string, string> = {};
-
     if (step === 1) {
       if (!form.nombre.trim())   e.nombre   = 'El nombre es obligatorio';
       if (!form.apellido.trim()) e.apellido  = 'El apellido es obligatorio';
@@ -213,7 +152,6 @@ export default function RegistroRestauranteScreen() {
       else if (form.password !== form.confirmPassword) e.confirmPassword = 'Las contraseñas no coinciden';
       if (!form.telefono.trim()) e.telefono  = 'El teléfono es obligatorio';
     }
-
     if (step === 2) {
       if (!form.nombre_negocio.trim())    e.nombre_negocio    = 'El nombre del negocio es obligatorio';
       if (!form.descripcion.trim())       e.descripcion       = 'La descripción es obligatoria';
@@ -231,7 +169,6 @@ export default function RegistroRestauranteScreen() {
         e.categoria_otro = 'Escribe la categoría de tu negocio';
       if (!form.foto_negocio_uri)         e.foto_negocio      = 'La foto del negocio es obligatoria';
     }
-
     if (step === 3) {
       if (!form.banco)                    e.banco            = 'Selecciona un banco';
       else if (form.banco === 'Otro' && !form.banco_otro.trim())
@@ -239,105 +176,21 @@ export default function RegistroRestauranteScreen() {
       if (!form.numero_cuenta.trim())     e.numero_cuenta    = 'El número de cuenta es obligatorio';
       if (!form.titular_cuenta.trim())    e.titular_cuenta   = 'El titular de la cuenta es obligatorio';
     }
-
     if (step === 4) {
       if (!form.dpi_foto_uri && !form.dpi_foto_base64)
         e.dpi_foto = 'La foto del DPI es obligatoria para verificar tu identidad';
     }
-
     setErrors(e);
     return Object.keys(e).length === 0;
   }
 
+  // ── Navegación entre pasos — sin correo en el medio ──────────────────────
   function nextStep() {
     if (!validarPaso()) return;
-    if (step === 1) {
-      // Gate: verify email via OTP before proceeding to step 2
-      enviarOtpEmail();
-      return;
-    }
     setStep(s => Math.min(s + 1, 4) as Step);
   }
 
-  async function enviarOtpEmail() {
-    const email = form.email.trim().toLowerCase();
-    setLoading(true);
-    setErrors(e => ({ ...e, email: '' }));
-    try {
-      // Check for duplicate email first
-      const check = await authAPI.checkEmail(email);
-      if (check.data?.existe) {
-        setErrors(e => ({ ...e, email: 'Este correo ya tiene una cuenta registrada. Inicia sesión o usa otro correo.' }));
-        return;
-      }
-      const emailRedirectTo = 'https://bocara.vercel.app/auth/callback';
-      const metadata = { rol: 'restaurante', role: 'restaurante', flow: 'restaurant-signup' };
-      console.log('[RESTAURANTE SIGNUP] emailRedirectTo:', emailRedirectTo);
-      console.log('[RESTAURANTE SIGNUP] metadata:', metadata);
-
-      // Guardar formulario de paso 1 para recuperarlo al volver del link de confirmación
-      await AsyncStorage.setItem('bocara_pending_restaurante_form', JSON.stringify({
-        nombre: form.nombre, apellido: form.apellido, email,
-        password: form.password, confirmPassword: form.confirmPassword, telefono: form.telefono,
-      }));
-      await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify({
-        role: 'restaurante',
-        returnTo: '/registro-restaurante',
-        flow: 'restaurant-signup',
-        emailConfirmed: false,
-      }));
-
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo,
-          data: metadata,
-        },
-      });
-      if (error) {
-        console.log('[RESTAURANTE SIGNUP] error enviando correo:', error.message);
-        await AsyncStorage.removeItem('bocara_pending_intent');
-        await AsyncStorage.removeItem('bocara_pending_restaurante_form');
-        setErrors(e => ({ ...e, email: 'No se pudo enviar el correo de confirmación. Verifica el correo e intenta de nuevo.' }));
-        return;
-      }
-      console.log('[RESTAURANTE SIGNUP] correo de confirmación enviado correctamente');
-      setEmailEnviado(true);
-      startReenvioCountdown();
-    } catch (err: any) {
-      console.log('[EMAIL VERIFY] error enviando correo:', err.message);
-      setErrors(e => ({ ...e, email: err.message || 'No se pudo enviar el código. Intenta nuevamente.' }));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function reenviarEmail() {
-    if (reenvioSeg > 0) return;
-    setLoading(true);
-    try {
-      const email = form.email.trim().toLowerCase();
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
-          data: { rol: 'restaurante', role: 'restaurante', flow: 'restaurant-signup' },
-        },
-      });
-      if (error) {
-        setErrors(e => ({ ...e, email: 'No se pudo reenviar el correo. Intenta más tarde.' }));
-        return;
-      }
-      startReenvioCountdown();
-    } catch {
-      setErrors(e => ({ ...e, email: 'No se pudo enviar el correo. Intenta nuevamente.' }));
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  // ── Subir foto base64 ─────────────────────────────────────────────────────
   async function subirFotoBase64(base64: string, path: string): Promise<string | null> {
     if (!base64) return null;
     try {
@@ -349,6 +202,7 @@ export default function RegistroRestauranteScreen() {
     }
   }
 
+  // ── Envío final: crear cuenta + negocio ───────────────────────────────────
   async function handleRegistro() {
     if (!validarPaso()) return;
     setLoading(true);
@@ -358,66 +212,45 @@ export default function RegistroRestauranteScreen() {
       const categoriaFinal = form.categoria === 'Otro' ? form.categoria_otro.trim() : form.categoria;
       const nombreBanco    = form.banco === 'Otro' ? form.banco_otro : form.banco;
       const datos_bancarios = {
-        banco:          nombreBanco,
-        numero_cuenta:  form.numero_cuenta,
-        tipo_cuenta:    form.tipo_cuenta,
-        titular:        form.titular_cuenta,
+        banco: nombreBanco, numero_cuenta: form.numero_cuenta,
+        tipo_cuenta: form.tipo_cuenta, titular: form.titular_cuenta,
       };
-
       const lat = form.latitud ? parseFloat(form.latitud) : undefined;
       const lng = form.longitud ? parseFloat(form.longitud) : undefined;
+
       await registroRestaurante({
-        nombre:           form.nombre.trim(),
-        apellido:         form.apellido.trim(),
-        email:            form.email.trim().toLowerCase(),
-        password:         form.password,
-        telefono:         form.telefono.trim(),
-        nombre_negocio:   form.nombre_negocio.trim(),
-        descripcion:      form.descripcion.trim(),
-        categoria:        categoriaFinal,
-        direccion_negocio: form.direccion_negocio.trim(),
-        zona:             form.zona,
+        nombre: form.nombre.trim(), apellido: form.apellido.trim(),
+        email: form.email.trim().toLowerCase(), password: form.password,
+        telefono: form.telefono.trim(), nombre_negocio: form.nombre_negocio.trim(),
+        descripcion: form.descripcion.trim(), categoria: categoriaFinal,
+        direccion_negocio: form.direccion_negocio.trim(), zona: form.zona,
         horario_atencion: form.horario_atencion.trim(),
-        nit:              form.nit.trim(),
-        dpi:              form.dpi.replace(/\s/g, ''),
-        datos_bancarios,
-        latitud:          lat,
-        longitud:         lng,
+        nit: form.nit.trim(), dpi: form.dpi.replace(/\s/g, ''),
+        datos_bancarios, latitud: lat, longitud: lng,
       });
 
       setUploadStatus('Subiendo documentos...');
       let negocioId = '';
-      try {
-        const neg = await negociosAPI.miNegocio();
-        negocioId = neg.data?.id || '';
-      } catch { /* continuar sin fotos */ }
+      try { negocioId = (await negociosAPI.miNegocio()).data?.id || ''; } catch {}
 
-      let dpi_foto_url: string | null = null;
-      let imagen_url:   string | null = null;
-
-      if (negocioId && form.dpi_foto_base64) {
-        setUploadStatus('Subiendo foto del DPI...');
-        dpi_foto_url = await subirFotoBase64(form.dpi_foto_base64, `dpi/${negocioId}_${Date.now()}.jpg`);
-      }
-      if (negocioId && form.foto_negocio_base64) {
-        setUploadStatus('Subiendo foto del negocio...');
-        imagen_url = await subirFotoBase64(form.foto_negocio_base64, `negocios/${negocioId}_${Date.now()}.jpg`);
-      }
-
-      if (negocioId && (dpi_foto_url || imagen_url)) {
-        setUploadStatus('Guardando información...');
-        try {
+      if (negocioId) {
+        let dpi_foto_url: string | null = null;
+        let imagen_url:   string | null = null;
+        if (form.dpi_foto_base64) {
+          setUploadStatus('Subiendo foto del DPI...');
+          dpi_foto_url = await subirFotoBase64(form.dpi_foto_base64, `dpi/${negocioId}_${Date.now()}.jpg`);
+        }
+        if (form.foto_negocio_base64) {
+          setUploadStatus('Subiendo foto del negocio...');
+          imagen_url = await subirFotoBase64(form.foto_negocio_base64, `negocios/${negocioId}_${Date.now()}.jpg`);
+        }
+        if (dpi_foto_url || imagen_url) {
           const updates: Record<string, string> = {};
           if (dpi_foto_url) updates.dpi_foto_url = dpi_foto_url;
           if (imagen_url)   updates.imagen_url   = imagen_url;
-          await negociosAPI.actualizar(negocioId, updates);
-        } catch { /* no bloquear registro si falla subida de fotos */ }
+          try { await negociosAPI.actualizar(negocioId, updates); } catch {}
+        }
       }
-
-      // Limpiar intención — el registro se completó correctamente
-      await AsyncStorage.removeItem('bocara_pending_intent');
-      // Confirmación en pantalla — no usamos Alert.alert porque browsers bloquean
-      // window.alert() llamado desde contextos async largos
       setSubmitted(true);
     } catch (e: any) {
       setSubmitError(e.message || 'Ocurrió un error inesperado. Intenta de nuevo.');
@@ -431,71 +264,24 @@ export default function RegistroRestauranteScreen() {
   const nitLen = form.nit.length;
   const dpiLen = form.dpi.replace(/\s/g, '').length;
 
-  // ── Pantalla: correo de confirmación enviado (esperando que el usuario haga clic en el link) ─
-  if (emailEnviado) {
-    return (
-      <SafeAreaView style={s.root}>
-        <ScrollView contentContainerStyle={se.scroll}>
-          <Text style={se.icon}>📧</Text>
-          <Text style={se.title}>Revisa tu correo</Text>
-          <Text style={se.sub}>
-            Enviamos un enlace de confirmación a:{'\n'}
-            <Text style={se.email}>{form.email}</Text>
-          </Text>
-
-          <View style={se.infoBox}>
-            <Text style={se.infoText}>
-              Abre el correo y presiona{' '}
-              <Text style={se.infoBold}>"Confirmar mi cuenta"</Text>
-              {' '}para continuar con el registro de tu negocio.
-            </Text>
-            <Text style={se.infoHint}>Revisa también tu carpeta de spam.</Text>
-          </View>
-
-          {errors.email ? <Text style={se.error}>{errors.email}</Text> : null}
-
-          <TouchableOpacity
-            style={[se.reenvioBtn, reenvioSeg > 0 && se.reenvioDisabled]}
-            onPress={reenviarEmail}
-            disabled={reenvioSeg > 0 || loading}
-          >
-            <Text style={[se.reenvioText, reenvioSeg > 0 && se.reenvioTextDisabled]}>
-              {reenvioSeg > 0 ? `Reenviar correo en ${reenvioSeg}s` : 'Reenviar correo'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={se.volverBtn} onPress={() => setEmailEnviado(false)}>
-            <Text style={se.volverText}>← Volver y editar correo</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
-  // ── Pantalla de confirmación (en lugar de Alert.alert que browsers bloquean) ─
+  // ── Pantalla de confirmación ──────────────────────────────────────────────
   if (submitted) {
     const categoriaFinal = form.categoria === 'Otro' ? form.categoria_otro : form.categoria;
     return (
       <SafeAreaView style={s.root}>
         <ScrollView contentContainerStyle={sc.scroll}>
-          <View style={sc.iconWrap}>
-            <Text style={sc.icon}>✅</Text>
-          </View>
+          <View style={sc.iconWrap}><Text style={sc.icon}>✅</Text></View>
           <Text style={sc.title}>¡Solicitud enviada!</Text>
           <Text style={sc.subtitle}>
-            Tu solicitud fue recibida exitosamente. El equipo de Bocara revisará tu DPI y datos bancarios.
+            Revisaremos tu información en las próximas 24 a 48 horas. Recibirás un correo de confirmación.
           </Text>
-
           <View style={sc.timeCard}>
             <Text style={sc.timeIcon}>⏳</Text>
             <View style={{ flex: 1, marginLeft: 12 }}>
               <Text style={sc.timeTitle}>Tiempo de revisión: 24 – 48 horas</Text>
-              <Text style={sc.timeSub}>
-                Recibirás una notificación cuando tu negocio sea aprobado.
-              </Text>
+              <Text style={sc.timeSub}>Recibirás una notificación cuando tu negocio sea aprobado.</Text>
             </View>
           </View>
-
           <View style={sc.credCard}>
             <Text style={sc.credTitle}>🔑 Tus credenciales de acceso</Text>
             <View style={sc.credRow}>
@@ -503,50 +289,26 @@ export default function RegistroRestauranteScreen() {
               <Text style={sc.credEmail}>{form.email}</Text>
             </View>
             <View style={sc.credWarning}>
-              <Text style={sc.credWarningText}>
-                ⚠️ Guarda tu contraseña en un lugar seguro. La necesitarás para iniciar sesión en Bocara.
-              </Text>
+              <Text style={sc.credWarningText}>⚠️ Guarda tu contraseña en un lugar seguro.</Text>
             </View>
           </View>
-
           <View style={sc.summaryCard}>
             <Text style={sc.summaryTitle}>📋 Datos registrados</Text>
             {[
-              { label: 'Propietario',  val: `${form.nombre} ${form.apellido}`.trim() },
-              { label: 'Email',        val: form.email },
-              { label: 'Teléfono',     val: form.telefono },
-              { label: 'Negocio',      val: form.nombre_negocio },
-              { label: 'Categoría',    val: categoriaFinal },
-              { label: 'Dirección',    val: `${form.direccion_negocio}, ${form.zona}` },
-              { label: 'Horario',      val: form.horario_atencion },
-              { label: 'NIT',          val: form.nit },
-              { label: 'Banco',        val: form.banco === 'Otro' ? form.banco_otro : form.banco },
-              { label: 'Cuenta',       val: form.numero_cuenta },
-              { label: 'Titular',      val: form.titular_cuenta },
-              { label: 'Foto negocio', val: form.foto_negocio_uri ? '✓ Adjunta' : '—' },
-              { label: 'DPI',          val: form.dpi_foto_uri ? '✓ Adjunto' : '—' },
-            ].map(({ label, val }) =>
-              val && val !== '—' ? (
-                <View key={label} style={sc.row}>
-                  <Text style={sc.rowLabel}>{label}</Text>
-                  <Text style={sc.rowVal} numberOfLines={1}>{val}</Text>
-                </View>
-              ) : null
-            )}
+              { label: 'Propietario', val: `${form.nombre} ${form.apellido}`.trim() },
+              { label: 'Email',       val: form.email },
+              { label: 'Teléfono',    val: form.telefono },
+              { label: 'Negocio',     val: form.nombre_negocio },
+              { label: 'Categoría',   val: categoriaFinal },
+              { label: 'Dirección',   val: `${form.direccion_negocio}, ${form.zona}` },
+              { label: 'Horario',     val: form.horario_atencion },
+            ].map(({ label, val }) => val ? (
+              <View key={label} style={sc.row}>
+                <Text style={sc.rowLabel}>{label}</Text>
+                <Text style={sc.rowVal} numberOfLines={1}>{val}</Text>
+              </View>
+            ) : null)}
           </View>
-
-          <View style={sc.stepsCard}>
-            <Text style={sc.stepsTitle}>¿Qué sigue?</Text>
-            {[
-              '1. Revisamos tu DPI y datos bancarios',
-              '2. Verificamos la información del negocio',
-              '3. Activamos tu cuenta (24-48 h)',
-              '4. Empiezas a publicar',
-            ].map((s) => (
-              <Text key={s} style={sc.stepsItem}>{s}</Text>
-            ))}
-          </View>
-
           <TouchableOpacity style={sc.btn} onPress={() => router.replace('/restaurante')}>
             <Text style={sc.btnText}>Ir a mi panel →</Text>
           </TouchableOpacity>
@@ -585,7 +347,7 @@ export default function RegistroRestauranteScreen() {
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
 
-        {/* ── Banner de rechazo (visible si el negocio fue rechazado) ── */}
+        {/* Banner rechazo */}
         {rechazoInfo && (
           <View style={s.rechazoCard}>
             <Text style={s.rechazoTitle}>⚠️ Tu solicitud fue rechazada</Text>
@@ -597,97 +359,70 @@ export default function RegistroRestauranteScreen() {
                 ))}
               </>
             )}
-            {rechazoInfo.texto ? (
-              <Text style={s.rechazoMotivo}>Motivo: {rechazoInfo.texto}</Text>
-            ) : null}
+            {rechazoInfo.texto ? <Text style={s.rechazoMotivo}>Motivo: {rechazoInfo.texto}</Text> : null}
           </View>
         )}
 
-        {/* ─── PASO 1: Datos del propietario ─── */}
+        {/* ─── PASO 1: Propietario ─── */}
         {step === 1 && (
           <>
             <Text style={s.section}>👤 Datos del propietario</Text>
-            <View style={s.emailInfoBox}>
-              <Text style={s.emailInfoText}>
-                📧 Tu correo electrónico será tu usuario para iniciar sesión en Bocara. Guarda bien tu contraseña.
-              </Text>
+            <View style={s.infoCard}>
+              <Text style={s.infoText}>📧 Tu correo electrónico será tu usuario para iniciar sesión en Bocara.</Text>
             </View>
-            <Field label="Nombre *"              value={form.nombre}   onChange={set('nombre')}   placeholder="María"              error={errors.nombre} />
-            <Field label="Apellido *"            value={form.apellido} onChange={set('apellido')} placeholder="González"           error={errors.apellido} />
-            <Field label="Correo electrónico *"  value={form.email}    onChange={set('email')}    placeholder="maria@negocio.com"  keyboard="email-address" lower error={errors.email} />
-            <Field label="Contraseña *"          value={form.password} onChange={set('password')} placeholder="Mínimo 6 caracteres" secure error={errors.password} />
+            <Field label="Nombre *"              value={form.nombre}          onChange={set('nombre')}          placeholder="María"              error={errors.nombre} />
+            <Field label="Apellido *"            value={form.apellido}        onChange={set('apellido')}        placeholder="González"           error={errors.apellido} />
+            <Field label="Correo electrónico *"  value={form.email}           onChange={set('email')}           placeholder="maria@negocio.com"  keyboard="email-address" lower error={errors.email} />
+            <Field label="Contraseña *"          value={form.password}        onChange={set('password')}        placeholder="Mínimo 6 caracteres" secure error={errors.password} />
             <Field label="Confirmar contraseña *" value={form.confirmPassword} onChange={set('confirmPassword')} placeholder="Repite tu contraseña" secure error={errors.confirmPassword} />
-            <Field label="Teléfono *"            value={form.telefono} onChange={set('telefono')} placeholder="5555-1234"          keyboard="phone-pad"  error={errors.telefono} highlighted={rechazoInfo?.campos.includes('telefono')} />
+            <Field label="Teléfono *"            value={form.telefono}        onChange={set('telefono')}        placeholder="5555-1234"          keyboard="phone-pad" error={errors.telefono} />
           </>
         )}
 
-        {/* ─── PASO 2: Datos del negocio ─── */}
+        {/* ─── PASO 2: Negocio ─── */}
         {step === 2 && (
           <>
             <Text style={s.section}>🍽️ Información del negocio</Text>
+            <Field label="Nombre del negocio *" value={form.nombre_negocio} onChange={set('nombre_negocio')} placeholder="Panadería San Marcos" error={errors.nombre_negocio} />
+            <Field label="Descripción *"        value={form.descripcion}    onChange={set('descripcion')}    placeholder="Somos una panadería artesanal..." multi error={errors.descripcion} />
 
-            <Field label="Nombre del negocio *" value={form.nombre_negocio} onChange={set('nombre_negocio')} placeholder="Panadería San Marcos" error={errors.nombre_negocio} highlighted={rechazoInfo?.campos.includes('nombre_negocio')} />
-            <Field label="Descripción *"        value={form.descripcion}    onChange={set('descripcion')}    placeholder="Somos una panadería artesanal con 10 años de experiencia..." multi error={errors.descripcion} />
-
-            {/* NIT — formato 7-9 dígitos + dash + 1 dígito */}
+            {/* NIT */}
             <View>
               <View style={s.labelRow}>
                 <Text style={s.label}>NIT *</Text>
                 <Text style={[s.counter, nitLen > 10 && s.counterError]}>{nitLen}/10</Text>
               </View>
-              <TextInput
-                style={[s.input, errors.nit && s.inputError]}
-                placeholder="Ej: 1234567-8"
-                placeholderTextColor={Colors.textLight}
-                value={form.nit}
-                onChangeText={(v) => { set('nit')(v); }}
-                maxLength={11}
-              />
+              <TextInput style={[s.input, errors.nit && s.inputError]} placeholder="Ej: 1234567-8" placeholderTextColor={Colors.textLight} value={form.nit} onChangeText={v => set('nit')(v)} maxLength={11} />
               <Text style={s.fieldHint}>7–9 dígitos + guión + 1 dígito. Ej: 1234567-8</Text>
               {errors.nit ? <Text style={s.fieldError}>{errors.nit}</Text> : null}
             </View>
 
-            {/* DPI — exactamente 13 dígitos */}
+            {/* DPI */}
             <View>
               <View style={s.labelRow}>
                 <Text style={s.label}>DPI del propietario *</Text>
-                <Text style={[s.counter, dpiLen > 13 && s.counterError, dpiLen === 13 && s.counterOk]}>
-                  {dpiLen}/13
-                </Text>
+                <Text style={[s.counter, dpiLen > 13 && s.counterError, dpiLen === 13 && s.counterOk]}>{dpiLen}/13</Text>
               </View>
-              <TextInput
-                style={[s.input, errors.dpi && s.inputError]}
-                placeholder="1234 12345 1234  (13 dígitos)"
-                placeholderTextColor={Colors.textLight}
-                value={form.dpi}
-                onChangeText={(v) => { set('dpi')(v.replace(/[^\d\s]/g, '')); }}
-                keyboardType="numeric"
-                maxLength={15}
-              />
+              <TextInput style={[s.input, errors.dpi && s.inputError]} placeholder="1234 12345 1234  (13 dígitos)" placeholderTextColor={Colors.textLight} value={form.dpi} onChangeText={v => set('dpi')(v.replace(/[^\d\s]/g, ''))} keyboardType="numeric" maxLength={15} />
               <Text style={s.fieldHint}>Exactamente 13 dígitos numéricos</Text>
               {errors.dpi ? <Text style={s.fieldError}>{errors.dpi}</Text> : null}
             </View>
 
-            <Field label="Dirección *"           value={form.direccion_negocio} onChange={set('direccion_negocio')} placeholder="5a Avenida 10-35, Zona 1" error={errors.direccion_negocio} highlighted={rechazoInfo?.campos.includes('direccion')} />
+            <Field label="Dirección *" value={form.direccion_negocio} onChange={set('direccion_negocio')} placeholder="5a Avenida 10-35, Zona 1" error={errors.direccion_negocio} />
 
             {/* GPS */}
             <View style={s.gpsCard}>
               <View style={s.gpsHeader}>
                 <Text style={s.gpsTitle}>📍 Ubicación en el mapa</Text>
-                {form.latitud ? (
-                  <View style={s.gpsBadgeOk}><Text style={s.gpsBadgeText}>✓ GPS capturado</Text></View>
-                ) : (
-                  <View style={s.gpsBadgeMissing}><Text style={s.gpsBadgeText}>Sin GPS</Text></View>
-                )}
+                {form.latitud
+                  ? <View style={s.gpsBadgeOk}><Text style={s.gpsBadgeText}>✓ GPS capturado</Text></View>
+                  : <View style={s.gpsBadgeMissing}><Text style={s.gpsBadgeText}>Sin GPS</Text></View>
+                }
               </View>
               {form.latitud ? (
-                <Text style={s.gpsCoordsText}>
-                  Lat: {parseFloat(form.latitud).toFixed(6)}{'\n'}Lng: {parseFloat(form.longitud).toFixed(6)}
-                </Text>
+                <Text style={s.gpsCoordsText}>Lat: {parseFloat(form.latitud).toFixed(6)}{'\n'}Lng: {parseFloat(form.longitud).toFixed(6)}</Text>
               ) : (
-                <Text style={s.gpsWarn}>
-                  Para mostrar tu negocio a clientes cercanos, necesitamos una ubicación exacta.
-                </Text>
+                <Text style={s.gpsWarn}>Para mostrar tu negocio a clientes cercanos, necesitamos una ubicación exacta.</Text>
               )}
               <TouchableOpacity style={s.gpsBtn} onPress={capturarUbicacion} disabled={locCapturando}>
                 {locCapturando
@@ -695,33 +430,21 @@ export default function RegistroRestauranteScreen() {
                   : <Text style={s.gpsBtnText}>{form.latitud ? '📡 Actualizar mi ubicación' : '📡 Usar mi ubicación actual'}</Text>
                 }
               </TouchableOpacity>
-              {!form.latitud && (
-                <Text style={s.gpsSkipHint}>Puedes agregar la ubicación después desde tu panel de negocio.</Text>
-              )}
+              {!form.latitud && <Text style={s.gpsSkipHint}>Puedes agregar la ubicación después desde tu panel.</Text>}
             </View>
 
             {/* Horario */}
             <View>
               <Text style={s.label}>Horario de atención *</Text>
-              <TextInput
-                style={[s.input, errors.horario_atencion && s.inputError]}
-                placeholder="Ej: Lunes a Viernes 7:00am - 9:00pm"
-                placeholderTextColor={Colors.textLight}
-                value={form.horario_atencion}
-                onChangeText={set('horario_atencion')}
-              />
+              <TextInput style={[s.input, errors.horario_atencion && s.inputError]} placeholder="Ej: Lunes a Viernes 7:00am - 9:00pm" placeholderTextColor={Colors.textLight} value={form.horario_atencion} onChangeText={set('horario_atencion')} />
               {errors.horario_atencion ? <Text style={s.fieldError}>{errors.horario_atencion}</Text> : null}
             </View>
 
-            {/* Zona — flexWrap funciona en web y móvil */}
+            {/* Zona */}
             <Text style={s.label}>Zona / Sector *</Text>
             <View style={s.chipsWrap}>
               {ZONAS_GT.map((z) => (
-                <TouchableOpacity
-                  key={z}
-                  style={[s.chip, form.zona === z && s.chipActive]}
-                  onPress={() => { setForm(f => ({ ...f, zona: z })); setErrors(e => ({ ...e, zona: '' })); }}
-                >
+                <TouchableOpacity key={z} style={[s.chip, form.zona === z && s.chipActive]} onPress={() => { setForm(f => ({ ...f, zona: z })); setErrors(e => ({ ...e, zona: '' })); }}>
                   <Text style={[s.chipText, form.zona === z && s.chipTextActive]}>{z}</Text>
                 </TouchableOpacity>
               ))}
@@ -733,111 +456,59 @@ export default function RegistroRestauranteScreen() {
             <Text style={s.label}>Categoría *</Text>
             <View style={s.chipsWrap}>
               {CATEGORIAS.map((cat) => (
-                <TouchableOpacity
-                  key={cat}
-                  style={[s.chip, form.categoria === cat && s.chipActive]}
-                  onPress={() => {
-                    setForm(f => ({ ...f, categoria: cat, categoria_otro: cat !== 'Otro' ? '' : f.categoria_otro }));
-                    setErrors(e => ({ ...e, categoria: '', categoria_otro: '' }));
-                  }}
-                >
+                <TouchableOpacity key={cat} style={[s.chip, form.categoria === cat && s.chipActive]} onPress={() => { setForm(f => ({ ...f, categoria: cat, categoria_otro: cat !== 'Otro' ? '' : f.categoria_otro })); setErrors(e => ({ ...e, categoria: '', categoria_otro: '' })); }}>
                   <Text style={[s.chipText, form.categoria === cat && s.chipTextActive]}>{cat}</Text>
                 </TouchableOpacity>
               ))}
             </View>
             {form.categoria === 'Otro' && (
-              <TextInput
-                style={[s.input, { marginTop: 8 }, errors.categoria_otro && s.inputError]}
-                placeholder="Escribe tu categoría (ej: Heladería, Fusión, Repostería...)"
-                placeholderTextColor={Colors.textLight}
-                value={form.categoria_otro}
-                onChangeText={set('categoria_otro')}
-                autoFocus
-              />
+              <TextInput style={[s.input, { marginTop: 8 }, errors.categoria_otro && s.inputError]} placeholder="Escribe tu categoría (ej: Heladería, Repostería...)" placeholderTextColor={Colors.textLight} value={form.categoria_otro} onChangeText={set('categoria_otro')} autoFocus />
             )}
             {errors.categoria      ? <Text style={s.fieldError}>{errors.categoria}</Text>       : null}
             {errors.categoria_otro ? <Text style={s.fieldError}>{errors.categoria_otro}</Text>  : null}
             <View style={{ height: 14 }} />
 
-            {/* Foto del negocio — OBLIGATORIA desde paso 2 */}
+            {/* Foto negocio */}
             <Text style={s.section}>🏪 Foto del negocio *</Text>
-            <TouchableOpacity
-              style={[s.fotoBtn, errors.foto_negocio && s.fotoBtnError]}
-              onPress={() => seleccionarFoto('negocio')}
-              activeOpacity={0.85}
-            >
-              {form.foto_negocio_uri ? (
-                <Image source={{ uri: form.foto_negocio_uri }} style={s.fotoPreview} contentFit="cover" />
-              ) : (
-                <View style={s.fotoPlaceholder}>
-                  <Text style={{ fontSize: 48 }}>🏪</Text>
-                  <Text style={s.fotoPlaceholderText}>Toca para seleccionar foto</Text>
-                  <Text style={{ fontSize: 11, color: Colors.textLight, marginTop: 2 }}>Fachada o interior del negocio</Text>
-                </View>
-              )}
-              <View style={s.fotoOverlay}>
-                <Text style={s.fotoOverlayText}>
-                  📷 {form.foto_negocio_uri ? 'Cambiar foto del negocio' : 'Seleccionar foto (obligatorio)'}
-                </Text>
-              </View>
+            <TouchableOpacity style={[s.fotoBtn, errors.foto_negocio && s.fotoBtnError]} onPress={() => seleccionarFoto('negocio')} activeOpacity={0.85}>
+              {form.foto_negocio_uri
+                ? <Image source={{ uri: form.foto_negocio_uri }} style={s.fotoPreview} contentFit="cover" />
+                : <View style={s.fotoPlaceholder}><Text style={{ fontSize: 48 }}>🏪</Text><Text style={s.fotoPlaceholderText}>Toca para seleccionar foto</Text></View>
+              }
+              <View style={s.fotoOverlay}><Text style={s.fotoOverlayText}>📷 {form.foto_negocio_uri ? 'Cambiar foto' : 'Seleccionar foto (obligatorio)'}</Text></View>
             </TouchableOpacity>
             {errors.foto_negocio ? <Text style={s.fieldError}>{errors.foto_negocio}</Text> : null}
           </>
         )}
 
-        {/* ─── PASO 3: Datos bancarios ─── */}
+        {/* ─── PASO 3: Bancario ─── */}
         {step === 3 && (
           <>
             <Text style={s.section}>🏦 Datos bancarios</Text>
             <View style={s.infoCard}>
-              <Text style={s.infoText}>
-                Estos datos se usan para transferirte el 75% de tus ventas. Son completamente seguros y solo los ve el equipo de Bocara.
-              </Text>
+              <Text style={s.infoText}>Estos datos se usan para transferirte el 75% de tus ventas. Son completamente seguros.</Text>
             </View>
-
             <Text style={s.label}>Banco *</Text>
             <View style={s.chipsWrap}>
               {BANCOS_GT.map((b) => (
-                <TouchableOpacity
-                  key={b}
-                  style={[s.chip, form.banco === b && s.chipActive]}
-                  onPress={() => {
-                    setForm(f => ({ ...f, banco: b, banco_otro: b === 'Otro' ? f.banco_otro : '' }));
-                    setErrors(e => ({ ...e, banco: '', banco_otro: '' }));
-                  }}
-                >
+                <TouchableOpacity key={b} style={[s.chip, form.banco === b && s.chipActive]} onPress={() => { setForm(f => ({ ...f, banco: b, banco_otro: b === 'Otro' ? f.banco_otro : '' })); setErrors(e => ({ ...e, banco: '', banco_otro: '' })); }}>
                   <Text style={[s.chipText, form.banco === b && s.chipTextActive]}>{b}</Text>
                 </TouchableOpacity>
               ))}
             </View>
             {errors.banco ? <Text style={s.fieldError}>{errors.banco}</Text> : null}
             <View style={{ height: 14 }} />
-
-            {form.banco === 'Otro' && (
-              <Field
-                label="Nombre del banco *"
-                value={form.banco_otro}
-                onChange={set('banco_otro')}
-                placeholder="Escribe el nombre de tu banco"
-                error={errors.banco_otro}
-              />
-            )}
-
+            {form.banco === 'Otro' && <Field label="Nombre del banco *" value={form.banco_otro} onChange={set('banco_otro')} placeholder="Escribe el nombre de tu banco" error={errors.banco_otro} />}
             <Text style={s.label}>Tipo de cuenta *</Text>
             <View style={[s.row, { marginBottom: 16 }]}>
               {TIPOS_CUENTA.map((t) => (
-                <TouchableOpacity
-                  key={t}
-                  style={[s.chipSmall, form.tipo_cuenta === t && s.chipActive]}
-                  onPress={() => setForm(f => ({ ...f, tipo_cuenta: t }))}
-                >
+                <TouchableOpacity key={t} style={[s.chipSmall, form.tipo_cuenta === t && s.chipActive]} onPress={() => setForm(f => ({ ...f, tipo_cuenta: t }))}>
                   <Text style={[s.chipText, form.tipo_cuenta === t && s.chipTextActive]}>{t}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
-            <Field label="Número de cuenta *"    value={form.numero_cuenta}  onChange={set('numero_cuenta')}  placeholder="000-000000-00" keyboard="numeric" error={errors.numero_cuenta} />
-            <Field label="Titular de la cuenta *" value={form.titular_cuenta} onChange={set('titular_cuenta')} placeholder="María González"                   error={errors.titular_cuenta} />
+            <Field label="Número de cuenta *"     value={form.numero_cuenta}  onChange={set('numero_cuenta')}  placeholder="000-000000-00" keyboard="numeric" error={errors.numero_cuenta} />
+            <Field label="Titular de la cuenta *"  value={form.titular_cuenta} onChange={set('titular_cuenta')} placeholder="María González"                   error={errors.titular_cuenta} />
           </>
         )}
 
@@ -846,53 +517,34 @@ export default function RegistroRestauranteScreen() {
           <>
             <Text style={s.section}>🪪 DPI del representante legal *</Text>
             <View style={s.infoCard}>
-              <Text style={s.infoText}>
-                Necesitamos una foto clara del DPI del propietario para verificar tu identidad.
-                Esta información es confidencial y solo la revisa el equipo de Bocara.
-              </Text>
+              <Text style={s.infoText}>Necesitamos una foto clara del DPI del propietario para verificar tu identidad. Esta información es confidencial.</Text>
             </View>
-
-            <TouchableOpacity
-              style={[s.fotoBtn, { height: 160 }, errors.dpi_foto && s.fotoBtnError]}
-              onPress={() => seleccionarFoto('dpi')}
-              activeOpacity={0.85}
-            >
-              {form.dpi_foto_uri ? (
-                <Image source={{ uri: form.dpi_foto_uri }} style={s.fotoPreview} contentFit="cover" />
-              ) : (
-                <View style={[s.fotoPlaceholder, { backgroundColor: '#FEF3C7' }]}>
-                  <Text style={{ fontSize: 40 }}>🪪</Text>
-                  <Text style={s.fotoPlaceholderText}>Toca para fotografiar el DPI</Text>
-                  <Text style={{ fontSize: 11, color: Colors.textLight, marginTop: 2 }}>Frente del documento, bien iluminado</Text>
-                </View>
-              )}
+            <TouchableOpacity style={[s.fotoBtn, { height: 160 }, errors.dpi_foto && s.fotoBtnError]} onPress={() => seleccionarFoto('dpi')} activeOpacity={0.85}>
+              {form.dpi_foto_uri
+                ? <Image source={{ uri: form.dpi_foto_uri }} style={s.fotoPreview} contentFit="cover" />
+                : <View style={[s.fotoPlaceholder, { backgroundColor: '#FEF3C7' }]}><Text style={{ fontSize: 40 }}>🪪</Text><Text style={s.fotoPlaceholderText}>Toca para fotografiar el DPI</Text></View>
+              }
               <View style={[s.fotoOverlay, !form.dpi_foto_uri && { backgroundColor: 'rgba(245,158,11,0.9)' }]}>
-                <Text style={s.fotoOverlayText}>
-                  {form.dpi_foto_uri ? '✓ DPI seleccionado — toca para cambiar' : '📷 Seleccionar foto del DPI (obligatorio)'}
-                </Text>
+                <Text style={s.fotoOverlayText}>{form.dpi_foto_uri ? '✓ DPI seleccionado — toca para cambiar' : '📷 Seleccionar foto del DPI (obligatorio)'}</Text>
               </View>
             </TouchableOpacity>
             {errors.dpi_foto ? <Text style={s.fieldError}>{errors.dpi_foto}</Text> : null}
 
-            {/* Resumen completo */}
+            {/* Resumen */}
             <View style={[s.resumenCard, { marginTop: 20 }]}>
               <Text style={s.resumenTitle}>📋 Resumen de tu solicitud</Text>
               {([
-                { label: 'Propietario',   val: `${form.nombre} ${form.apellido}`.trim() },
-                { label: 'Email',         val: form.email },
-                { label: 'Teléfono',      val: form.telefono },
-                { label: 'Negocio',       val: form.nombre_negocio },
-                { label: 'Categoría',     val: form.categoria === 'Otro' ? form.categoria_otro : form.categoria },
-                { label: 'Dirección',     val: `${form.direccion_negocio}, ${form.zona}` },
-                { label: 'Horario',       val: form.horario_atencion },
-                { label: 'NIT',           val: form.nit },
-                { label: 'DPI',           val: form.dpi },
-                { label: 'Banco',         val: form.banco === 'Otro' ? form.banco_otro : form.banco },
-                { label: 'Tipo cuenta',   val: form.tipo_cuenta },
-                { label: 'Cuenta',        val: form.numero_cuenta },
-                { label: 'Titular',       val: form.titular_cuenta },
-                { label: 'Foto negocio',  val: form.foto_negocio_uri ? '✓ Adjunta' : '—' },
-                { label: 'DPI escaneado', val: form.dpi_foto_uri ? '✓ Adjunto' : '⚠ Pendiente' },
+                { label: 'Propietario', val: `${form.nombre} ${form.apellido}`.trim() },
+                { label: 'Email',       val: form.email },
+                { label: 'Teléfono',    val: form.telefono },
+                { label: 'Negocio',     val: form.nombre_negocio },
+                { label: 'Categoría',   val: form.categoria === 'Otro' ? form.categoria_otro : form.categoria },
+                { label: 'Dirección',   val: `${form.direccion_negocio}, ${form.zona}` },
+                { label: 'Horario',     val: form.horario_atencion },
+                { label: 'NIT',         val: form.nit },
+                { label: 'Banco',       val: form.banco === 'Otro' ? form.banco_otro : form.banco },
+                { label: 'Cuenta',      val: form.numero_cuenta },
+                { label: 'Titular',     val: form.titular_cuenta },
               ] as { label: string; val: string }[]).map(({ label, val }) =>
                 val ? (
                   <View key={label} style={s.resumenRow}>
@@ -906,16 +558,14 @@ export default function RegistroRestauranteScreen() {
             <View style={s.pendienteInfo}>
               <Text style={{ fontSize: 24 }}>⏳</Text>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={s.pendienteTitle}>Estado: En revisión (24-48 h)</Text>
-                <Text style={s.pendienteSub}>
-                  Verificaremos tu DPI y datos. Recibirás una notificación cuando sea aprobado.
-                </Text>
+                <Text style={s.pendienteTitle}>Revisión en 24-48 horas</Text>
+                <Text style={s.pendienteSub}>Recibirás un correo de confirmación y una notificación en la app.</Text>
               </View>
             </View>
           </>
         )}
 
-        {/* ── Botones de navegación ── */}
+        {/* Botones */}
         <View style={s.btnRow}>
           {step < 4 ? (
             <TouchableOpacity style={s.btnNext} onPress={nextStep}>
@@ -945,15 +595,13 @@ export default function RegistroRestauranteScreen() {
             </>
           )}
         </View>
-
         <View style={{ height: 40 }} />
       </ScrollView>
-
     </KeyboardAvoidingView>
   );
 }
 
-// ── Reusable field component with error display ──────────────────────────────
+// ── Field helper ──────────────────────────────────────────────────────────────
 function Field({ label, value, onChange, placeholder, multi, keyboard, secure, lower, error, highlighted }: {
   label: string; value: string; onChange: (v: string) => void;
   placeholder: string; multi?: boolean; keyboard?: any;
@@ -964,15 +612,10 @@ function Field({ label, value, onChange, placeholder, multi, keyboard, secure, l
       <Text style={sf.label}>{label}</Text>
       <TextInput
         style={[sf.input, multi && { height: 80 }, error && sf.inputError, highlighted && !error && sf.inputHighlighted]}
-        placeholder={placeholder}
-        placeholderTextColor={Colors.textLight}
-        keyboardType={keyboard || 'default'}
-        autoCapitalize={lower ? 'none' : multi ? 'sentences' : 'words'}
-        secureTextEntry={secure}
-        value={value}
-        onChangeText={onChange}
-        multiline={multi}
-        textAlignVertical={multi ? 'top' : 'center'}
+        placeholder={placeholder} placeholderTextColor={Colors.textLight}
+        keyboardType={keyboard || 'default'} autoCapitalize={lower ? 'none' : multi ? 'sentences' : 'words'}
+        secureTextEntry={secure} value={value} onChangeText={onChange}
+        multiline={multi} textAlignVertical={multi ? 'top' : 'center'}
       />
       {error ? <Text style={sf.error}>{error}</Text> : null}
     </View>
@@ -980,38 +623,38 @@ function Field({ label, value, onChange, placeholder, multi, keyboard, secure, l
 }
 
 const sf = StyleSheet.create({
-  label:           { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
-  input:           { backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 4 },
-  inputError:      { borderColor: Colors.error },
-  inputHighlighted:{ borderColor: '#F59E0B', borderWidth: 2 },
-  error:           { fontSize: 12, color: Colors.error, marginBottom: 12, marginTop: 2 },
+  label:            { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
+  input:            { backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 4 },
+  inputError:       { borderColor: Colors.error },
+  inputHighlighted: { borderColor: '#F59E0B', borderWidth: 2 },
+  error:            { fontSize: 12, color: Colors.error, marginBottom: 12, marginTop: 2 },
 });
 
 const s = StyleSheet.create({
-  root:            { flex: 1, backgroundColor: Colors.background },
+  root:            { flex: 1, backgroundColor: Colors.surface },
   header:          { flexDirection: 'row', alignItems: 'center', padding: 16, paddingTop: 52, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   back:            { padding: 8, marginRight: 8 },
-  backText:        { fontSize: 22, color: Colors.orange, fontWeight: '700' },
-  headerTitle:     { fontSize: 20, fontWeight: '900', color: Colors.brown },
+  backText:        { fontSize: 22, color: Colors.accent, fontWeight: '700' },
+  headerTitle:     { fontSize: 20, fontWeight: '900', color: Colors.primary },
   headerSub:       { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
   stepsRow:        { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.white, paddingHorizontal: 16, paddingBottom: 16 },
   stepItem:        { flexDirection: 'row', alignItems: 'center' },
   stepDot:         { width: 28, height: 28, borderRadius: 14, backgroundColor: Colors.border, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: Colors.border },
-  stepDotActive:   { backgroundColor: Colors.orange, borderColor: Colors.orange },
-  stepDotDone:     { backgroundColor: Colors.green,  borderColor: Colors.green },
+  stepDotActive:   { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  stepDotDone:     { backgroundColor: Colors.primary, borderColor: Colors.primary },
   stepDotText:     { fontSize: 12, fontWeight: '800', color: Colors.textLight },
   stepDotTextActive: { color: Colors.white },
   stepLabel:       { fontSize: 10, color: Colors.textLight, fontWeight: '600', marginHorizontal: 4 },
-  stepLabelActive: { color: Colors.orange, fontWeight: '800' },
+  stepLabelActive: { color: Colors.accent, fontWeight: '800' },
   stepLine:        { width: 20, height: 2, backgroundColor: Colors.border, marginHorizontal: 2 },
-  stepLineDone:    { backgroundColor: Colors.green },
+  stepLineDone:    { backgroundColor: Colors.primary },
   scroll:          { padding: 20 },
-  section:         { fontSize: 16, fontWeight: '800', color: Colors.brown, marginBottom: 16, marginTop: 4 },
+  section:         { fontSize: 16, fontWeight: '800', color: Colors.primary, marginBottom: 16, marginTop: 4 },
   label:           { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   labelRow:        { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   counter:         { fontSize: 11, color: Colors.textLight, fontWeight: '600' },
   counterError:    { color: Colors.error },
-  counterOk:       { color: Colors.green },
+  counterOk:       { color: Colors.primary },
   fieldHint:       { fontSize: 11, color: Colors.textLight, marginBottom: 4, marginTop: 2 },
   fieldError:      { fontSize: 12, color: Colors.error, marginBottom: 12, marginTop: 2 },
   input:           { backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, borderRadius: 12, padding: 14, fontSize: 15, color: Colors.textPrimary, marginBottom: 4 },
@@ -1020,32 +663,31 @@ const s = StyleSheet.create({
   chipsWrap:       { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   chip:            { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: Colors.white },
   chipSmall:       { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: Colors.white },
-  chipActive:      { backgroundColor: Colors.orange, borderColor: Colors.orange },
+  chipActive:      { backgroundColor: Colors.primary, borderColor: Colors.primary },
   chipText:        { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
   chipTextActive:  { color: Colors.white },
-  infoCard:        { backgroundColor: Colors.brownLight, borderRadius: 12, padding: 14, marginBottom: 20 },
-  infoText:        { fontSize: 13, color: Colors.brown, lineHeight: 20 },
-  // GPS card
+  infoCard:        { backgroundColor: Colors.accentLight, borderRadius: 12, padding: 14, marginBottom: 20 },
+  infoText:        { fontSize: 13, color: Colors.primary, lineHeight: 20 },
   gpsCard:         { backgroundColor: Colors.white, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1.5, borderColor: Colors.border },
   gpsHeader:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  gpsTitle:        { fontSize: 14, fontWeight: '800', color: Colors.brown },
+  gpsTitle:        { fontSize: 14, fontWeight: '800', color: Colors.primary },
   gpsBadgeOk:      { backgroundColor: '#D1FAE5', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
   gpsBadgeMissing: { backgroundColor: '#FEF3C7', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
-  gpsBadgeText:    { fontSize: 11, fontWeight: '700', color: Colors.brown },
+  gpsBadgeText:    { fontSize: 11, fontWeight: '700', color: Colors.primary },
   gpsCoordsText:   { fontSize: 12, color: Colors.textSecondary, marginBottom: 12, lineHeight: 18 },
   gpsWarn:         { fontSize: 12, color: Colors.textSecondary, marginBottom: 12, lineHeight: 18 },
-  gpsBtn:          { backgroundColor: Colors.orange, borderRadius: 12, padding: 12, alignItems: 'center', marginBottom: 8 },
+  gpsBtn:          { backgroundColor: Colors.primary, borderRadius: 12, padding: 12, alignItems: 'center', marginBottom: 8 },
   gpsBtnText:      { color: Colors.white, fontWeight: '700', fontSize: 14 },
   gpsSkipHint:     { fontSize: 11, color: Colors.textLight, textAlign: 'center' },
   fotoBtn:         { borderRadius: 16, overflow: 'hidden', height: 180, marginBottom: 4 },
   fotoBtnError:    { borderWidth: 2, borderColor: Colors.error, borderRadius: 16 },
   fotoPreview:     { width: '100%', height: '100%' },
-  fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.accentLight, alignItems: 'center', justifyContent: 'center', gap: 8 },
   fotoPlaceholderText: { fontSize: 14, color: Colors.textSecondary, fontWeight: '600' },
   fotoOverlay:     { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.5)', paddingVertical: 10, alignItems: 'center' },
   fotoOverlayText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
   resumenCard:     { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1.5, borderColor: Colors.border },
-  resumenTitle:    { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
+  resumenTitle:    { fontSize: 14, fontWeight: '800', color: Colors.primary, marginBottom: 12 },
   resumenRow:      { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border },
   resumenLabel:    { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   resumenVal:      { fontSize: 12, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
@@ -1053,15 +695,13 @@ const s = StyleSheet.create({
   pendienteTitle:  { fontSize: 14, fontWeight: '800', color: '#92400E' },
   pendienteSub:    { fontSize: 12, color: '#B45309', marginTop: 2, lineHeight: 18 },
   btnRow:          { marginTop: 8 },
-  btnNext:         { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center' },
+  btnNext:         { backgroundColor: Colors.primary, borderRadius: 14, padding: 16, alignItems: 'center' },
   btnNextText:     { color: Colors.white, fontWeight: '800', fontSize: 16 },
-  btnSubmit:       { backgroundColor: Colors.green,  borderRadius: 14, padding: 16, alignItems: 'center' },
+  btnSubmit:       { backgroundColor: Colors.accent, borderRadius: 14, padding: 16, alignItems: 'center' },
   btnSubmitText:   { color: Colors.white, fontWeight: '800', fontSize: 16 },
   btnDisabled:     { backgroundColor: Colors.textLight },
   errorCard:       { backgroundColor: '#FEE2E2', borderRadius: 12, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#FCA5A5' },
   errorCardText:   { fontSize: 13, color: '#DC2626', fontWeight: '600', lineHeight: 20 },
-  emailInfoBox:    { backgroundColor: '#EFF6FF', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1, borderColor: '#BFDBFE' },
-  emailInfoText:   { fontSize: 13, color: '#1D4ED8', lineHeight: 20 },
   rechazoCard:     { backgroundColor: '#FEF2F2', borderRadius: 12, padding: 14, marginBottom: 20, borderWidth: 1.5, borderColor: '#FCA5A5' },
   rechazoTitle:    { fontSize: 14, fontWeight: '800', color: '#DC2626', marginBottom: 6 },
   rechazoSub:      { fontSize: 13, color: '#7F1D1D', fontWeight: '600', marginBottom: 4 },
@@ -1069,50 +709,28 @@ const s = StyleSheet.create({
   rechazoMotivo:   { fontSize: 12, color: '#7F1D1D', marginTop: 8, fontStyle: 'italic' },
 });
 
-const se = StyleSheet.create({
-  scroll:           { padding: 24, paddingTop: 56, alignItems: 'center' },
-  icon:             { fontSize: 64, marginBottom: 16 },
-  title:            { fontSize: 26, fontWeight: '900', color: Colors.brown, marginBottom: 12, textAlign: 'center' },
-  sub:              { fontSize: 15, color: Colors.textSecondary, lineHeight: 22, textAlign: 'center', marginBottom: 24 },
-  email:            { fontWeight: '800', color: Colors.brown },
-  infoBox:          { backgroundColor: '#EFF6FF', borderRadius: 16, padding: 20, marginBottom: 24, width: '100%', borderWidth: 1, borderColor: '#BFDBFE' },
-  infoText:         { fontSize: 14, color: '#1D4ED8', lineHeight: 22, textAlign: 'center' },
-  infoBold:         { fontWeight: '800' },
-  infoHint:         { fontSize: 12, color: '#3B82F6', marginTop: 8, textAlign: 'center' },
-  error:            { color: '#e53e3e', fontSize: 13, marginBottom: 12, textAlign: 'center' },
-  reenvioBtn:       { paddingVertical: 14, paddingHorizontal: 28, borderRadius: 14, borderWidth: 1.5, borderColor: Colors.primary, marginBottom: 16 },
-  reenvioDisabled:  { borderColor: Colors.border },
-  reenvioText:      { color: Colors.primary, fontWeight: '700', fontSize: 14 },
-  reenvioTextDisabled: { color: Colors.textLight },
-  volverBtn:        { padding: 12, marginTop: 4 },
-  volverText:       { color: Colors.textSecondary, fontWeight: '600', fontSize: 14 },
-});
-
 const sc = StyleSheet.create({
   scroll:       { padding: 24, alignItems: 'center' },
   iconWrap:     { width: 96, height: 96, borderRadius: 48, backgroundColor: '#D1FAE5', alignItems: 'center', justifyContent: 'center', marginBottom: 20, marginTop: 20 },
   icon:         { fontSize: 48 },
-  title:        { fontSize: 26, fontWeight: '900', color: Colors.brown, textAlign: 'center', marginBottom: 12 },
+  title:        { fontSize: 26, fontWeight: '900', color: Colors.primary, textAlign: 'center', marginBottom: 12 },
   subtitle:     { fontSize: 15, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: 24, paddingHorizontal: 8 },
   timeCard:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF3C7', borderRadius: 14, padding: 16, marginBottom: 24, width: '100%', borderWidth: 1, borderColor: '#F59E0B40' },
   timeIcon:     { fontSize: 28 },
   timeTitle:    { fontSize: 14, fontWeight: '800', color: '#92400E', marginBottom: 4 },
   timeSub:      { fontSize: 12, color: '#B45309', lineHeight: 18 },
-  summaryCard:  { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 1.5, borderColor: Colors.border },
-  summaryTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
-  row:          { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  rowLabel:     { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
-  rowVal:       { fontSize: 12, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
-  stepsCard:    { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 24, width: '100%', borderWidth: 1.5, borderColor: Colors.border },
-  stepsTitle:   { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 10 },
-  stepsItem:    { fontSize: 13, color: Colors.textSecondary, paddingVertical: 5, lineHeight: 20 },
-  btn:          { backgroundColor: Colors.orange, borderRadius: 14, padding: 16, alignItems: 'center', width: '100%', marginBottom: 20 },
-  btnText:      { color: Colors.white, fontWeight: '900', fontSize: 16 },
-  credCard:     { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 2, borderColor: Colors.orange },
-  credTitle:    { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
+  credCard:     { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 2, borderColor: Colors.accent },
+  credTitle:    { fontSize: 14, fontWeight: '800', color: Colors.primary, marginBottom: 12 },
   credRow:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   credLabel:    { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
   credEmail:    { fontSize: 13, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
   credWarning:  { backgroundColor: '#FEF3C7', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#F59E0B40' },
   credWarningText: { fontSize: 12, color: '#92400E', lineHeight: 18 },
+  summaryCard:  { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 1.5, borderColor: Colors.border },
+  summaryTitle: { fontSize: 14, fontWeight: '800', color: Colors.primary, marginBottom: 12 },
+  row:          { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  rowLabel:     { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  rowVal:       { fontSize: 12, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
+  btn:          { backgroundColor: Colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', width: '100%', marginBottom: 20 },
+  btnText:      { color: Colors.white, fontWeight: '900', fontSize: 16 },
 });

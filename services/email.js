@@ -108,4 +108,133 @@ function templateOlvidoContrasena(nombre, codigo) {
 </body></html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena };
+function templateBienvenidaRestaurante(nombrePropietario, nombreNegocio) {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F5F0EB;font-family:'Helvetica Neue',Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08)">
+
+        <!-- Header negro con logo -->
+        <tr>
+          <td style="background:#1A1A1A;padding:36px 40px;text-align:center">
+            <div style="font-size:32px;font-weight:900;letter-spacing:-1px;color:#C8A97E;margin-bottom:4px">
+              Bocara <span style="color:#FFFFFF">Food</span>
+            </div>
+            <div style="font-size:13px;color:rgba(200,169,126,0.7);letter-spacing:2px;text-transform:uppercase;margin-top:6px">
+              Panel para Restaurantes
+            </div>
+          </td>
+        </tr>
+
+        <!-- Ícono de confirmación -->
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center">
+            <div style="display:inline-block;background:#F5F0EB;border-radius:50%;width:80px;height:80px;line-height:80px;font-size:40px;margin-bottom:8px">
+              ✅
+            </div>
+          </td>
+        </tr>
+
+        <!-- Título principal -->
+        <tr>
+          <td style="padding:16px 40px 8px;text-align:center">
+            <h1 style="margin:0;font-size:28px;font-weight:900;color:#1A1A1A;letter-spacing:-0.5px">
+              ¡Recibimos tu solicitud!
+            </h1>
+          </td>
+        </tr>
+
+        <!-- Subtítulo -->
+        <tr>
+          <td style="padding:8px 40px 28px;text-align:center">
+            <p style="margin:0;font-size:16px;color:#64748B;line-height:24px">
+              Hola, <strong style="color:#1A1A1A">${nombrePropietario}</strong>. Tu negocio
+              <strong style="color:#C8A97E">${nombreNegocio}</strong> ha sido registrado y está siendo revisado por nuestro equipo.
+            </p>
+          </td>
+        </tr>
+
+        <!-- Separador dorado -->
+        <tr>
+          <td style="padding:0 40px">
+            <div style="height:2px;background:linear-gradient(90deg,transparent,#C8A97E,transparent)"></div>
+          </td>
+        </tr>
+
+        <!-- Bloque de tiempo de revisión -->
+        <tr>
+          <td style="padding:28px 40px">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;border-radius:16px;border-left:4px solid #C8A97E">
+              <tr>
+                <td style="padding:20px 24px">
+                  <div style="font-size:13px;font-weight:700;color:#C8A97E;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+                    ⏳ Tiempo de revisión
+                  </div>
+                  <div style="font-size:22px;font-weight:900;color:#1A1A1A;margin-bottom:6px">
+                    24 a 48 horas hábiles
+                  </div>
+                  <div style="font-size:14px;color:#64748B;line-height:20px">
+                    Revisaremos tu información y documentos. Te notificaremos en cuanto tu negocio sea aprobado.
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Pasos de proceso -->
+        <tr>
+          <td style="padding:0 40px 28px">
+            <table width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="padding:10px 0;border-bottom:1px solid #F0EBE5">
+                  <span style="color:#22C55E;font-weight:700;margin-right:10px">✅</span>
+                  <span style="font-size:14px;color:#1A1A1A;font-weight:600">Solicitud recibida</span>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:10px 0;border-bottom:1px solid #F0EBE5">
+                  <span style="color:#C8A97E;font-weight:700;margin-right:10px">⏳</span>
+                  <span style="font-size:14px;color:#1A1A1A;font-weight:600">Verificación de documentos (24–48h)</span>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:10px 0">
+                  <span style="color:#CBD5E1;font-weight:700;margin-right:10px">🔜</span>
+                  <span style="font-size:14px;color:#94A3B8;font-weight:600">Activación y publicación</span>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- CTA Button -->
+        <tr>
+          <td style="padding:0 40px 36px;text-align:center">
+            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+              Ir a mi panel →
+            </a>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              Si tienes alguna duda, responde este correo y te ayudaremos.
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante };

@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
 import { Tabs } from 'expo-router';
 import { Text, View } from 'react-native';
-import { Colors } from '@/constants/Colors';
 import { notificacionesAPI } from '@/src/services/api';
+
+const PRIMARY = '#1A1A1A';
+const GOLD    = '#C8A97E';
+const WHITE   = '#FFFFFF';
+const DIM     = 'rgba(255,255,255,0.4)';
+const BORDER  = '#2A2A2A';
 
 function TabIcon({ emoji, label, focused }: { emoji: string; label: string; focused: boolean }) {
   return (
     <View style={{ alignItems: 'center', paddingTop: 4 }}>
       <Text style={{ fontSize: 20 }}>{emoji}</Text>
-      <Text style={{ fontSize: 10, fontWeight: focused ? '700' : '500', color: focused ? Colors.orange : Colors.textLight, marginTop: 2 }}>
+      <Text style={{ fontSize: 10, fontWeight: focused ? '700' : '500', color: focused ? GOLD : DIM, marginTop: 2 }}>
         {label}
       </Text>
     </View>
@@ -33,7 +38,7 @@ export default function RestauranteLayout() {
   return (
     <Tabs screenOptions={{
       headerShown: false,
-      tabBarStyle: { backgroundColor: Colors.white, borderTopColor: Colors.border, height: 64, paddingBottom: 8 },
+      tabBarStyle: { backgroundColor: PRIMARY, borderTopColor: BORDER, height: 64, paddingBottom: 8 },
       tabBarShowLabel: false,
     }}>
       <Tabs.Screen name="index"          options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
@@ -42,7 +47,7 @@ export default function RestauranteLayout() {
       <Tabs.Screen name="ganancias"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Ganancias" focused={focused} /> }} />
       <Tabs.Screen name="notificaciones" options={{
         tabBarBadge: sinLeer > 0 ? sinLeer : undefined,
-        tabBarBadgeStyle: { backgroundColor: Colors.orange, fontSize: 10 },
+        tabBarBadgeStyle: { backgroundColor: GOLD, fontSize: 10 },
         tabBarIcon: ({ focused }) => <TabIcon emoji="🔔" label="Avisos" focused={focused} />,
       }} />
       <Tabs.Screen name="perfil"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />

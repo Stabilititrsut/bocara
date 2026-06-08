@@ -220,12 +220,12 @@ export default function LoginScreen() {
             )}
 
             <TouchableOpacity
-              style={[s.btnOutline, { marginTop: 10, borderColor: esRest ? Colors.primary : Colors.border }]}
+              style={[s.btnOutline, { marginTop: 10, borderColor: Colors.accent }]}
               onPress={() => router.push('/socios' as any)}
             >
-              <Ionicons name="storefront-outline" size={16} color={esRest ? Colors.primary : Colors.textSecondary} />
-              <Text style={[s.btnOutlineText, { color: esRest ? Colors.primary : Colors.textSecondary }]}>
-                Registrar mi negocio
+              <Ionicons name="storefront-outline" size={16} color={Colors.accent} />
+              <Text style={[s.btnOutlineText, { color: Colors.accent }]}>
+                {esRest ? 'Registrar mi negocio' : '¿Eres restaurante? Únete aquí'}
               </Text>
             </TouchableOpacity>
           </View>
