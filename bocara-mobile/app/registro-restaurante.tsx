@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { useAuth } from '@/src/context/AuthContext';
 import { negociosAPI, uploadsAPI, authAPI } from '@/src/services/api';
 import { supabase } from '@/src/services/supabase';
@@ -42,6 +43,7 @@ type FormState = {
   banco: string; banco_otro: string; numero_cuenta: string; tipo_cuenta: string; titular_cuenta: string;
   dpi_foto_uri: string; dpi_foto_base64: string;
   foto_negocio_uri: string; foto_negocio_base64: string;
+  latitud: string; longitud: string;
 };
 
 export default function RegistroRestauranteScreen() {
@@ -54,7 +56,9 @@ export default function RegistroRestauranteScreen() {
     banco: '', banco_otro: '', numero_cuenta: '', tipo_cuenta: 'Monetaria', titular_cuenta: '',
     dpi_foto_uri: '', dpi_foto_base64: '',
     foto_negocio_uri: '', foto_negocio_base64: '',
+    latitud: '', longitud: '',
   });
+  const [locCapturando, setLocCapturando] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState('');
@@ -116,6 +120,29 @@ export default function RegistroRestauranteScreen() {
     setForm(f => ({ ...f, [k]: v }));
     setErrors(e => ({ ...e, [k]: '' }));
   };
+
+  // ── GPS: capturar ubicación actual del negocio ───────────────────────────
+  async function capturarUbicacion() {
+    setLocCapturando(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso de ubicación',
+          'Necesitamos acceso a tu ubicación para registrar las coordenadas del negocio. Puedes ingresarlas manualmente después desde tu panel.',
+        );
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = pos.coords;
+      console.log('[NEGOCIO UBICACION] latitud:', latitude, 'longitud:', longitude);
+      setForm(f => ({ ...f, latitud: String(latitude), longitud: String(longitude) }));
+    } catch {
+      Alert.alert('Error de GPS', 'No se pudo obtener la ubicación. Verifica que el GPS esté activo o agrégala manualmente desde tu panel después de registrarte.');
+    } finally {
+      setLocCapturando(false);
+    }
+  }
 
   // ── Image picker: web uses HTML file input, mobile uses ImagePicker ──────
   async function seleccionarFoto(tipo: 'dpi' | 'negocio') {
@@ -337,6 +364,8 @@ export default function RegistroRestauranteScreen() {
         titular:        form.titular_cuenta,
       };
 
+      const lat = form.latitud ? parseFloat(form.latitud) : undefined;
+      const lng = form.longitud ? parseFloat(form.longitud) : undefined;
       await registroRestaurante({
         nombre:           form.nombre.trim(),
         apellido:         form.apellido.trim(),
@@ -352,6 +381,8 @@ export default function RegistroRestauranteScreen() {
         nit:              form.nit.trim(),
         dpi:              form.dpi.replace(/\s/g, ''),
         datos_bancarios,
+        latitud:          lat,
+        longitud:         lng,
       });
 
       setUploadStatus('Subiendo documentos...');
@@ -638,6 +669,36 @@ export default function RegistroRestauranteScreen() {
             </View>
 
             <Field label="Dirección *"           value={form.direccion_negocio} onChange={set('direccion_negocio')} placeholder="5a Avenida 10-35, Zona 1" error={errors.direccion_negocio} highlighted={rechazoInfo?.campos.includes('direccion')} />
+
+            {/* GPS */}
+            <View style={s.gpsCard}>
+              <View style={s.gpsHeader}>
+                <Text style={s.gpsTitle}>📍 Ubicación en el mapa</Text>
+                {form.latitud ? (
+                  <View style={s.gpsBadgeOk}><Text style={s.gpsBadgeText}>✓ GPS capturado</Text></View>
+                ) : (
+                  <View style={s.gpsBadgeMissing}><Text style={s.gpsBadgeText}>Sin GPS</Text></View>
+                )}
+              </View>
+              {form.latitud ? (
+                <Text style={s.gpsCoordsText}>
+                  Lat: {parseFloat(form.latitud).toFixed(6)}{'\n'}Lng: {parseFloat(form.longitud).toFixed(6)}
+                </Text>
+              ) : (
+                <Text style={s.gpsWarn}>
+                  Para mostrar tu negocio a clientes cercanos, necesitamos una ubicación exacta.
+                </Text>
+              )}
+              <TouchableOpacity style={s.gpsBtn} onPress={capturarUbicacion} disabled={locCapturando}>
+                {locCapturando
+                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  : <Text style={s.gpsBtnText}>{form.latitud ? '📡 Actualizar mi ubicación' : '📡 Usar mi ubicación actual'}</Text>
+                }
+              </TouchableOpacity>
+              {!form.latitud && (
+                <Text style={s.gpsSkipHint}>Puedes agregar la ubicación después desde tu panel de negocio.</Text>
+              )}
+            </View>
 
             {/* Horario */}
             <View>
@@ -964,6 +1025,18 @@ const s = StyleSheet.create({
   chipTextActive:  { color: Colors.white },
   infoCard:        { backgroundColor: Colors.brownLight, borderRadius: 12, padding: 14, marginBottom: 20 },
   infoText:        { fontSize: 13, color: Colors.brown, lineHeight: 20 },
+  // GPS card
+  gpsCard:         { backgroundColor: Colors.white, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1.5, borderColor: Colors.border },
+  gpsHeader:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  gpsTitle:        { fontSize: 14, fontWeight: '800', color: Colors.brown },
+  gpsBadgeOk:      { backgroundColor: '#D1FAE5', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  gpsBadgeMissing: { backgroundColor: '#FEF3C7', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3 },
+  gpsBadgeText:    { fontSize: 11, fontWeight: '700', color: Colors.brown },
+  gpsCoordsText:   { fontSize: 12, color: Colors.textSecondary, marginBottom: 12, lineHeight: 18 },
+  gpsWarn:         { fontSize: 12, color: Colors.textSecondary, marginBottom: 12, lineHeight: 18 },
+  gpsBtn:          { backgroundColor: Colors.orange, borderRadius: 12, padding: 12, alignItems: 'center', marginBottom: 8 },
+  gpsBtnText:      { color: Colors.white, fontWeight: '700', fontSize: 14 },
+  gpsSkipHint:     { fontSize: 11, color: Colors.textLight, textAlign: 'center' },
   fotoBtn:         { borderRadius: 16, overflow: 'hidden', height: 180, marginBottom: 4 },
   fotoBtnError:    { borderWidth: 2, borderColor: Colors.error, borderRadius: 16 },
   fotoPreview:     { width: '100%', height: '100%' },

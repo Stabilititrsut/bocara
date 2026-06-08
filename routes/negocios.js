@@ -74,6 +74,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const coords = await geocodeAddress(direccion, zona, ciudad || 'Guatemala');
     if (coords) { latitud = coords.lat; longitud = coords.lng; }
   }
+  console.log('[NEGOCIO UBICACION] latitud:', latitud, 'longitud:', longitud);
 
   const insertData = {
     propietario_id: req.usuario.id, nombre, descripcion, direccion,

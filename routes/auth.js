@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarEmail, templateOlvidoContrasena } = require('../services/email');
+const { geocodeAddress } = require('../utils/geo');
 const router = express.Router();
 
 // Twilio client — solo si las vars de entorno están configuradas
@@ -31,6 +32,7 @@ router.post('/registro', async (req, res) => {
   email, password, nombre, apellido, rol, telefono,
   nombre_negocio, direccion_negocio, categoria, zona, ciudad, descripcion,
   nit, dpi, datos_bancarios, horario_atencion,
+  latitud: latManual, longitud: lngManual,
 } = req.body;
   if (!email || !password || !nombre || !rol)
     return res.status(400).json({ error: 'email, password, nombre y rol son requeridos' });
@@ -56,6 +58,17 @@ router.post('/registro', async (req, res) => {
     }
 
     if (rol === 'restaurante' && nombre_negocio) {
+      // Coordenadas: manual > geocodificación automática por dirección
+      let latitud = latManual != null ? parseFloat(latManual) : null;
+      let longitud = lngManual != null ? parseFloat(lngManual) : null;
+      if (!latitud && direccion_negocio) {
+        try {
+          const coords = await geocodeAddress(direccion_negocio, zona, ciudad || 'Guatemala');
+          if (coords) { latitud = coords.lat; longitud = coords.lng; }
+        } catch { /* geocoding no crítico */ }
+      }
+      console.log('[NEGOCIO UBICACION] latitud:', latitud, 'longitud:', longitud);
+
       const negocioData = {
         propietario_id: usuario.id,
         email: email.toLowerCase().trim(),
@@ -65,6 +78,8 @@ router.post('/registro', async (req, res) => {
         zona: zona || '',
         ciudad: ciudad || 'Guatemala',
         descripcion: descripcion || '',
+        latitud,
+        longitud,
         estado_verificacion: 'pendiente',
         activo: false,
         verificado: false,
