@@ -234,8 +234,16 @@ export default function ProductoScreen() {
   async function compartir() {
     if (!bolsa) return;
     Share.share({
-      message: `🛍️ ¡Mira esta bolsa en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocarafood.com`,
+      message: `🛍️ ¡Mira esta bolsa en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocara.vercel.app/producto/${bolsa.id}`,
     });
+  }
+
+  function compartirWhatsApp() {
+    if (!bolsa) return;
+    const texto = encodeURIComponent(
+      `🛍️ ¡Mira esta oferta en Bocara!\n${bolsa.nombre} por Q${bolsa.precio_descuento}\n👉 https://bocara.vercel.app/producto/${bolsa.id}`
+    );
+    Linking.openURL(`https://wa.me/?text=${texto}`);
   }
 
   function handleAgregar() {
@@ -447,9 +455,9 @@ export default function ProductoScreen() {
             </View>
 
             {/* Share */}
-            <TouchableOpacity style={s.shareBtn} onPress={compartir}>
-              <Ionicons name="share-outline" size={16} color={Colors.textSecondary} />
-              <Text style={s.shareBtnText}>Compartir por WhatsApp</Text>
+            <TouchableOpacity style={s.whatsappBtn} onPress={compartirWhatsApp}>
+              <Ionicons name="logo-whatsapp" size={20} color={Colors.white} />
+              <Text style={s.whatsappBtnText}>Compartir por WhatsApp</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -647,6 +655,11 @@ const s = StyleSheet.create({
     backgroundColor: Colors.surface, borderRadius: 14, padding: 14,
   },
   shareBtnText: { color: Colors.textSecondary, fontWeight: '700', fontSize: 14 },
+  whatsappBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    backgroundColor: '#25D366', borderRadius: 14, padding: 14,
+  },
+  whatsappBtnText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
 
   // Reviews
   emptyResenas: { alignItems: 'center', paddingVertical: 44, gap: 12 },
