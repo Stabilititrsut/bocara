@@ -221,7 +221,7 @@ export default function LoginScreen() {
 
             <TouchableOpacity
               style={[s.btnOutline, { marginTop: 10, borderColor: esRest ? Colors.primary : Colors.border }]}
-              onPress={() => router.push('/registro-restaurante')}
+              onPress={() => router.push('/socios' as any)}
             >
               <Ionicons name="storefront-outline" size={16} color={esRest ? Colors.primary : Colors.textSecondary} />
               <Text style={[s.btnOutlineText, { color: esRest ? Colors.primary : Colors.textSecondary }]}>

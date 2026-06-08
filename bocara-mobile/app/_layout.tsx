@@ -105,7 +105,7 @@ function AuthGuard() {
 
   useEffect(() => {
     if (loading || !onboardingChecked) return;
-    const inAuth = segments[0] === 'login' || segments[0] === 'auth' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'registro-telefono' || segments[0] === 'forgot-password' || segments[0] === 'verificar-email';
+    const inAuth = segments[0] === 'login' || segments[0] === 'auth' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'registro-telefono' || segments[0] === 'forgot-password' || segments[0] === 'verificar-email' || segments[0] === 'socios';
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!usuario && !inAuth && !inOnboarding) {
@@ -124,7 +124,7 @@ function AuthGuard() {
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
         (usuario.rol === 'admin' && segments[0] === 'admin');
 
-      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente'];
+      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios'];
 
       if (!inCorrectSection && !allowedSections.includes(segments[0] as string)) {
         let rutaDestino = '/(tabs)/';
@@ -157,6 +157,7 @@ function AuthGuard() {
       <Stack.Screen name="qr-recogida" options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
       <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
       <Stack.Screen name="soporte" options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+      <Stack.Screen name="socios" options={{ headerShown: false }} />
     </Stack>
   );
 }

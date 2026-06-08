@@ -49,8 +49,9 @@ router.post('/registro', async (req, res) => {
     if (error) {
       if (error.code === '23505') return res.status(400).json({ error: 'Este email ya está registrado' });
       if (error.message && error.message.includes('column')) {
-        const base = { email: insertData.email, password_hash: insertData.password_hash, nombre: insertData.nombre };
+        const base = { email: insertData.email, password_hash: insertData.password_hash, nombre: insertData.nombre, rol };
         if (insertData.telefono) base.telefono = insertData.telefono;
+        if (insertData.apellido) base.apellido = insertData.apellido;
         const r = await supabase.from('usuarios').insert([base]).select().single();
         usuario = r.data; error = r.error;
       }
@@ -116,13 +117,14 @@ router.post('/registro', async (req, res) => {
       } catch { }
     }
 
+    const resolvedRol = usuario.rol || rol || 'cliente';
     const token = jwt.sign(
-      { id: usuario.id, email: usuario.email, rol: usuario.rol || rol || 'cliente' },
+      { id: usuario.id, email: usuario.email, rol: resolvedRol },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
     const { password_hash, ...u } = usuario;
-    res.status(201).json({ token, usuario: u, esNuevo: true });
+    res.status(201).json({ token, usuario: { ...u, rol: resolvedRol }, esNuevo: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
