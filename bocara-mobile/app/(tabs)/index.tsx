@@ -30,6 +30,7 @@ const CATEGORIAS = [
 ];
 
 function ProductCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) {
+  const { formatDistancia } = useLocation();
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const imgUri = bolsa.imagen_url || bolsa.negocios?.imagen_url;
@@ -37,6 +38,12 @@ function ProductCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) 
   const catEmoji = catEntry?.emoji || '🍱';
   const catBg = catEntry?.bg || '#F5F0EB';
   const agotada = bolsa.cantidad_disponible === 0;
+
+  const distTexto = formatDistancia(bolsa.distancia_km);
+  const zona = bolsa.negocios?.zona;
+  const ubicacionLabel = distTexto
+    ? zona ? `${zona} · A ${distTexto}` : `A ${distTexto}`
+    : null;
 
   return (
     <TouchableOpacity
@@ -61,7 +68,15 @@ function ProductCard({ bolsa, onPress }: { bolsa: Bolsa; onPress: () => void }) 
         )}
       </View>
       <View style={s.productInfo}>
-        <Text style={s.productNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
+        <View style={s.productNegocioRow}>
+          <Text style={[s.productNegocio, { flex: 1 }]} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
+          {ubicacionLabel && (
+            <View style={s.distBadge}>
+              <Ionicons name="location" size={8} color={Colors.accent} />
+              <Text style={s.distText}>{ubicacionLabel}</Text>
+            </View>
+          )}
+        </View>
         <Text style={s.productNombre} numberOfLines={2}>{bolsa.nombre}</Text>
         <View style={s.productBottom}>
           <View>
@@ -127,7 +142,11 @@ export default function HomeScreen() {
     setErrorNet('');
     try {
       const params: Record<string, any> = { tipo: tab, activo: true };
-      if (coords) { params.lat = coords.lat; params.lng = coords.lng; }
+      if (coords) {
+        params.lat = coords.lat;
+        params.lng = coords.lng;
+        console.log('[LOCATION] userLat:', coords.lat, 'userLng:', coords.lng);
+      }
       const res = await bolsasAPI.listar(params);
       setBolsas(res.data || []);
     } catch (e: any) {
@@ -197,7 +216,7 @@ export default function HomeScreen() {
             >
               <Ionicons name="location" size={11} color={Colors.accent} />
               <Text style={s.locText} numberOfLines={1}>
-                {locLoading ? 'Buscando...' : tieneUbicacion ? locationName : locDenied ? 'Sin ubicación' : 'Activar ubicación'}
+                {locLoading ? 'Buscando...' : tieneUbicacion ? locationName : locDenied ? 'Guatemala' : 'Agregar ubicación'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -295,6 +314,13 @@ export default function HomeScreen() {
               </View>
             ) : null}
 
+            {locDenied && (
+              <View style={s.locHintBanner}>
+                <Ionicons name="location-outline" size={14} color={Colors.textSecondary} />
+                <Text style={s.locHintText}>Activa tu ubicación para ver ofertas cercanas</Text>
+              </View>
+            )}
+
             {/* TIENDAS DESTACADAS */}
             {restaurantesDestacados.length > 0 && catSelected === 'Todos' && (
               <View style={s.section}>
@@ -317,7 +343,9 @@ export default function HomeScreen() {
               <View style={s.section}>
                 <View style={s.sectionHeader}>
                   <Text style={s.sectionTitle}>
-                    {catSelected === 'Todos' ? 'Ofertas del día' : catSelected}
+                    {catSelected === 'Todos'
+                      ? tieneUbicacion ? 'Cerca de ti' : 'Ofertas del día'
+                      : catSelected}
                   </Text>
                   {catSelected !== 'Todos' && (
                     <TouchableOpacity onPress={() => setCatSelected('Todos')}>
@@ -434,6 +462,10 @@ const s = StyleSheet.create({
   alertText: { flex: 1, fontSize: 12, color: Colors.error, fontWeight: '600' },
   alertAction: { color: Colors.error, fontWeight: '800', fontSize: 12 },
 
+  // ── Location hint banner ──
+  locHintBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.surface, padding: 10, paddingHorizontal: 16, marginHorizontal: 20, borderRadius: 14, gap: 8, marginBottom: 12 },
+  locHintText: { flex: 1, fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
+
   // ── Feed ──
   feedContent: { paddingTop: 8 },
 
@@ -462,7 +494,10 @@ const s = StyleSheet.create({
   cuponBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
   cuponBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '700' },
   productInfo: { padding: 12 },
-  productNegocio: { fontSize: 10, color: Colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+  productNegocioRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2, gap: 4 },
+  productNegocio: { fontSize: 10, color: Colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
+  distBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 0 },
+  distText: { fontSize: 9, color: Colors.accent, fontWeight: '700' },
   productNombre: { fontSize: 13, fontWeight: '800', color: Colors.textPrimary, lineHeight: 18, marginBottom: 8 },
   productBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   productOriginal: { fontSize: 10, color: Colors.textLight, textDecorationLine: 'line-through' },

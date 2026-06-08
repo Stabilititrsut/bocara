@@ -70,13 +70,20 @@ router.get('/', async (req, res) => {
 
   // Calcular distancia si el cliente envió coordenadas
   if (userLat !== null && userLng !== null) {
+    console.log('[LOCATION] userLat:', userLat, 'userLng:', userLng);
     resultado = resultado.map(b => {
       const nLat = b.negocios?.latitud;
       const nLng = b.negocios?.longitud;
       const distancia_km = (nLat != null && nLng != null)
         ? Math.round(haversine(userLat, userLng, nLat, nLng) * 10) / 10
         : null;
-      return { ...b, distancia_km };
+      console.log('[BOLSAS] calculando distancia para negocio:', b.negocios?.nombre, '→', distancia_km, 'km');
+      const distancia_texto = distancia_km !== null
+        ? distancia_km < 1
+          ? `A ${Math.round(distancia_km * 1000)} m`
+          : `A ${distancia_km.toFixed(1)} km`
+        : null;
+      return { ...b, distancia_km, distancia_texto };
     });
 
     // Filtrar por distancia máxima (solo si el negocio tiene coords)
