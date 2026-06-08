@@ -4,10 +4,14 @@ import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
 import { CartProvider } from '@/src/context/CartContext';
 import { LocationProvider } from '@/src/context/LocationContext';
-import { ActivityIndicator, View, Platform, Text } from 'react-native';
+import { Platform } from 'react-native';
 import { Colors } from '@/constants/Colors';
 import { notificacionesAPI } from '@/src/services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SplashScreen from 'expo-splash-screen';
+
+// Mantener el splash nativo visible hasta que la app esté lista
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 // Expo Notifications — solo nativo
 let Notifications: any = null;
@@ -68,6 +72,7 @@ function AuthGuard() {
   const [onboardingChecked, setOnboardingChecked] = useState(false);
   const [onboardingDone, setOnboardingDone] = useState(true);
 
+  // Lee onboarding en paralelo con AuthContext (ambos desde AsyncStorage, muy rápido)
   useEffect(() => {
     if (Platform.OS === 'web') {
       setOnboardingDone(true);
@@ -83,6 +88,13 @@ function AuthGuard() {
     });
   }, []);
 
+  // Ocultar splash nativo cuando la app esté lista — sin spinner JS
+  useEffect(() => {
+    if (!loading && onboardingChecked) {
+      SplashScreen.hideAsync().catch(() => {});
+    }
+  }, [loading, onboardingChecked]);
+
   useEffect(() => {
     if (usuario && !pushRegistered.current) {
       pushRegistered.current = true;
@@ -97,13 +109,11 @@ function AuthGuard() {
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!usuario && !inAuth && !inOnboarding) {
-      console.log('[AUTH GUARD] sin sesión, redirigiendo a /login desde:', segments[0]);
       router.replace('/login');
       return;
     }
 
     if (usuario) {
-      // Mostrar onboarding a clientes nuevos (solo en nativo, no en web)
       if (Platform.OS !== 'web' && usuario.rol === 'cliente' && !onboardingDone && !inOnboarding) {
         router.replace('/onboarding');
         return;
@@ -120,20 +130,14 @@ function AuthGuard() {
         let rutaDestino = '/(tabs)/';
         if (usuario.rol === 'restaurante') rutaDestino = '/restaurante';
         else if (usuario.rol === 'admin') rutaDestino = '/admin';
-        console.log('[AUTH GUARD] redirect decision:', rutaDestino, '| rol:', usuario.rol, '| segment:', segments[0]);
         router.replace(rutaDestino as any);
       }
     }
   }, [usuario, loading, segments, onboardingChecked, onboardingDone]);
 
-  if (loading || !onboardingChecked) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.background }}>
-        <Text style={{ fontSize: 40, marginBottom: 12 }}>🛍️</Text>
-        <ActivityIndicator color={Colors.primary} size="large" />
-      </View>
-    );
-  }
+  // El splash nativo cubre la UI mientras loading || !onboardingChecked
+  // No necesitamos un spinner JS — devolver null es suficiente
+  if (loading || !onboardingChecked) return null;
 
   return (
     <Stack screenOptions={{ headerShown: false }}>

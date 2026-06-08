@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { getCache, setCache } from '@/src/utils/cache';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   RefreshControl, ActivityIndicator, SafeAreaView, Dimensions,
@@ -140,18 +141,25 @@ export default function HomeScreen() {
 
   const cargar = useCallback(async () => {
     setErrorNet('');
+    const cacheKey = `feed_${tab}`;
+    // Mostrar caché inmediatamente (stale-while-revalidate)
+    const cached = await getCache<Bolsa[]>(cacheKey);
+    if (cached) { setBolsas(cached); setLoading(false); }
     try {
       const params: Record<string, any> = { tipo: tab, activo: true };
       if (coords) {
         params.lat = coords.lat;
         params.lng = coords.lng;
-        console.log('[LOCATION] userLat:', coords.lat, 'userLng:', coords.lng);
       }
       const res = await bolsasAPI.listar(params);
-      setBolsas(res.data || []);
+      const fresh = res.data || [];
+      setBolsas(fresh);
+      setCache(cacheKey, fresh); // fire-and-forget
     } catch (e: any) {
-      setBolsas([]);
-      if (e.message?.includes('internet') || e.message?.includes('Network')) setErrorNet('Sin conexión.');
+      if (!cached) {
+        setBolsas([]);
+        if (e.message?.includes('internet') || e.message?.includes('Network')) setErrorNet('Sin conexión.');
+      }
     } finally {
       setLoading(false); setRefreshing(false);
     }
