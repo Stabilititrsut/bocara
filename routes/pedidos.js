@@ -177,4 +177,34 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// POST /api/pedidos/:id/factura — guarda datos de facturación (NIT o CF)
+router.post('/:id/factura', authMiddleware, async (req, res) => {
+  try {
+    const { tipo, nit, nombre_fiscal } = req.body;
+    const { data: pedido } = await supabase
+      .from('pedidos').select('usuario_id').eq('id', req.params.id).single();
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.usuario_id !== req.usuario.id && req.usuario.rol !== 'admin')
+      return res.status(403).json({ error: 'No autorizado' });
+
+    const facturaData = {
+      factura_nit:          tipo === 'nit' ? (nit || '') : 'CF',
+      factura_nombre:       tipo === 'nit' ? (nombre_fiscal || '') : 'Consumidor Final',
+      factura_tipo:         tipo || 'cf',
+      factura_generada_en:  new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('pedidos').update(facturaData).eq('id', req.params.id).select().single();
+
+    if (error) {
+      console.warn('[FACTURA] columnas no disponibles aún:', error.message);
+      return res.json({ success: true, pendiente_migracion: true });
+    }
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

@@ -263,7 +263,8 @@ router.post('/webhook', async (req, res) => {
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/cubopago', authMiddleware, async (req, res) => {
   try {
-    const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq } = req.body;
+    const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
+    const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
 
     if (!process.env.CUBOPAGO_API_KEY) {
       return res.status(500).json({ error: 'CUBOPAGO_API_KEY no configurada en el servidor' });
@@ -327,17 +328,18 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
 
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
 
-    // Subtotal = suma de (precio_unitario × cantidad) de todos los items
+    // Subtotal = suma de (precio_unitario × cantidad) + propina
     const subtotalProductos = Math.round(
       cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
     ) / 100;
-    const subtotal = subtotalProductos + costoEnvio;
+    const subtotal = subtotalProductos + costoEnvio + propina;
 
     const COMISION_CUBO        = 0.035;
     const comisionBocara       = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
     const comisionPasarela     = Math.round(subtotal * COMISION_CUBO * 100) / 100;
     const total                = Math.round((subtotal + comisionPasarela) * 100) / 100;
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela) * 100) / 100;
+    // Propina va 100% al restaurante (solo se descuenta comisión pasarela)
+    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela + propina) * 100) / 100;
 
     console.log('[PAGO] items recibidos:', JSON.stringify(cartItems));
     console.log('[PAGO] subtotalProductos:', subtotalProductos);
@@ -375,12 +377,17 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       hora_recogida_fin:      bolsaPrincipal.hora_recogida_fin,
     };
 
-    // Intentar con columna cantidad; si no existe, reintenta sin ella
+    // Intentar con propina + cantidad; fallback si columnas no existen
+    const insertConExtras = { ...insertBase, cantidad: itemPrincipal.cantidad, ...(propina > 0 ? { propina } : {}) };
     let { data: pedido, error: pedidoErr } = await supabase
-      .from('pedidos').insert([{ ...insertBase, cantidad: itemPrincipal.cantidad }]).select().single();
+      .from('pedidos').insert([insertConExtras]).select().single();
     if (pedidoErr) {
-      const r = await supabase.from('pedidos').insert([insertBase]).select().single();
-      pedido = r.data; pedidoErr = r.error;
+      const r2 = await supabase.from('pedidos').insert([{ ...insertBase, cantidad: itemPrincipal.cantidad }]).select().single();
+      pedido = r2.data; pedidoErr = r2.error;
+    }
+    if (pedidoErr) {
+      const r3 = await supabase.from('pedidos').insert([insertBase]).select().single();
+      pedido = r3.data; pedidoErr = r3.error;
     }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
 
@@ -405,7 +412,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     const redirectUri = `${frontendUrl}/pago-exitoso?pedidoId=${pedido.id}`;
     console.log('[CUBO] redirectUri:', redirectUri);
 
-    // Items para Cubo: todos los productos del carrito
+    // Items para Cubo: todos los productos del carrito + propina si aplica
     const titulo = cartItems.length === 1
       ? `Bocara - ${bolsaPrincipal.nombre}`
       : `Bocara - ${cartItems.length} productos`;
@@ -414,6 +421,9 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       price:    bolsas[i].precio_descuento.toFixed(2),
       quantity: item.cantidad,
     }));
+    if (propina > 0) {
+      cuboItems.push({ name: `Propina para ${bolsaPrincipal.negocios.nombre}`, price: propina.toFixed(2), quantity: 1 });
+    }
     console.log('[PAGO] items Cubo:', JSON.stringify(cuboItems));
 
     const { url: visaLinkUrl } = await generarLinkPago({

@@ -85,10 +85,13 @@ export default function GananciasScreen() {
         {resumen.total_pedidos > 0 && <View style={s.desglose}>
           <Text style={s.desgloseTitle}>Desglose</Text>
           {[
-            { label: 'Ventas brutas',       val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
-            { label: 'Comisión Bocara (25%)', val: -(resumen.comision_bocara || 0), color: Colors.error, neg: true },
-            { label: 'Tu ganancia neta',    val: resumen.neto_restaurante || 0,    color: Colors.green, bold: true },
-          ].map(({ label, val, color, bold, neg }) => (
+            { label: 'Ventas brutas',           val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
+            { label: 'Comisión Bocara (25%)',    val: -(resumen.comision_bocara || 0),  color: Colors.error, neg: true },
+            { label: 'Tu ganancia neta',         val: resumen.neto_restaurante || 0,    color: Colors.green, bold: true },
+            ...(resumen.total_propinas > 0 ? [
+              { label: 'Propinas recibidas', val: resumen.total_propinas, color: '#22C55E' },
+            ] : []),
+          ].map(({ label, val, color, bold, neg }: any) => (
             <View key={label} style={s.desgloseRow}>
               <Text style={s.desgloseLabel}>{label}</Text>
               <Text style={[s.desgloseVal, { color }, bold && s.desgloseBold]}>

@@ -119,6 +119,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
 
   const ventas = pedidos || [];
   const bruto = ventas.reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
+  const totalPropinas = ventas.reduce((s, p) => s + (p.propina || 0), 0);
   const comision = bruto * 0.25;
   const neto = bruto * 0.75;
 
@@ -138,6 +139,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
       ventas_brutas: parseFloat(bruto.toFixed(2)),
       comision_bocara: parseFloat(comision.toFixed(2)),
       neto_restaurante: parseFloat(neto.toFixed(2)),
+      total_propinas: parseFloat(totalPropinas.toFixed(2)),
     },
     liquidaciones: liquidaciones || [],
   });

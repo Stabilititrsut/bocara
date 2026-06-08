@@ -3,6 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authAPI } from '../services/api';
 import { Usuario } from '../types';
 
+const PERFIL_KEY = 'bocara_perfil_cache';
+
 interface AuthContextType {
   usuario: Usuario | null;
   token: string | null;
@@ -22,20 +24,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    cargarSesion();
-  }, []);
+  useEffect(() => { cargarSesion(); }, []);
 
   async function cargarSesion() {
     try {
-      const t = await AsyncStorage.getItem('bocara_token');
-      if (t) {
-        setToken(t);
-        const res = await authAPI.perfil();
-        setUsuario(res.data);
+      const [t, perfilJson] = await Promise.all([
+        AsyncStorage.getItem('bocara_token'),
+        AsyncStorage.getItem(PERFIL_KEY),
+      ]);
+      if (!t) return;
+      setToken(t);
+      if (perfilJson) {
+        // Cache hit — show UI immediately, refresh silently in background
+        setUsuario(JSON.parse(perfilJson));
+        setLoading(false);
+        authAPI.perfil()
+          .then(res => {
+            setUsuario(res.data);
+            AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(res.data)).catch(() => {});
+          })
+          .catch(() => {}); // Keep cached version if refresh fails
+        return;
       }
+      // First launch — must wait for network
+      const res = await authAPI.perfil();
+      setUsuario(res.data);
+      await AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(res.data));
     } catch {
-      await AsyncStorage.removeItem('bocara_token');
+      await Promise.all([
+        AsyncStorage.removeItem('bocara_token'),
+        AsyncStorage.removeItem(PERFIL_KEY),
+      ]);
     } finally {
       setLoading(false);
     }
@@ -44,7 +63,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function login(email: string, password: string) {
     const res = await authAPI.login(email, password);
     const { token: t, usuario: u } = res.data;
-    await AsyncStorage.setItem('bocara_token', t);
+    await Promise.all([
+      AsyncStorage.setItem('bocara_token', t),
+      AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
+    ]);
     setToken(t);
     setUsuario(u);
   }
@@ -52,7 +74,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function registroCliente(data: any) {
     const res = await authAPI.registroCliente(data);
     const { token: t, usuario: u } = res.data;
-    await AsyncStorage.setItem('bocara_token', t);
+    await Promise.all([
+      AsyncStorage.setItem('bocara_token', t),
+      AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
+    ]);
     setToken(t);
     setUsuario(u);
   }
@@ -60,21 +85,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function registroRestaurante(data: any) {
     const res = await authAPI.registroRestaurante(data);
     const { token: t, usuario: u } = res.data;
-    await AsyncStorage.setItem('bocara_token', t);
+    await Promise.all([
+      AsyncStorage.setItem('bocara_token', t),
+      AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
+    ]);
     setToken(t);
     setUsuario(u);
   }
 
-  // Usado por flujos de OAuth (Google) y teléfono después de verificación exitosa
   async function setSession(t: string, u: Usuario) {
-    await AsyncStorage.setItem('bocara_token', t);
+    await Promise.all([
+      AsyncStorage.setItem('bocara_token', t),
+      AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
+    ]);
     setToken(t);
     setUsuario(u);
   }
 
   async function logout() {
     try {
-      await AsyncStorage.removeItem('bocara_token');
+      await Promise.all([
+        AsyncStorage.removeItem('bocara_token'),
+        AsyncStorage.removeItem(PERFIL_KEY),
+      ]);
     } finally {
       setToken(null);
       setUsuario(null);
@@ -82,7 +115,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   function actualizarUsuario(data: Partial<Usuario>) {
-    setUsuario((prev) => (prev ? { ...prev, ...data } : null));
+    setUsuario(prev => {
+      if (!prev) return null;
+      const updated = { ...prev, ...data };
+      AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(updated)).catch(() => {});
+      return updated;
+    });
   }
 
   return (

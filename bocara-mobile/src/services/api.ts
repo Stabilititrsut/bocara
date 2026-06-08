@@ -81,6 +81,8 @@ export const pedidosAPI = {
     api.put(`/pedidos/${id}/estado`, { estado }),
   crear: (data: { bolsa_id: string; tipo_entrega: string; direccion_envio?: any }) =>
     api.post('/pedidos/crear', data),
+  factura: (pedidoId: string, data: { tipo: 'cf' | 'nit'; nit?: string; nombre_fiscal?: string }) =>
+    api.post(`/pedidos/${pedidoId}/factura`, data),
 };
 
 export const pagosAPI = {
@@ -92,6 +94,7 @@ export const pagosAPI = {
     cantidad?: number;
     tipo_entrega: string;
     direccion_envio?: any;
+    propina?: number;
   }) => api.post('/pagos/cubopago', data),
   estado: (id: string) => api.get(`/pagos/estado/${id}`),
 };
