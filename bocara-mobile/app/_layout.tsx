@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { Image } from 'expo-image';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
 import { CartProvider } from '@/src/context/CartContext';
 import { LocationProvider } from '@/src/context/LocationContext';
-import { Platform } from 'react-native';
 import { Colors } from '@/constants/Colors';
 import { notificacionesAPI } from '@/src/services/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -64,15 +65,70 @@ async function registrarPushToken() {
   }
 }
 
+// ── Splash animado de Bocara ──────────────────────────────────────────────────
+function BocaraSplash({ fast, onDone }: { fast: boolean; onDone: () => void }) {
+  const logoOpacity   = useRef(new Animated.Value(0)).current;
+  const textOpacity   = useRef(new Animated.Value(0)).current;
+  const screenOpacity = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (fast) {
+      // Sesión en caché: logo rápido + salida suave ≈ 550ms total
+      Animated.sequence([
+        Animated.timing(logoOpacity,   { toValue: 1, duration: 250, useNativeDriver: true }),
+        Animated.delay(100),
+        Animated.timing(screenOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+      ]).start(() => onDone());
+    } else {
+      // Primera vez / sesión expirada: intro completo ≈ 1.7s
+      Animated.sequence([
+        Animated.timing(logoOpacity,   { toValue: 1, duration: 500, useNativeDriver: true }),
+        Animated.timing(textOpacity,   { toValue: 1, duration: 300, useNativeDriver: true }),
+        Animated.delay(500),
+        Animated.timing(screenOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+      ]).start(() => onDone());
+    }
+  }, []);
+
+  return (
+    <Animated.View style={[ss.splash, { opacity: screenOpacity }]}>
+      <View style={ss.center}>
+        <Animated.View style={{ opacity: logoOpacity }}>
+          <Image
+            source={require('@/assets/images/logo.png')}
+            style={ss.logo}
+            contentFit="contain"
+          />
+        </Animated.View>
+
+        <Animated.View style={[ss.textWrap, { opacity: textOpacity }]}>
+          <Text style={ss.title}>Bocara</Text>
+          <Text style={ss.sub}>Rescata comida · Ahorra dinero</Text>
+        </Animated.View>
+      </View>
+    </Animated.View>
+  );
+}
+
+const ss = StyleSheet.create({
+  splash:   { ...StyleSheet.absoluteFillObject, backgroundColor: '#1A1A1A', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
+  center:   { alignItems: 'center' },
+  logo:     { width: 120, height: 120, borderRadius: 28 },
+  textWrap: { alignItems: 'center', marginTop: 24 },
+  title:    { fontSize: 36, fontWeight: '900', color: '#C8A97E', letterSpacing: -1 },
+  sub:      { fontSize: 14, color: 'rgba(255,255,255,0.6)', marginTop: 6, letterSpacing: 0.3 },
+});
+
+// ── Auth guard + routing ──────────────────────────────────────────────────────
 function AuthGuard() {
   const { usuario, loading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
   const pushRegistered = useRef(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
-  const [onboardingDone, setOnboardingDone] = useState(true);
+  const [onboardingDone, setOnboardingDone]       = useState(true);
+  const [splashDone, setSplashDone]               = useState(false);
 
-  // Lee onboarding en paralelo con AuthContext (ambos desde AsyncStorage, muy rápido)
   useEffect(() => {
     if (Platform.OS === 'web') {
       setOnboardingDone(true);
@@ -88,7 +144,7 @@ function AuthGuard() {
     });
   }, []);
 
-  // Ocultar splash nativo cuando la app esté lista — sin spinner JS
+  // Ocultar splash nativo cuando la app esté lista; luego el JS splash toma el relevo
   useEffect(() => {
     if (!loading && onboardingChecked) {
       SplashScreen.hideAsync().catch(() => {});
@@ -120,45 +176,54 @@ function AuthGuard() {
       }
 
       const inCorrectSection =
-        (usuario.rol === 'cliente' && segments[0] === '(tabs)') ||
+        (usuario.rol === 'cliente'     && segments[0] === '(tabs)')     ||
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
-        (usuario.rol === 'admin' && segments[0] === 'admin');
+        (usuario.rol === 'admin'       && segments[0] === 'admin');
 
       const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios'];
 
       if (!inCorrectSection && !allowedSections.includes(segments[0] as string)) {
         let rutaDestino = '/(tabs)/';
         if (usuario.rol === 'restaurante') rutaDestino = '/restaurante';
-        else if (usuario.rol === 'admin') rutaDestino = '/admin';
+        else if (usuario.rol === 'admin')  rutaDestino = '/admin';
         router.replace(rutaDestino as any);
       }
     }
   }, [usuario, loading, segments, onboardingChecked, onboardingDone]);
 
-  // El splash nativo cubre la UI mientras loading || !onboardingChecked
-  // No necesitamos un spinner JS — devolver null es suficiente
+  // El splash nativo cubre la UI mientras carga la sesión
   if (loading || !onboardingChecked) return null;
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Screen name="(tabs)" />
-      <Stack.Screen name="restaurante" />
-      <Stack.Screen name="admin" />
-      <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
-      <Stack.Screen name="login" options={{ animation: 'fade' }} />
-      <Stack.Screen name="auth/callback" options={{ animation: 'none' }} />
-      <Stack.Screen name="registro-cliente" />
-      <Stack.Screen name="registro-restaurante" />
-      <Stack.Screen name="forgot-password" />
-      <Stack.Screen name="verificar-email" />
-      <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="pago" options={{ headerShown: false }} />
-      <Stack.Screen name="pago-exitoso" options={{ headerShown: false }} />
-      <Stack.Screen name="qr-recogida" options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="soporte" options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
-      <Stack.Screen name="socios" options={{ headerShown: false }} />
-    </Stack>
+    <>
+      <StatusBar style={splashDone ? 'dark' : 'light'} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="restaurante" />
+        <Stack.Screen name="admin" />
+        <Stack.Screen name="onboarding"   options={{ animation: 'fade' }} />
+        <Stack.Screen name="login"        options={{ animation: 'fade' }} />
+        <Stack.Screen name="auth/callback" options={{ animation: 'none' }} />
+        <Stack.Screen name="registro-cliente" />
+        <Stack.Screen name="registro-restaurante" />
+        <Stack.Screen name="forgot-password" />
+        <Stack.Screen name="verificar-email" />
+        <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+        <Stack.Screen name="pago"          options={{ headerShown: false }} />
+        <Stack.Screen name="pago-exitoso"  options={{ headerShown: false }} />
+        <Stack.Screen name="qr-recogida"   options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+        <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+        <Stack.Screen name="soporte"       options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
+        <Stack.Screen name="socios"        options={{ headerShown: false }} />
+      </Stack>
+
+      {!splashDone && (
+        <BocaraSplash
+          fast={!!usuario}
+          onDone={() => setSplashDone(true)}
+        />
+      )}
+    </>
   );
 }
 
@@ -168,7 +233,6 @@ export default function RootLayout() {
       <LocationProvider>
         <CartProvider>
           <AuthGuard />
-          <StatusBar style="dark" />
         </CartProvider>
       </LocationProvider>
     </AuthProvider>
