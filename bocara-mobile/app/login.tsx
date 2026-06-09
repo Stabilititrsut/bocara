@@ -40,7 +40,7 @@ export default function LoginScreen() {
     if (!email || !password) { setErrorMsg('Ingresa tu correo y contraseña.'); return; }
     setLoading(true);
     try {
-      await login(email.toLowerCase().trim(), password);
+      await login(email.toLowerCase().trim(), password, esRest ? 'restaurante' : undefined);
     } catch (e: any) {
       setErrorMsg(e.message || 'Credenciales incorrectas. Intenta de nuevo.');
     } finally {

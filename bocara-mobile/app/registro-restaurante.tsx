@@ -88,6 +88,38 @@ export default function RegistroRestauranteScreen() {
     setErrors(e => ({ ...e, [k]: '' }));
   };
 
+  // ── Geocodificar por dirección (funciona en web y nativo) ────────────────
+  async function geocodificarDireccion() {
+    if (!form.direccion_negocio.trim()) {
+      Alert.alert('Dirección requerida', 'Ingresa primero la dirección del negocio.');
+      return;
+    }
+    setLocCapturando(true);
+    try {
+      const q = [
+        form.direccion_negocio,
+        form.zona ? `Zona ${form.zona}` : '',
+        'Guatemala',
+      ].filter(Boolean).join(', ');
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=gt`
+      );
+      const data = await res.json();
+      if (data.length > 0) {
+        const lat = parseFloat(data[0].lat).toFixed(6);
+        const lng = parseFloat(data[0].lon).toFixed(6);
+        setForm(f => ({ ...f, latitud: lat, longitud: lng }));
+        Alert.alert('✅ Coordenadas obtenidas', `Lat: ${lat}\nLng: ${lng}`);
+      } else {
+        Alert.alert('No encontrado', 'No se pudo geocodificar esa dirección. Intenta con más detalles o usa el GPS.');
+      }
+    } catch {
+      Alert.alert('Error', 'No se pudo conectar al servicio de geocodificación. Verifica tu conexión.');
+    } finally {
+      setLocCapturando(false);
+    }
+  }
+
   // ── GPS ──────────────────────────────────────────────────────────────────
   async function capturarUbicacion() {
     setLocCapturando(true);
@@ -424,10 +456,16 @@ export default function RegistroRestauranteScreen() {
               ) : (
                 <Text style={s.gpsWarn}>Para mostrar tu negocio a clientes cercanos, necesitamos una ubicación exacta.</Text>
               )}
+              <TouchableOpacity style={[s.gpsBtn, { backgroundColor: '#2563EB', marginBottom: 8 }]} onPress={geocodificarDireccion} disabled={locCapturando}>
+                {locCapturando
+                  ? <ActivityIndicator color={Colors.white} size="small" />
+                  : <Text style={s.gpsBtnText}>📍 Geocodificar dirección</Text>
+                }
+              </TouchableOpacity>
               <TouchableOpacity style={s.gpsBtn} onPress={capturarUbicacion} disabled={locCapturando}>
                 {locCapturando
                   ? <ActivityIndicator color={Colors.white} size="small" />
-                  : <Text style={s.gpsBtnText}>{form.latitud ? '📡 Actualizar mi ubicación' : '📡 Usar mi ubicación actual'}</Text>
+                  : <Text style={s.gpsBtnText}>{form.latitud ? '📡 Actualizar ubicación GPS' : '📡 Usar GPS del dispositivo'}</Text>
                 }
               </TouchableOpacity>
               {!form.latitud && <Text style={s.gpsSkipHint}>Puedes agregar la ubicación después desde tu panel.</Text>}

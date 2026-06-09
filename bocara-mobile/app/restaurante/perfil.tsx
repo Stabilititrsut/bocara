@@ -27,6 +27,7 @@ export default function PerfilRestauranteScreen() {
   const [dpiUrl, setDpiUrl] = useState('');
   const [uploadingDpi, setUploadingDpi] = useState(false);
   const [dpiError, setDpiError] = useState('');
+  const [geoLoading, setGeoLoading] = useState(false);
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
   const set = (k: string) => (v: string) => {
     setForm((f: any) => ({ ...f, [k]: v }));
@@ -187,28 +188,29 @@ export default function PerfilRestauranteScreen() {
 
   async function geocodificarAhora() {
     if (!form.direccion) { showToast('Ingresa una dirección primero', false); return; }
-    setSaving(true);
-    setToast(null);
+    setGeoLoading(true);
     try {
-      const partes = [
+      const q = [
         form.direccion,
         form.zona ? `Zona ${form.zona}` : '',
-        form.ciudad || 'Guatemala City',
+        form.ciudad || 'Guatemala',
         'Guatemala',
       ].filter(Boolean).join(', ');
-      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(partes)}&format=json&limit=1&countrycodes=gt`;
-      const resp    = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'BocararFoodApp/1.0' } });
-      const results = await resp.json();
-      if (results.length > 0) {
-        const lat = parseFloat(results[0].lat).toFixed(6);
-        const lng = parseFloat(results[0].lon).toFixed(6);
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=gt`
+      );
+      const data = await res.json();
+      if (data.length > 0) {
+        const lat = parseFloat(data[0].lat).toFixed(6);
+        const lng = parseFloat(data[0].lon).toFixed(6);
         setForm((f: any) => ({ ...f, latitud: lat, longitud: lng }));
-        showToast(`✅ Coordenadas: ${lat}, ${lng}`);
+        setCamposPendientes(prev => { const n = new Set(prev); n.add('latitud'); n.add('longitud'); return n; });
+        showToast(`✅ ${lat}, ${lng}`);
       } else {
-        showToast('No se encontró la dirección. Intenta con más detalles o ingresa coordenadas manualmente.', false);
+        showToast('Dirección no encontrada. Intenta con más detalles.', false);
       }
-    } catch (e: any) { showToast(e.message || 'Error al geocodificar', false); }
-    finally { setSaving(false); }
+    } catch { showToast('Error de conexión al geocodificar', false); }
+    finally { setGeoLoading(false); }
   }
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} /></View>;
@@ -381,8 +383,10 @@ export default function PerfilRestauranteScreen() {
               <TextInput style={s.input} value={form.longitud} onChangeText={set('longitud')} placeholder="-90.5069" placeholderTextColor={Colors.textLight} keyboardType="decimal-pad" />
             </View>
           </View>
-          <TouchableOpacity style={s.geocodeBtn} onPress={geocodificarAhora} disabled={saving}>
-            <Text style={s.geocodeBtnText}>{saving ? 'Buscando...' : '🔍 Detectar desde dirección'}</Text>
+          <TouchableOpacity style={s.geocodeBtn} onPress={geocodificarAhora} disabled={geoLoading}>
+            {geoLoading
+              ? <ActivityIndicator color={Colors.white} size="small" />
+              : <Text style={s.geocodeBtnText}>🔍 Detectar desde dirección</Text>}
           </TouchableOpacity>
           <Text style={s.coordsHint}>O busca en maps.google.com, haz clic derecho y copia las coordenadas.</Text>
         </View>

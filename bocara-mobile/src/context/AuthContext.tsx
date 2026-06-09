@@ -9,7 +9,7 @@ interface AuthContextType {
   usuario: Usuario | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  login: (email: string, password: string, rolEsperado?: string) => Promise<void>;
   registroCliente: (data: any) => Promise<void>;
   registroRestaurante: (data: any) => Promise<void>;
   setSession: (token: string, usuario: Usuario) => Promise<void>;
@@ -60,9 +60,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  async function login(email: string, password: string) {
+  async function login(email: string, password: string, rolEsperado?: string) {
     const res = await authAPI.login(email, password);
     const { token: t, usuario: u } = res.data;
+    if (rolEsperado && u.rol !== rolEsperado) {
+      throw new Error(
+        rolEsperado === 'restaurante'
+          ? 'Esta cuenta no es de negocio. Usa la opción "Soy cliente".'
+          : 'Acceso denegado para este tipo de cuenta.'
+      );
+    }
     await Promise.all([
       AsyncStorage.setItem('bocara_token', t),
       AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
