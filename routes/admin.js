@@ -148,13 +148,18 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
   try {
     const { data: u } = await supabase.from('usuarios').select('expo_push_token,email,nombre,apellido').eq('id', propietarioId).single();
     if (u?.expo_push_token) {
-      await enviarNotificacionPush(u.expo_push_token, titulo, cuerpo, { tipo, ...extra });
+      await enviarNotificacionPush(u.expo_push_token, titulo, cuerpo, { tipo, ...extra }).catch(e =>
+        console.error(`[notificar] Push error para ${propietarioId}:`, e.message)
+      );
     }
-    await guardarNotificacion(supabase, propietarioId, tipo, titulo, cuerpo, extra);
+    await guardarNotificacion(supabase, propietarioId, tipo, titulo, cuerpo, extra).catch(e =>
+      console.error(`[notificar] Error guardando notificación:`, e.message)
+    );
 
     // Enviar email si hay dirección
     if (u?.email) {
       const nombreProp = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Propietario';
+      console.log(`[notificar] Intentando email tipo="${tipo}" → ${u.email}`);
       if (tipo === 'negocio_aprobado') {
         await enviarEmail({
           to: u.email,
@@ -168,14 +173,19 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
           html: templateRechazado(nombre, nombreProp, extra.motivo, extra.campos),
         });
       } else if (tipo === 'negocio_suspendido') {
+        console.log(`[notificar] Email suspensión → negocio="${nombre}" propietario="${nombreProp}" motivo="${extra.motivo}"`);
         await enviarEmail({
           to: u.email,
           subject: '⚠️ Tu cuenta en Bocara Food fue suspendida',
           html: templateSuspendido(nombre, nombreProp, extra.motivo),
         });
       }
+    } else {
+      console.warn(`[notificar] Propietario ${propietarioId} sin email — no se envió correo`);
     }
-  } catch { }
+  } catch (e) {
+    console.error(`[notificar] Error en notificarPropietario (tipo=${tipo}):`, e.message);
+  }
 }
 
 // PUT /api/admin/negocios/:id/verificar (alias de /aprobar)

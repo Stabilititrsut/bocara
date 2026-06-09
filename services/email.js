@@ -16,20 +16,23 @@ function getTransporter() {
 
 async function enviarEmail({ to, subject, html }) {
   const t = getTransporter();
+  const dest = Array.isArray(to) ? to.join(', ') : to;
   if (!t) {
-    console.log(`[email] EMAIL_USER/EMAIL_PASS no configuradas — omitiendo email a: ${to}`);
+    console.warn(`[email] ⚠️  EMAIL_USER/EMAIL_PASS no configuradas en .env — email NO enviado a: ${dest} | asunto: "${subject}"`);
     return { ok: false };
   }
   try {
+    console.log(`[email] → Enviando a: ${dest} | asunto: "${subject}"`);
     await t.sendMail({
       from: `"Bocara Food" <${process.env.EMAIL_USER}>`,
-      to: Array.isArray(to) ? to.join(', ') : to,
+      to: dest,
       subject,
       html,
     });
+    console.log(`[email] ✓ Email enviado correctamente a: ${dest}`);
     return { ok: true };
   } catch (e) {
-    console.error('[email] Error al enviar:', e.message);
+    console.error(`[email] ✗ Error al enviar a ${dest}:`, e.message);
     return { ok: false };
   }
 }
@@ -238,20 +241,119 @@ function templateBienvenidaRestaurante(nombrePropietario, nombreNegocio) {
 }
 
 function templateSuspendido(nombreNegocio, nombrePropietario, motivo) {
-  return `
-<!DOCTYPE html><html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
-<div style="background:#1A1A1A;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px">
-  <div style="font-size:28px;font-weight:900;color:#C8A97E">Bocara Food</div>
-</div>
-<div style="background:#FEF3C7;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px">
-  <h1 style="color:#92400E;margin:0">⚠️ Cuenta suspendida</h1>
-</div>
-<p>Hola <b>${nombrePropietario}</b>,</p>
-<p>Tu negocio <b>${nombreNegocio}</b> ha sido suspendido temporalmente en Bocara Food.</p>
-${motivo ? `<div style="background:#FEF3C7;border-radius:10px;padding:14px;margin:16px 0"><b>Motivo:</b><br>${motivo}</div>` : ''}
-<p>Para resolver esta situación, contáctanos por WhatsApp al <b>+502 5107 7949</b> o responde este correo.</p>
-<p style="color:#64748B;font-size:13px">Equipo Bocara Food</p>
-</body></html>`;
+  const motivoHtml = motivo
+    ? `<tr><td style="padding:0 40px 28px">
+        <table width="100%" cellpadding="0" cellspacing="0" style="background:#FFFBEB;border-radius:16px;border-left:4px solid #D97706">
+          <tr><td style="padding:18px 22px">
+            <div style="font-size:12px;font-weight:700;color:#D97706;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Motivo de suspensión</div>
+            <div style="font-size:15px;color:#1A1A1A;line-height:22px">${motivo}</div>
+          </td></tr>
+        </table>
+      </td></tr>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F5F0EB;font-family:'Helvetica Neue',Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08)">
+
+        <!-- Header negro con logo -->
+        <tr>
+          <td style="background:#1A1A1A;padding:36px 40px;text-align:center">
+            <div style="font-size:32px;font-weight:900;letter-spacing:-1px;color:#C8A97E;margin-bottom:4px">
+              Bocara <span style="color:#FFFFFF">Food</span>
+            </div>
+            <div style="font-size:13px;color:rgba(200,169,126,0.7);letter-spacing:2px;text-transform:uppercase;margin-top:6px">
+              Panel para Restaurantes
+            </div>
+          </td>
+        </tr>
+
+        <!-- Ícono de advertencia -->
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center">
+            <div style="display:inline-block;background:#FEF3C7;border-radius:50%;width:80px;height:80px;line-height:80px;font-size:40px;margin-bottom:8px">
+              ⚠️
+            </div>
+          </td>
+        </tr>
+
+        <!-- Título -->
+        <tr>
+          <td style="padding:16px 40px 8px;text-align:center">
+            <h1 style="margin:0;font-size:28px;font-weight:900;color:#1A1A1A;letter-spacing:-0.5px">
+              Cuenta suspendida
+            </h1>
+          </td>
+        </tr>
+
+        <!-- Mensaje -->
+        <tr>
+          <td style="padding:8px 40px 28px;text-align:center">
+            <p style="margin:0;font-size:16px;color:#64748B;line-height:24px">
+              Hola, <strong style="color:#1A1A1A">${nombrePropietario}</strong>. Tu negocio
+              <strong style="color:#C8A97E">${nombreNegocio}</strong> ha sido suspendido temporalmente en Bocara Food.
+            </p>
+          </td>
+        </tr>
+
+        <!-- Separador dorado -->
+        <tr>
+          <td style="padding:0 40px">
+            <div style="height:2px;background:linear-gradient(90deg,transparent,#C8A97E,transparent)"></div>
+          </td>
+        </tr>
+
+        <!-- Espacio -->
+        <tr><td style="height:28px"></td></tr>
+
+        <!-- Motivo (si existe) -->
+        ${motivoHtml}
+
+        <!-- Instrucciones -->
+        <tr>
+          <td style="padding:0 40px 28px">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;border-radius:16px;border-left:4px solid #C8A97E">
+              <tr><td style="padding:20px 24px">
+                <div style="font-size:13px;font-weight:700;color:#C8A97E;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+                  ¿Cómo apelar esta decisión?
+                </div>
+                <div style="font-size:14px;color:#1A1A1A;line-height:22px">
+                  Contáctanos directamente por WhatsApp al número <strong>+502 5107-7949</strong> o responde este correo para hablar con nuestro equipo.
+                </div>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- CTA WhatsApp -->
+        <tr>
+          <td style="padding:0 40px 36px;text-align:center">
+            <a href="https://wa.me/50251077949?text=${encodeURIComponent(`Hola, quiero apelar la suspensión de mi negocio ${nombreNegocio} en Bocara Food.`)}"
+               style="display:inline-block;background:#25D366;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+              Contactar por WhatsApp →
+            </a>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              Este mensaje fue enviado porque eres propietario de un negocio registrado en Bocara.
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
 }
 
 module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido };
