@@ -364,15 +364,15 @@ router.post('/login', async (req, res) => {
     const valido = await bcrypt.compare(password, usuario.password_hash);
     if (!valido) return res.status(401).json({ error: 'Credenciales incorrectas' });
     const rol = usuario.rol || 'cliente';
-    // Verificar que el negocio no esté suspendido (activo: false)
+    // Verificar que el negocio no esté suspendido (activo != true cubre false Y null)
     if (rol === 'restaurante') {
       const { data: negocio } = await supabase
         .from('negocios')
         .select('activo')
         .eq('propietario_id', usuario.id)
         .maybeSingle();
-      if (negocio && negocio.activo === false) {
-        return res.status(403).json({ error: 'Tu cuenta ha sido suspendida. Contáctanos al 5107-7949' });
+      if (negocio && negocio.activo !== true) {
+        return res.status(403).json({ error: 'Tu cuenta ha sido suspendida. Contacta al administrador al 5107-7949' });
       }
     }
     const token = jwt.sign(

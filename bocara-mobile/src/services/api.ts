@@ -143,7 +143,8 @@ export const adminAPI = {
   pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),
   getConfig: () => api.get('/admin/config'),
   updateConfig: (data: any) => api.put('/admin/config', data),
-  geocodificarNegocios: () => api.post('/admin/geocodificar-negocios'),
+  geocodificarNegociosCount: () => api.get('/admin/geocodificar-negocios/count'),
+  geocodificarNegocios: () => api.post('/admin/geocodificar-negocios', {}, { timeout: 600000 }),
   liquidaciones: () => api.get('/admin/liquidaciones'),
   pagarLiquidacion: (restaurante_id: string, data?: any) =>
     api.post(`/admin/liquidaciones/${restaurante_id}/pagar`, data || {}),

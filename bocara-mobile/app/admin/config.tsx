@@ -48,11 +48,13 @@ function card(extra?: any) {
 }
 
 export default function AdminConfigScreen() {
-  const [config,    setConfig]    = useState<Record<string, string>>({});
-  const [loading,   setLoading]   = useState(true);
-  const [saving,    setSaving]    = useState(false);
-  const [hasTable,  setHasTable]  = useState(true);
-  const [showSQL,   setShowSQL]   = useState(false);
+  const [config,      setConfig]      = useState<Record<string, string>>({});
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
+  const [hasTable,    setHasTable]    = useState(true);
+  const [showSQL,     setShowSQL]     = useState(false);
+  const [geoLoading,  setGeoLoading]  = useState(false);
+  const [geoMsg,      setGeoMsg]      = useState('');
 
   const cargar = useCallback(async () => {
     try {
@@ -83,6 +85,40 @@ export default function AdminConfigScreen() {
         Alert.alert('Error', e.message);
       }
     } finally { setSaving(false); }
+  }
+
+  async function geocodificar() {
+    try {
+      const cnt = await adminAPI.geocodificarNegociosCount();
+      const total = cnt.data.count as number;
+      if (total === 0) {
+        Alert.alert('Sin pendientes', 'Todos los negocios ya tienen coordenadas.');
+        return;
+      }
+      Alert.alert(
+        'Geocodificar negocios',
+        `${total} negocio${total !== 1 ? 's' : ''} sin coordenadas (~${total}s). ¿Continuar?`,
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Iniciar', onPress: async () => {
+              setGeoLoading(true);
+              setGeoMsg(`Geocodificando ${total} negocios...`);
+              try {
+                const res = await adminAPI.geocodificarNegocios();
+                const { ok, sin_resultado, errores } = res.data;
+                setGeoMsg(`✓ ${ok} geocodificados · ${sin_resultado} sin resultado · ${errores} errores`);
+              } catch (e: any) {
+                setGeoMsg('');
+                Alert.alert('Error', e.message);
+              } finally { setGeoLoading(false); }
+            },
+          },
+        ]
+      );
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    }
   }
 
   function restaurarDefaults() {
@@ -199,33 +235,16 @@ export default function AdminConfigScreen() {
             Asigna coordenadas a todos los negocios sin ubicación usando OpenStreetMap (~1s por negocio).
           </Text>
           <TouchableOpacity
-            style={[s.geoBtn, saving && { opacity: 0.5 }]}
-            disabled={saving}
-            onPress={async () => {
-              Alert.alert(
-                'Geocodificar negocios',
-                '¿Buscar coordenadas para todos los negocios sin ubicación?',
-                [
-                  { text: 'Cancelar', style: 'cancel' },
-                  {
-                    text: 'Iniciar', onPress: async () => {
-                      setSaving(true);
-                      try {
-                        const res = await adminAPI.geocodificarNegocios();
-                        const { total, ok, sin_resultado, errores } = res.data;
-                        Alert.alert('Completado', `${total} negocios procesados\n✅ ${ok} con coordenadas\n⚠️ ${sin_resultado} sin resultado\n❌ ${errores} errores`);
-                      } catch (e: any) {
-                        Alert.alert('Error', e.message);
-                      } finally { setSaving(false); }
-                    },
-                  },
-                ]
-              );
-            }}
+            style={[s.geoBtn, geoLoading && { opacity: 0.5 }]}
+            disabled={geoLoading}
+            onPress={geocodificar}
           >
-            <Ionicons name="search" size={16} color="#fff" />
-            <Text style={s.geoBtnText}>Geocodificar ahora</Text>
+            {geoLoading
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <><Ionicons name="search" size={16} color="#fff" /><Text style={s.geoBtnText}>Geocodificar ahora</Text></>
+            }
           </TouchableOpacity>
+          {geoMsg ? <Text style={s.geoMsgText}>{geoMsg}</Text> : null}
         </View>
 
         <View style={{ height: 40 }} />
@@ -315,6 +334,7 @@ const s = StyleSheet.create({
   geoCard:  { padding: 16, marginBottom: 20 },
   geoTitle: { fontSize: 15, fontWeight: '700', color: TEXT },
   geoDesc:  { fontSize: 12, color: TEXT2, lineHeight: 18, marginBottom: 14 },
-  geoBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#1D4ED8', borderRadius: 12, padding: 12 },
+  geoBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#1D4ED8', borderRadius: 12, padding: 12 },
   geoBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  geoMsgText: { fontSize: 13, color: GOLD, marginTop: 12, fontWeight: '600', textAlign: 'center' },
 });

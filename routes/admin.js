@@ -46,7 +46,7 @@ router.get('/usuarios', authMiddleware, adminOnly, async (req, res) => {
   const { rol } = req.query;
   let query = supabase
     .from('usuarios')
-    .select('id,email,nombre,apellido,rol,telefono,puntos,total_bolsas_salvadas,total_ahorrado,created_at,creado_en')
+    .select('id,email,nombre,apellido,rol,telefono,puntos,total_bolsas_salvadas,total_ahorrado,created_at,creado_en,negocios(activo)')
     .order('created_at', { ascending: false });
   if (rol && rol !== 'todos') query = query.eq('rol', rol);
   let { data, error } = await query;
@@ -55,7 +55,11 @@ router.get('/usuarios', authMiddleware, adminOnly, async (req, res) => {
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  const usuarios = (data || []).map(({ negocios, ...u }) => ({
+    ...u,
+    negocio_activo: Array.isArray(negocios) && negocios.length > 0 ? negocios[0].activo : null,
+  }));
+  res.json(usuarios);
 });
 
 // PUT /api/admin/usuarios/:id
@@ -307,6 +311,16 @@ router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
   res.json(data || []);
+});
+
+// GET /api/admin/geocodificar-negocios/count — cuántos negocios faltan por geocodificar
+router.get('/geocodificar-negocios/count', authMiddleware, adminOnly, async (req, res) => {
+  const { count, error } = await supabase
+    .from('negocios')
+    .select('id', { count: 'exact', head: true })
+    .or('latitud.is.null,longitud.is.null');
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ count: count || 0 });
 });
 
 // POST /api/admin/geocodificar-negocios — geocodifica todos los negocios sin coordenadas

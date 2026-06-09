@@ -55,12 +55,17 @@ export default function AdminUsuariosScreen() {
   const filtrados = usuarios.filter((u) => {
     const q = busqueda.toLowerCase();
     const matchBusq = !busqueda || u.nombre?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q) || u.apellido?.toLowerCase().includes(q);
-    const matchRol = rolFiltro === 'todos' || u.rol === rolFiltro;
-    return matchBusq && matchRol;
+    if (rolFiltro === 'todos') return matchBusq;
+    if (rolFiltro === 'suspendido') {
+      return matchBusq && (u.rol === 'suspendido' || (u.rol === 'restaurante' && u.negocio_activo === false));
+    }
+    return matchBusq && u.rol === rolFiltro;
   });
 
   const conteos: Record<string, number> = { todos: usuarios.length };
   for (const u of usuarios) conteos[u.rol] = (conteos[u.rol] || 0) + 1;
+  // Restaurantes con negocio suspendido también cuentan en "suspendido"
+  conteos['suspendido'] = (conteos['suspendido'] || 0) + usuarios.filter(u => u.rol === 'restaurante' && u.negocio_activo === false).length;
 
   if (loading) return <View style={[s.loading, { backgroundColor: '#0F172A' }]}><ActivityIndicator color={Colors.orange} size="large" /></View>;
 
@@ -117,8 +122,15 @@ export default function AdminUsuariosScreen() {
                   {u.telefono ? <Text style={s.meta}>📞 {u.telefono}</Text> : null}
                   {fechaReg ? <Text style={s.meta}>Desde {new Date(fechaReg).toLocaleDateString('es-GT')}</Text> : null}
                 </View>
-                <View style={[s.rolBadge, { backgroundColor: cfg.bg }]}>
-                  <Text style={[s.rolText, { color: cfg.color }]}>{u.rol}</Text>
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <View style={[s.rolBadge, { backgroundColor: cfg.bg }]}>
+                    <Text style={[s.rolText, { color: cfg.color }]}>{u.rol}</Text>
+                  </View>
+                  {u.rol === 'restaurante' && u.negocio_activo === false && (
+                    <View style={[s.rolBadge, { backgroundColor: '#450A0A' }]}>
+                      <Text style={[s.rolText, { color: '#F87171' }]}>neg. suspendido</Text>
+                    </View>
+                  )}
                 </View>
               </View>
 
@@ -158,7 +170,10 @@ export default function AdminUsuariosScreen() {
               ) : u.rol !== 'admin' ? (
                 <View style={s.actions}>
                   {u.rol === 'suspendido' ? (
-                    <TouchableOpacity style={s.btnRehabilitar} onPress={() => setConfirmando({ id: u.id, accion: 'rehabilitar', nombre: u.nombre, rol: 'cliente' })}>
+                    <TouchableOpacity style={s.btnRehabilitar} onPress={() => setConfirmando({
+                      id: u.id, accion: 'rehabilitar', nombre: u.nombre,
+                      rol: u.negocio_activo !== null ? 'restaurante' : 'cliente',
+                    })}>
                       <Text style={s.btnRehabilitarText}>▶ Rehabilitar</Text>
                     </TouchableOpacity>
                   ) : (

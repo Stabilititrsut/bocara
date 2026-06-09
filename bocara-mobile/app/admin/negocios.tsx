@@ -14,7 +14,7 @@ const TEXT   = '#111827';
 const TEXT2  = '#6B7280';
 const GOLD   = '#C8A97E';
 
-type Filtro = 'todos' | 'pendientes' | 'verificados' | 'inactivos';
+type Filtro = 'todos' | 'pendientes' | 'verificados' | 'suspendidos' | 'inactivos';
 
 export default function AdminNegociosScreen() {
   const router = useRouter();
@@ -98,14 +98,16 @@ export default function AdminNegociosScreen() {
       n.nombre?.toLowerCase().includes(busqueda.toLowerCase()) ||
       n.zona?.toLowerCase().includes(busqueda.toLowerCase());
     switch (filtro) {
-      case 'pendientes': return match && !n.verificado;
-      case 'verificados': return match && n.verificado && n.activo !== false;
-      case 'inactivos': return match && n.activo === false;
+      case 'pendientes':   return match && !n.verificado;
+      case 'verificados':  return match && n.verificado && n.activo !== false;
+      case 'suspendidos':  return match && n.verificado && n.activo === false;
+      case 'inactivos':    return match && !n.verificado && n.activo === false;
       default: return match;
     }
   });
 
-  const pendienteCount = negocios.filter(n => !n.verificado).length;
+  const pendienteCount   = negocios.filter(n => !n.verificado).length;
+  const suspendidoCount  = negocios.filter(n => n.verificado && n.activo === false).length;
 
   if (loading) return (
     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: BG }}>
@@ -148,10 +150,11 @@ export default function AdminNegociosScreen() {
       {/* Filtros */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filtrosBar} contentContainerStyle={{ paddingHorizontal: 14, gap: 8 }}>
         {([
-          ['todos',      'Todos'],
-          ['pendientes', `Pendientes${pendienteCount > 0 ? ` (${pendienteCount})` : ''}`],
+          ['todos',       'Todos'],
+          ['pendientes',  `Pendientes${pendienteCount > 0 ? ` (${pendienteCount})` : ''}`],
           ['verificados', 'Verificados'],
-          ['inactivos',  'Inactivos'],
+          ['suspendidos', `Suspendidos${suspendidoCount > 0 ? ` (${suspendidoCount})` : ''}`],
+          ['inactivos',   'Inactivos'],
         ] as [Filtro, string][]).map(([f, label]) => (
           <TouchableOpacity key={f} style={[s.chip, filtro === f && s.chipActive]} onPress={() => setFiltro(f)}>
             <Text style={[s.chipText, filtro === f && s.chipTextActive]}>{label}</Text>
