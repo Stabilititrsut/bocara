@@ -612,7 +612,7 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
-  const updates: any = { estado_aprobacion: 'rechazado', activo: false };
+  const updates = { estado_aprobacion: 'rechazado', activo: false };
   if (motivo) updates.motivo_rechazo = motivo;
 
   let { data, error } = await supabase
