@@ -237,4 +237,21 @@ function templateBienvenidaRestaurante(nombrePropietario, nombreNegocio) {
 </html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante };
+function templateSuspendido(nombreNegocio, nombrePropietario, motivo) {
+  return `
+<!DOCTYPE html><html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px">
+<div style="background:#1A1A1A;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px">
+  <div style="font-size:28px;font-weight:900;color:#C8A97E">Bocara Food</div>
+</div>
+<div style="background:#FEF3C7;border-radius:12px;padding:20px;text-align:center;margin-bottom:24px">
+  <h1 style="color:#92400E;margin:0">⚠️ Cuenta suspendida</h1>
+</div>
+<p>Hola <b>${nombrePropietario}</b>,</p>
+<p>Tu negocio <b>${nombreNegocio}</b> ha sido suspendido temporalmente en Bocara Food.</p>
+${motivo ? `<div style="background:#FEF3C7;border-radius:10px;padding:14px;margin:16px 0"><b>Motivo:</b><br>${motivo}</div>` : ''}
+<p>Para resolver esta situación, contáctanos por WhatsApp al <b>+502 5107 7949</b> o responde este correo.</p>
+<p style="color:#64748B;font-size:13px">Equipo Bocara Food</p>
+</body></html>`;
+}
+
+module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido };

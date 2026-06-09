@@ -44,7 +44,8 @@ export default function AdminContenidoScreen() {
               setItems(prev => prev.filter(i => i.id !== id));
               Alert.alert('✅ Aprobado', `"${nombre}" ya está activo en Bocara.`);
             } catch (e: any) {
-              Alert.alert('Error', e.message);
+              console.error('[contenido] aprobar error:', e.message);
+              Alert.alert('Error al aprobar', e.message);
             } finally {
               setProcesando(null);
             }
@@ -63,7 +64,8 @@ export default function AdminContenidoScreen() {
       setItems(prev => prev.filter(i => i.id !== modalRechazo.id));
       Alert.alert('Rechazado', 'El propietario fue notificado.');
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      console.error('[contenido] rechazar error:', e.message);
+      Alert.alert('Error al rechazar', e.message);
     } finally {
       setProcesando(null);
       setMotivoRechazo('');

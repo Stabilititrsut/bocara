@@ -190,21 +190,22 @@ export default function PerfilRestauranteScreen() {
     setSaving(true);
     setToast(null);
     try {
-      await negociosAPI.actualizar(negocio.id, {
-        direccion: form.direccion, zona: form.zona, ciudad: form.ciudad,
-        latitud: null, longitud: null,
-      });
-      const res = await negociosAPI.miNegocio();
-      setNegocio(res.data);
-      setForm((f: any) => ({
-        ...f,
-        latitud: res.data.latitud != null ? String(res.data.latitud) : '',
-        longitud: res.data.longitud != null ? String(res.data.longitud) : '',
-      }));
-      if (res.data.latitud) {
-        showToast(`✅ Lat: ${res.data.latitud.toFixed(6)}, Lng: ${res.data.longitud?.toFixed(6)}`);
+      const partes = [
+        form.direccion,
+        form.zona ? `Zona ${form.zona}` : '',
+        form.ciudad || 'Guatemala City',
+        'Guatemala',
+      ].filter(Boolean).join(', ');
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(partes)}&format=json&limit=1&countrycodes=gt`;
+      const resp    = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'BocararFoodApp/1.0' } });
+      const results = await resp.json();
+      if (results.length > 0) {
+        const lat = parseFloat(results[0].lat).toFixed(6);
+        const lng = parseFloat(results[0].lon).toFixed(6);
+        setForm((f: any) => ({ ...f, latitud: lat, longitud: lng }));
+        showToast(`✅ Coordenadas: ${lat}, ${lng}`);
       } else {
-        showToast('No se encontró la dirección. Ingresa coordenadas manualmente.', false);
+        showToast('No se encontró la dirección. Intenta con más detalles o ingresa coordenadas manualmente.', false);
       }
     } catch (e: any) { showToast(e.message || 'Error al geocodificar', false); }
     finally { setSaving(false); }

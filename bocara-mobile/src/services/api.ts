@@ -138,7 +138,7 @@ export const adminAPI = {
   aprobarNegocio: (id: string) => api.put(`/admin/negocios/${id}/aprobar`),
   rechazarNegocio: (id: string, motivo?: string, campos_incorrectos?: string[]) =>
     api.put(`/admin/negocios/${id}/rechazar`, { motivo, campos_incorrectos }),
-  toggleNegocio: (id: string) => api.put(`/admin/negocios/${id}/toggle`),
+  toggleNegocio: (id: string, motivo?: string) => api.put(`/admin/negocios/${id}/toggle`, { motivo }),
   financiero: (periodo?: string) => api.get('/admin/financiero', { params: { periodo } }),
   pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),
   getConfig: () => api.get('/admin/config'),

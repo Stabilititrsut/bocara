@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, TextInput, RefreshControl, Modal,
+  SafeAreaView, ActivityIndicator, TextInput, RefreshControl, Modal, Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { adminAPI } from '@/src/services/api';
@@ -52,7 +52,10 @@ export default function AdminVerificacionScreen() {
       await adminAPI.aprobarNegocio(id);
       setNegocios(prev => prev.filter(n => n.id !== id));
     } catch (e: any) {
-      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al aprobar' }));
+      const msg = e.message || 'Error al aprobar';
+      console.error('[verificacion] aprobar error:', msg);
+      setErrores(prev => ({ ...prev, [id]: msg }));
+      Alert.alert('Error al aprobar', msg);
     } finally {
       setProcesando(null);
     }
@@ -74,7 +77,10 @@ export default function AdminVerificacionScreen() {
       await adminAPI.rechazarNegocio(id, motivoRechazo, camposSeleccionados);
       setNegocios(prev => prev.filter(n => n.id !== id));
     } catch (e: any) {
-      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al rechazar' }));
+      const msg = e.message || 'Error al rechazar';
+      console.error('[verificacion] rechazar error:', msg);
+      setErrores(prev => ({ ...prev, [id]: msg }));
+      Alert.alert('Error al rechazar', msg);
     } finally {
       setProcesando(null);
       setMotivoRechazo('');

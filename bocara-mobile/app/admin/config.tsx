@@ -1,27 +1,31 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, TextInput, Alert, ActivityIndicator, Switch,
+  SafeAreaView, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
-import { Colors } from '@/constants/Colors';
 
-const DARK = '#1E293B';
+const BG     = '#F8FAFC';
+const CARD   = '#FFFFFF';
+const BORDER = '#E5E7EB';
+const TEXT   = '#111827';
+const TEXT2  = '#6B7280';
+const GOLD   = '#C8A97E';
 
 const CAMPOS: Array<{
   clave: string;
   label: string;
   descripcion: string;
-  emoji: string;
+  icon: any;
   unidad?: string;
-  tipo: 'number' | 'boolean';
 }> = [
-  { clave: 'comision_porcentaje', label: 'Comisión Bocara', descripcion: 'Porcentaje que Bocara retiene de cada venta', emoji: '🏦', unidad: '%', tipo: 'number' },
-  { clave: 'puntos_por_pedido', label: 'Puntos por pedido', descripcion: 'Puntos otorgados al cliente al completar un pedido', emoji: '⭐', unidad: 'pts', tipo: 'number' },
-  { clave: 'min_puntos_canje', label: 'Mínimo para canjear', descripcion: 'Puntos mínimos requeridos para hacer un canje', emoji: '🔓', unidad: 'pts', tipo: 'number' },
-  { clave: 'puntos_a_quetzales', label: 'Valor del punto', descripcion: 'Cuánto vale cada punto en quetzales al canjear', emoji: '💱', unidad: 'Q', tipo: 'number' },
-  { clave: 'costo_envio_fijo', label: 'Costo de envío', descripcion: 'Costo fijo de envío a domicilio (0 para gratuito)', emoji: '🏍️', unidad: 'Q', tipo: 'number' },
-  { clave: 'max_bolsas_por_restaurante', label: 'Bolsas máximas', descripcion: 'Número máximo de bolsas activas por restaurante', emoji: '🥡', unidad: '', tipo: 'number' },
+  { clave: 'comision_porcentaje',        label: 'Comisión Bocara',       descripcion: 'Porcentaje que Bocara retiene de cada venta',              icon: 'trending-up',     unidad: '%'  },
+  { clave: 'puntos_por_pedido',           label: 'Puntos por pedido',     descripcion: 'Puntos otorgados al cliente al completar un pedido',      icon: 'star',            unidad: 'pts' },
+  { clave: 'min_puntos_canje',            label: 'Mínimo para canjear',   descripcion: 'Puntos mínimos requeridos para hacer un canje',           icon: 'lock-open',       unidad: 'pts' },
+  { clave: 'puntos_a_quetzales',          label: 'Valor del punto',       descripcion: 'Cuánto vale cada punto en quetzales al canjear',          icon: 'cash',            unidad: 'Q'   },
+  { clave: 'costo_envio_fijo',            label: 'Costo de envío',        descripcion: 'Costo fijo de envío a domicilio (0 = gratuito)',          icon: 'bicycle',         unidad: 'Q'   },
+  { clave: 'max_bolsas_por_restaurante',  label: 'Bolsas máximas',        descripcion: 'Número máximo de bolsas activas por restaurante',         icon: 'bag',             unidad: ''    },
 ];
 
 const DEFAULTS: Record<string, number> = {
@@ -33,21 +37,30 @@ const DEFAULTS: Record<string, number> = {
   max_bolsas_por_restaurante: 10,
 };
 
+function card(extra?: any) {
+  return {
+    backgroundColor: CARD, borderRadius: 16,
+    borderWidth: 1, borderColor: BORDER,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 3, elevation: 2,
+    ...extra,
+  };
+}
+
 export default function AdminConfigScreen() {
-  const [config, setConfig] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [hasTable, setHasTable] = useState(true);
+  const [config,    setConfig]    = useState<Record<string, string>>({});
+  const [loading,   setLoading]   = useState(true);
+  const [saving,    setSaving]    = useState(false);
+  const [hasTable,  setHasTable]  = useState(true);
+  const [showSQL,   setShowSQL]   = useState(false);
 
   const cargar = useCallback(async () => {
     try {
       const res = await adminAPI.getConfig();
       const vals: Record<string, string> = {};
-      for (const [k, v] of Object.entries(res.data || {})) {
-        vals[k] = String(v);
-      }
+      for (const [k, v] of Object.entries(res.data || {})) vals[k] = String(v);
       setConfig(vals);
-    } catch { } finally { setLoading(false); }
+    } catch {} finally { setLoading(false); }
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
@@ -61,15 +74,11 @@ export default function AdminConfigScreen() {
         if (!isNaN(val)) payload[campo.clave] = val;
       }
       await adminAPI.updateConfig(payload);
-      Alert.alert('✅ Guardado', 'Configuración actualizada correctamente.');
+      Alert.alert('Guardado', 'Configuración actualizada correctamente.');
     } catch (e: any) {
       if (e.message?.includes('configuracion')) {
         setHasTable(false);
-        Alert.alert(
-          'Tabla requerida',
-          'Crea la tabla de configuración en Supabase SQL Editor:\n\nCREATE TABLE configuracion (\n  clave TEXT PRIMARY KEY,\n  valor TEXT\n);',
-          [{ text: 'Entendido' }]
-        );
+        setShowSQL(true);
       } else {
         Alert.alert('Error', e.message);
       }
@@ -84,44 +93,58 @@ export default function AdminConfigScreen() {
           const vals: Record<string, string> = {};
           for (const [k, v] of Object.entries(DEFAULTS)) vals[k] = String(v);
           setConfig(vals);
-        }
+        },
       },
     ]);
   }
 
   if (loading) return (
-    <View style={[s.loading, { backgroundColor: '#0F172A' }]}>
-      <ActivityIndicator color={Colors.orange} size="large" />
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: BG }}>
+      <ActivityIndicator color={GOLD} size="large" />
     </View>
   );
+
+  const comPct = parseFloat(config.comision_porcentaje || '25');
+  const pts    = parseInt(config.puntos_por_pedido || '10');
+  const envio  = parseFloat(config.costo_envio_fijo || '25');
 
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>⚙️ Configuración</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={s.headerTag}>CONFIGURACIÓN</Text>
+          <Text style={s.headerTitle}>Parámetros del sistema</Text>
+        </View>
         <TouchableOpacity style={s.resetBtn} onPress={restaurarDefaults}>
+          <Ionicons name="refresh" size={14} color={TEXT2} />
           <Text style={s.resetText}>Restaurar</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+
+        {/* Alerta SQL colapsable */}
         {!hasTable && (
-          <View style={s.warningCard}>
-            <Text style={s.warningTitle}>⚠️ Tabla de configuración no encontrada</Text>
-            <Text style={s.warningText}>
-              Ejecuta esto en Supabase → SQL Editor:
-            </Text>
-            <View style={s.codeBox}>
-              <Text style={s.codeText}>
-                CREATE TABLE configuracion ({'\n'}
-                {'  '}clave TEXT PRIMARY KEY,{'\n'}
-                {'  '}valor TEXT{'\n'}
-                );
-              </Text>
-            </View>
+          <View style={s.sqlAlert}>
+            <TouchableOpacity style={s.sqlAlertHeader} onPress={() => setShowSQL(!showSQL)}>
+              <Ionicons name="warning" size={18} color="#D97706" />
+              <Text style={s.sqlAlertTitle}>Tabla de configuración no encontrada</Text>
+              <Ionicons name={showSQL ? 'chevron-up' : 'chevron-down'} size={16} color="#D97706" />
+            </TouchableOpacity>
+            {showSQL && (
+              <View style={s.sqlAlertBody}>
+                <Text style={s.sqlAlertSub}>Ejecuta esto en Supabase → SQL Editor:</Text>
+                <View style={s.codeBox}>
+                  <Text style={s.codeText}>
+                    {'CREATE TABLE configuracion (\n  clave TEXT PRIMARY KEY,\n  valor TEXT\n);'}
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
 
+        {/* Secciones de configuración */}
         <Text style={s.sectionTitle}>Comisiones y pagos</Text>
         {CAMPOS.slice(0, 2).map((campo) => (
           <ConfigCard key={campo.clave} campo={campo} config={config} setConfig={setConfig} />
@@ -137,37 +160,43 @@ export default function AdminConfigScreen() {
           <ConfigCard key={campo.clave} campo={campo} config={config} setConfig={setConfig} />
         ))}
 
-        {/* Preview de la comisión */}
-        <View style={s.previewCard}>
-          <Text style={s.previewTitle}>Vista previa: pedido de Q100</Text>
-          {(() => {
-            const com = parseFloat(config.comision_porcentaje || '25');
-            const comVal = (100 * com / 100).toFixed(2);
-            const netoVal = (100 - 100 * com / 100).toFixed(2);
-            const pts = parseInt(config.puntos_por_pedido || '10');
-            const envio = parseFloat(config.costo_envio_fijo || '25');
-            return (
-              <>
-                <View style={s.previewRow}><Text style={s.previewLabel}>Pago del cliente</Text><Text style={s.previewVal}>Q100.00</Text></View>
-                <View style={s.previewRow}><Text style={s.previewLabel}>Comisión Bocara ({com}%)</Text><Text style={[s.previewVal, { color: Colors.orange }]}>Q{comVal}</Text></View>
-                <View style={s.previewRow}><Text style={s.previewLabel}>Pago al restaurante</Text><Text style={[s.previewVal, { color: '#86EFAC' }]}>Q{netoVal}</Text></View>
-                <View style={s.previewRow}><Text style={s.previewLabel}>Puntos cliente gana</Text><Text style={[s.previewVal, { color: '#FCD34D' }]}>{pts} pts</Text></View>
-                <View style={s.previewRow}><Text style={s.previewLabel}>Costo envío a domicilio</Text><Text style={s.previewVal}>Q{envio.toFixed(2)}</Text></View>
-              </>
-            );
-          })()}
+        {/* Preview */}
+        <Text style={s.sectionTitle}>Vista previa — pedido de Q100</Text>
+        <View style={[card(), s.previewCard]}>
+          {[
+            { label: 'Pago del cliente',         val: 'Q100.00',                         color: TEXT   },
+            { label: `Comisión Bocara (${comPct}%)`, val: `Q${(100 * comPct / 100).toFixed(2)}`, color: GOLD   },
+            { label: 'Pago al restaurante',      val: `Q${(100 - 100 * comPct / 100).toFixed(2)}`, color: '#16A34A' },
+            { label: 'Puntos que gana el cliente', val: `${pts} pts`,                    color: '#3B82F6' },
+            { label: 'Costo envío a domicilio',  val: `Q${envio.toFixed(2)}`,            color: TEXT2  },
+          ].map(({ label, val, color }, i, arr) => (
+            <View key={label} style={[s.previewRow, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: BORDER }]}>
+              <Text style={s.previewLabel}>{label}</Text>
+              <Text style={[s.previewVal, { color }]}>{val}</Text>
+            </View>
+          ))}
         </View>
 
+        {/* Botón guardar */}
         <TouchableOpacity style={[s.saveBtn, saving && { opacity: 0.6 }]} onPress={guardar} disabled={saving}>
-          <Text style={s.saveBtnText}>{saving ? 'Guardando...' : '💾 Guardar configuración'}</Text>
+          {saving
+            ? <ActivityIndicator color="#fff" size="small" />
+            : <>
+                <Ionicons name="save" size={18} color="#fff" />
+                <Text style={s.saveBtnText}>Guardar configuración</Text>
+              </>
+          }
         </TouchableOpacity>
 
-        {/* Herramienta de geocodificación masiva */}
-        <View style={s.geoCard}>
-          <Text style={s.geoTitle}>🗺️ Geocodificación de restaurantes</Text>
+        {/* Geocodificación */}
+        <Text style={s.sectionTitle}>Herramientas</Text>
+        <View style={[card(), s.geoCard]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <Ionicons name="map" size={20} color={GOLD} />
+            <Text style={s.geoTitle}>Geocodificación masiva</Text>
+          </View>
           <Text style={s.geoDesc}>
-            Asigna coordenadas automáticamente a todos los negocios que aún no tienen ubicación registrada.
-            Usa OpenStreetMap y tarda ~1 segundo por negocio.
+            Asigna coordenadas a todos los negocios sin ubicación usando OpenStreetMap (~1s por negocio).
           </Text>
           <TouchableOpacity
             style={[s.geoBtn, saving && { opacity: 0.5 }]}
@@ -175,7 +204,7 @@ export default function AdminConfigScreen() {
             onPress={async () => {
               Alert.alert(
                 'Geocodificar negocios',
-                '¿Buscar coordenadas para todos los negocios sin ubicación? Esto puede tardar varios segundos.',
+                '¿Buscar coordenadas para todos los negocios sin ubicación?',
                 [
                   { text: 'Cancelar', style: 'cancel' },
                   {
@@ -187,16 +216,15 @@ export default function AdminConfigScreen() {
                         Alert.alert('Completado', `${total} negocios procesados\n✅ ${ok} con coordenadas\n⚠️ ${sin_resultado} sin resultado\n❌ ${errores} errores`);
                       } catch (e: any) {
                         Alert.alert('Error', e.message);
-                      } finally {
-                        setSaving(false);
-                      }
-                    }
+                      } finally { setSaving(false); }
+                    },
                   },
                 ]
               );
             }}
           >
-            <Text style={s.geoBtnText}>🔍 Geocodificar ahora</Text>
+            <Ionicons name="search" size={16} color="#fff" />
+            <Text style={s.geoBtnText}>Geocodificar ahora</Text>
           </TouchableOpacity>
         </View>
 
@@ -206,31 +234,48 @@ export default function AdminConfigScreen() {
   );
 }
 
-function ConfigCard({ campo, config, setConfig }: { campo: typeof CAMPOS[0]; config: Record<string, string>; setConfig: React.Dispatch<React.SetStateAction<Record<string, string>>> }) {
+function ConfigCard({ campo, config, setConfig }: {
+  campo: typeof CAMPOS[0];
+  config: Record<string, string>;
+  setConfig: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+}) {
   const valor = config[campo.clave] ?? String(DEFAULTS[campo.clave] ?? '');
+  const hasPrefix = campo.unidad && campo.unidad !== '%';
+  const hasSuffix = campo.unidad === '%';
+
   return (
-    <View style={s.configCard}>
-      <View style={s.configCardTop}>
-        <Text style={{ fontSize: 24 }}>{campo.emoji}</Text>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={s.configLabel}>{campo.label}</Text>
-          <Text style={s.configDesc}>{campo.descripcion}</Text>
+    <View style={[{
+      backgroundColor: CARD, borderRadius: 16, borderWidth: 1, borderColor: BORDER,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 2, elevation: 1,
+      marginBottom: 10, padding: 16,
+    }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 10 }}>
+        <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: '#FEF9EC', alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name={campo.icon} size={18} color={GOLD} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 14, fontWeight: '700', color: TEXT }}>{campo.label}</Text>
+          <Text style={{ fontSize: 12, color: TEXT2, marginTop: 2, lineHeight: 17 }}>{campo.descripcion}</Text>
         </View>
       </View>
-      <View style={s.configInputRow}>
-        {campo.unidad && campo.unidad !== '%' && campo.tipo === 'number' && (
-          <View style={s.unidadPre}><Text style={s.unidadText}>{campo.unidad}</Text></View>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {hasPrefix && (
+          <View style={s.unitBox}>
+            <Text style={s.unitText}>{campo.unidad}</Text>
+          </View>
         )}
         <TextInput
-          style={[s.configInput, { flex: 1 }]}
+          style={[s.input, { flex: 1, borderTopLeftRadius: hasPrefix ? 0 : 12, borderBottomLeftRadius: hasPrefix ? 0 : 12, borderTopRightRadius: hasSuffix ? 0 : 12, borderBottomRightRadius: hasSuffix ? 0 : 12 }]}
           value={valor}
           onChangeText={(v) => setConfig((prev) => ({ ...prev, [campo.clave]: v }))}
           keyboardType="decimal-pad"
           placeholder={String(DEFAULTS[campo.clave] ?? '')}
-          placeholderTextColor="#475569"
+          placeholderTextColor="#9CA3AF"
         />
-        {campo.unidad === '%' && (
-          <View style={s.unidadSuf}><Text style={s.unidadText}>%</Text></View>
+        {hasSuffix && (
+          <View style={[s.unitBox, { borderTopRightRadius: 12, borderBottomRightRadius: 12, borderTopLeftRadius: 0, borderBottomLeftRadius: 0, borderLeftWidth: 0 }]}>
+            <Text style={s.unitText}>%</Text>
+          </View>
         )}
       </View>
     </View>
@@ -238,38 +283,38 @@ function ConfigCard({ campo, config, setConfig }: { campo: typeof CAMPOS[0]; con
 }
 
 const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#0F172A' },
-  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: DARK, borderBottomWidth: 1, borderBottomColor: '#334155' },
-  headerTitle: { fontSize: 20, fontWeight: '900', color: Colors.white },
-  resetBtn: { borderWidth: 1.5, borderColor: '#334155', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
-  resetText: { color: '#94A3B8', fontSize: 13, fontWeight: '600' },
-  scroll: { padding: 16 },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#64748B', marginBottom: 10, marginTop: 16, textTransform: 'uppercase', letterSpacing: 0.8 },
-  warningCard: { backgroundColor: '#451A03', borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#92400E' },
-  warningTitle: { fontSize: 14, fontWeight: '800', color: '#FCD34D', marginBottom: 8 },
-  warningText: { fontSize: 13, color: '#D97706', marginBottom: 10 },
-  codeBox: { backgroundColor: '#0F172A', borderRadius: 10, padding: 12 },
-  codeText: { fontFamily: 'monospace', fontSize: 12, color: '#86EFAC', lineHeight: 20 },
-  configCard: { backgroundColor: DARK, borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#334155' },
-  configCardTop: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
-  configLabel: { fontSize: 15, fontWeight: '800', color: Colors.white },
-  configDesc: { fontSize: 12, color: '#64748B', marginTop: 2, lineHeight: 18 },
-  configInputRow: { flexDirection: 'row', alignItems: 'center', gap: 0 },
-  unidadPre: { backgroundColor: '#334155', borderTopLeftRadius: 10, borderBottomLeftRadius: 10, padding: 12, borderWidth: 1, borderColor: '#475569', borderRightWidth: 0 },
-  unidadSuf: { backgroundColor: '#334155', borderTopRightRadius: 10, borderBottomRightRadius: 10, padding: 12, borderWidth: 1, borderColor: '#475569', borderLeftWidth: 0 },
-  unidadText: { color: '#94A3B8', fontWeight: '700', fontSize: 15 },
-  configInput: { backgroundColor: '#334155', borderRadius: 10, padding: 12, fontSize: 18, fontWeight: '800', color: Colors.white, borderWidth: 1, borderColor: '#475569', textAlign: 'center' },
-  previewCard: { backgroundColor: '#021F16', borderRadius: 16, padding: 16, marginTop: 16, borderWidth: 1, borderColor: '#065F46' },
-  previewTitle: { fontSize: 13, fontWeight: '700', color: '#64748B', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.6 },
-  previewRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  previewLabel: { fontSize: 13, color: '#94A3B8' },
-  previewVal: { fontSize: 13, fontWeight: '800', color: Colors.white },
-  saveBtn: { backgroundColor: Colors.orange, borderRadius: 16, padding: 16, alignItems: 'center', marginTop: 20 },
-  saveBtnText: { color: Colors.white, fontWeight: '900', fontSize: 16 },
-  geoCard: { backgroundColor: '#1E293B', borderRadius: 16, padding: 16, marginTop: 16, borderWidth: 1, borderColor: '#334155' },
-  geoTitle: { fontSize: 15, fontWeight: '800', color: Colors.white, marginBottom: 8 },
-  geoDesc: { fontSize: 12, color: '#94A3B8', lineHeight: 18, marginBottom: 14 },
-  geoBtn: { backgroundColor: '#1D4ED8', borderRadius: 12, padding: 12, alignItems: 'center' },
-  geoBtnText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
+  root:       { flex: 1, backgroundColor: BG },
+  header:     { flexDirection: 'row', alignItems: 'center', backgroundColor: CARD, padding: 20, borderBottomWidth: 1, borderBottomColor: BORDER },
+  headerTag:  { fontSize: 10, color: GOLD, fontWeight: '800', letterSpacing: 1.5 },
+  headerTitle: { fontSize: 22, fontWeight: '900', color: TEXT, marginTop: 2 },
+  resetBtn:   { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: BORDER, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  resetText:  { fontSize: 13, color: TEXT2, fontWeight: '600' },
+  scroll:     { padding: 16 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: TEXT2, marginBottom: 10, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.8 },
+
+  sqlAlert:       { backgroundColor: '#FFFBEB', borderRadius: 14, borderWidth: 1, borderColor: '#FDE68A', marginBottom: 16, overflow: 'hidden' },
+  sqlAlertHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 14 },
+  sqlAlertTitle:  { flex: 1, fontSize: 13, fontWeight: '700', color: '#92400E' },
+  sqlAlertBody:   { borderTopWidth: 1, borderTopColor: '#FDE68A', padding: 14 },
+  sqlAlertSub:    { fontSize: 12, color: '#B45309', marginBottom: 8 },
+  codeBox:        { backgroundColor: '#1A1A1A', borderRadius: 10, padding: 12 },
+  codeText:       { fontFamily: 'monospace', fontSize: 12, color: '#86EFAC', lineHeight: 20 },
+
+  input:    { height: 48, backgroundColor: BG, borderWidth: 1, borderColor: BORDER, borderRadius: 12, paddingHorizontal: 16, fontSize: 18, fontWeight: '800', color: TEXT, textAlign: 'center' },
+  unitBox:  { height: 48, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: BORDER, borderRadius: 12 },
+  unitText: { fontSize: 14, fontWeight: '700', color: TEXT2 },
+
+  previewCard: { marginBottom: 20, overflow: 'hidden' },
+  previewRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14 },
+  previewLabel: { fontSize: 13, color: TEXT2 },
+  previewVal:   { fontSize: 14, fontWeight: '800' },
+
+  saveBtn:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: GOLD, borderRadius: 16, padding: 16, marginBottom: 20 },
+  saveBtnText: { color: '#fff', fontWeight: '900', fontSize: 16 },
+
+  geoCard:  { padding: 16, marginBottom: 20 },
+  geoTitle: { fontSize: 15, fontWeight: '700', color: TEXT },
+  geoDesc:  { fontSize: 12, color: TEXT2, lineHeight: 18, marginBottom: 14 },
+  geoBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#1D4ED8', borderRadius: 12, padding: 12 },
+  geoBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

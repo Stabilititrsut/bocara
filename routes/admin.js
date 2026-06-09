@@ -3,7 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
-const { enviarEmail, templateAprobado, templateRechazado } = require('../services/email');
+const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido } = require('../services/email');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -163,6 +163,12 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
           subject: '❌ Actualización sobre tu solicitud en Bocara Food',
           html: templateRechazado(nombre, nombreProp, extra.motivo, extra.campos),
         });
+      } else if (tipo === 'negocio_suspendido') {
+        await enviarEmail({
+          to: u.email,
+          subject: '⚠️ Tu cuenta en Bocara Food fue suspendida',
+          html: templateSuspendido(nombre, nombreProp, extra.motivo),
+        });
       }
     }
   } catch { }
@@ -207,11 +213,22 @@ router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res)
 
 // PUT /api/admin/negocios/:id/toggle
 router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) => {
-  const { data: negocio } = await supabase.from('negocios').select('activo').eq('id', req.params.id).single();
+  const { motivo } = req.body || {};
+  const { data: negocio } = await supabase.from('negocios').select('activo,propietario_id,nombre').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+  const nuevoActivo = !negocio.activo;
   const { data, error } = await supabase
-    .from('negocios').update({ activo: !negocio.activo }).eq('id', req.params.id).select().single();
+    .from('negocios').update({ activo: nuevoActivo }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+  // Notificar al propietario cuando se suspende con motivo
+  if (!nuevoActivo && motivo && negocio.propietario_id) {
+    await notificarPropietario(
+      negocio.propietario_id, negocio.nombre, 'negocio_suspendido',
+      '⚠️ Tu negocio fue suspendido',
+      `"${negocio.nombre}" ha sido suspendido temporalmente. Motivo: ${motivo}`,
+      { motivo }
+    );
+  }
   res.json(data);
 });
 
@@ -524,13 +541,19 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
-  const { data, error } = await supabase
+  // Intentar con estado_aprobacion; si la columna no existe, activar con activo=true
+  let { data, error } = await supabase
     .from('bolsas')
-    .update({ estado_aprobacion: 'aprobado', motivo_rechazo: null })
+    .update({ estado_aprobacion: 'aprobado', activo: true, motivo_rechazo: null })
     .eq('id', req.params.id)
     .select()
     .single();
-  if (error) return res.status(400).json({ error: error.message });
+  if (error) {
+    // Fallback: solo activar la bolsa
+    const r = await supabase.from('bolsas').update({ activo: true }).eq('id', req.params.id).select().single();
+    if (r.error) return res.status(400).json({ error: r.error.message });
+    data = r.data;
+  }
 
   // Notificar al propietario del restaurante
   const propietarioId = bolsa.negocios?.propietario_id;
@@ -589,16 +612,21 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
-  const updates = { estado_aprobacion: 'rechazado' };
+  const updates: any = { estado_aprobacion: 'rechazado', activo: false };
   if (motivo) updates.motivo_rechazo = motivo;
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('bolsas')
     .update(updates)
     .eq('id', req.params.id)
     .select()
     .single();
-  if (error) return res.status(400).json({ error: error.message });
+  if (error) {
+    // Fallback: solo desactivar la bolsa
+    const r = await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id).select().single();
+    if (r.error) return res.status(400).json({ error: r.error.message });
+    data = r.data;
+  }
 
   // Notificar al propietario del restaurante
   const propietarioId = bolsa.negocios?.propietario_id;
