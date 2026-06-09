@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl, TextInput, ActivityIndicator,
+  SafeAreaView, RefreshControl, TextInput, ActivityIndicator, Modal,
 } from 'react-native';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
@@ -24,6 +24,10 @@ export default function AdminUsuariosScreen() {
   const [confirmando, setConfirmando] = useState<{ id: string; accion: string; nombre: string; rol?: string } | null>(null);
   const [procesando, setProcesando] = useState<string | null>(null);
   const [errores, setErrores] = useState<Record<string, string>>({});
+  const [suspendModal, setSuspendModal] = useState<{ id: string; nombre: string; email: string } | null>(null);
+  const [suspendMotivo, setSuspendMotivo] = useState('');
+  const [suspendMotivoError, setSuspendMotivoError] = useState(false);
+  const [suspendando, setSuspendando] = useState(false);
 
   const cargar = useCallback(async () => {
     try {
@@ -41,14 +45,31 @@ export default function AdminUsuariosScreen() {
     setConfirmando(null);
     setErrores(prev => ({ ...prev, [id]: '' }));
     try {
-      if (accion === 'suspender') await adminAPI.suspenderUsuario(id);
-      else if (accion === 'rehabilitar') await adminAPI.rehabilitarUsuario(id, rol || 'cliente');
+      if (accion === 'rehabilitar') await adminAPI.rehabilitarUsuario(id, rol || 'cliente');
       else if (accion === 'cambiar_rol') await adminAPI.gestionarUsuario(id, { rol });
       cargar();
     } catch (e: any) {
       setErrores(prev => ({ ...prev, [id]: e.message || 'Error al procesar' }));
     } finally {
       setProcesando(null);
+    }
+  }
+
+  async function ejecutarSuspender() {
+    if (!suspendModal) return;
+    if (!suspendMotivo.trim()) { setSuspendMotivoError(true); return; }
+    const { id } = suspendModal;
+    setSuspendando(true);
+    setSuspendModal(null);
+    setErrores(prev => ({ ...prev, [id]: '' }));
+    try {
+      await adminAPI.suspenderUsuario(id, suspendMotivo.trim());
+      setSuspendMotivo('');
+      cargar();
+    } catch (e: any) {
+      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al suspender' }));
+    } finally {
+      setSuspendando(false);
     }
   }
 
@@ -177,7 +198,7 @@ export default function AdminUsuariosScreen() {
                       <Text style={s.btnRehabilitarText}>▶ Rehabilitar</Text>
                     </TouchableOpacity>
                   ) : (
-                    <TouchableOpacity style={s.btnSuspender} onPress={() => setConfirmando({ id: u.id, accion: 'suspender', nombre: u.nombre })}>
+                    <TouchableOpacity style={s.btnSuspender} onPress={() => { setSuspendModal({ id: u.id, nombre: u.nombre, email: u.email }); setSuspendMotivo(''); setSuspendMotivoError(false); }}>
                       <Text style={s.btnSuspenderText}>⏸ Suspender</Text>
                     </TouchableOpacity>
                   )}
@@ -198,6 +219,60 @@ export default function AdminUsuariosScreen() {
         })}
         <View style={{ height: 24 }} />
       </ScrollView>
+
+      {/* Modal: Suspender usuario (motivo obligatorio) */}
+      <Modal visible={!!suspendModal} transparent animationType="slide" onRequestClose={() => setSuspendModal(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: '#1E293B', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, borderTopWidth: 1, borderTopColor: '#334155' }}>
+            <Text style={{ fontSize: 18, fontWeight: '900', color: '#F1F5F9', marginBottom: 4 }}>
+              Suspender cuenta
+            </Text>
+            <Text style={{ fontSize: 13, color: '#94A3B8', marginBottom: 16 }}>{suspendModal?.nombre}</Text>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: '#94A3B8', marginBottom: 8 }}>
+              Motivo de suspensión <Text style={{ color: '#F87171' }}>*</Text>
+            </Text>
+            <TextInput
+              style={{
+                backgroundColor: '#0F172A', borderRadius: 12, borderWidth: 1.5,
+                borderColor: suspendMotivoError ? '#F87171' : '#334155',
+                padding: 14, fontSize: 14, color: '#F1F5F9',
+                minHeight: 80, textAlignVertical: 'top', marginBottom: 8,
+              }}
+              value={suspendMotivo}
+              onChangeText={(v) => { setSuspendMotivo(v); if (v.trim()) setSuspendMotivoError(false); }}
+              placeholder="Ej. Incumplimiento de términos de uso..."
+              placeholderTextColor="#475569"
+              multiline
+              autoFocus
+            />
+            {suspendMotivoError && (
+              <Text style={{ color: '#F87171', fontSize: 12, marginBottom: 10 }}>
+                El motivo es obligatorio para suspender
+              </Text>
+            )}
+            <Text style={{ fontSize: 12, color: '#64748B', marginBottom: 16, lineHeight: 18 }}>
+              Se enviará un email de notificación al usuario con el motivo.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity
+                style={{ flex: 1, borderWidth: 1.5, borderColor: '#334155', borderRadius: 12, padding: 13, alignItems: 'center' }}
+                onPress={() => setSuspendModal(null)}
+              >
+                <Text style={{ color: '#94A3B8', fontWeight: '700', fontSize: 14 }}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: '#991B1B', borderRadius: 12, padding: 13, opacity: suspendando ? 0.5 : 1 }}
+                onPress={ejecutarSuspender}
+                disabled={suspendando}
+              >
+                {suspendando
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Suspender</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

@@ -5,7 +5,6 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '@/src/services/supabase';
 import { authAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
@@ -36,24 +35,7 @@ export default function VerificarEmailScreen() {
     setLoading(true);
     setErrorMsg('');
     try {
-      // 1. Verificar OTP con Supabase
-      const { data, error } = await supabase.auth.verifyOtp({
-        email,
-        token: codigo.trim(),
-        type: 'email',
-      });
-      if (error) {
-        setErrorMsg('Código incorrecto o expirado. Verifica el código en tu correo.');
-        return;
-      }
-
-      const access_token = data.session?.access_token;
-      if (!access_token) {
-        setErrorMsg('No se pudo obtener la sesión. Intenta de nuevo.');
-        return;
-      }
-
-      // 2. Recuperar datos del formulario guardados antes de navegar
+      // Recuperar datos del formulario guardados antes de navegar
       const raw = await AsyncStorage.getItem('bocara_pending_registro');
       if (!raw) {
         setErrorMsg('Datos de registro perdidos. Vuelve atrás e intenta de nuevo.');
@@ -61,14 +43,14 @@ export default function VerificarEmailScreen() {
       }
       const form = JSON.parse(raw);
 
-      // 3. Crear cuenta en nuestro backend
-      const res = await authAPI.registroCompleto({
+      // Validar OTP y crear cuenta en nuestro backend
+      const res = await authAPI.verificarOtpRegistro({
         email,
-        password: form.password,
+        codigo: codigo.trim(),
         nombre: form.nombre,
         apellido: form.apellido,
+        password: form.password,
         telefono: form.telefono,
-        supabase_access_token: access_token,
       });
 
       await AsyncStorage.removeItem('bocara_pending_registro');
@@ -85,16 +67,9 @@ export default function VerificarEmailScreen() {
     setErrorMsg('');
     setReenvioSegundos(60);
     try {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
-        },
-      });
-      if (error) setErrorMsg('No se pudo reenviar el código. Intenta más tarde.');
-    } catch {
-      setErrorMsg('No se pudo enviar el código. Intenta nuevamente.');
+      await authAPI.enviarOtpEmail(email);
+    } catch (e: any) {
+      setErrorMsg('No se pudo reenviar el código. Intenta más tarde.');
     }
   }
 

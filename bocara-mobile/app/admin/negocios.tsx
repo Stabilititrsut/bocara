@@ -25,11 +25,6 @@ export default function AdminNegociosScreen() {
   const [filtro,     setFiltro]     = useState<Filtro>('pendientes');
   const [procesando, setProcesando] = useState<string | null>(null);
 
-  // Modal suspensión
-  const [suspendModal, setSuspendModal] = useState<any>(null);
-  const [motivo,       setMotivo]       = useState('');
-  const [motivoError,  setMotivoError]  = useState(false);
-
   // Modal rechazo
   const [rechazarModal, setRechazarModal] = useState<any>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
@@ -63,24 +58,6 @@ export default function AdminNegociosScreen() {
     } catch (e: any) {
       console.error('[negocios] rechazar error:', e.message);
     } finally { setProcesando(null); setMotivoRechazo(''); }
-  }
-
-  async function confirmarSuspender() {
-    if (!suspendModal) return;
-    if (!motivo.trim()) { setMotivoError(true); return; }
-    const { id, nombre } = suspendModal;
-    setSuspendModal(null);
-    setProcesando(id);
-    try {
-      await adminAPI.toggleNegocio(id, motivo.trim());
-      const wa = encodeURIComponent(
-        `Tu cuenta en Bocara ha sido suspendida. Motivo: ${motivo.trim()}. Contáctanos para más información.`
-      );
-      Linking.openURL(`https://wa.me/50251077949?text=${wa}`);
-      cargar();
-    } catch (e: any) {
-      console.error('[negocios] suspender error:', e.message);
-    } finally { setProcesando(null); setMotivo(''); setMotivoError(false); }
   }
 
   async function activar(id: string) {
@@ -223,17 +200,6 @@ export default function AdminNegociosScreen() {
                   </TouchableOpacity>
                 </>
               )}
-              {n.verificado && n.activo !== false && (
-                <TouchableOpacity
-                  style={s.btnSuspender}
-                  onPress={() => { setSuspendModal(n); setMotivo(''); setMotivoError(false); }}
-                  disabled={!!procesando}
-                >
-                  {procesando === n.id
-                    ? <ActivityIndicator color="#D97706" size="small" />
-                    : <><Ionicons name="pause-circle" size={14} color="#D97706" /><Text style={s.btnSuspenderText}>Suspender</Text></>}
-                </TouchableOpacity>
-              )}
               {n.activo === false && (
                 <TouchableOpacity style={s.btnActivar} onPress={() => activar(n.id)} disabled={!!procesando}>
                   {procesando === n.id
@@ -251,48 +217,6 @@ export default function AdminNegociosScreen() {
 
         <View style={{ height: 24 }} />
       </ScrollView>
-
-      {/* Modal: Suspender (obligatorio motivo) */}
-      <Modal visible={!!suspendModal} transparent animationType="slide" onRequestClose={() => setSuspendModal(null)}>
-        <View style={s.overlay}>
-          <View style={s.modalCard}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-              <Ionicons name="warning" size={20} color="#D97706" style={{ marginRight: 8 }} />
-              <Text style={s.modalTitle}>Suspender negocio</Text>
-            </View>
-            <Text style={s.modalSub}>{suspendModal?.nombre}</Text>
-            <Text style={s.modalLabel}>
-              Motivo de suspensión <Text style={{ color: '#DC2626' }}>*</Text>
-            </Text>
-            <TextInput
-              style={[s.modalInput, motivoError && { borderColor: '#DC2626' }]}
-              value={motivo}
-              onChangeText={(v) => { setMotivo(v); if (v.trim()) setMotivoError(false); }}
-              placeholder="Ej. Incumplimiento de términos de uso..."
-              placeholderTextColor="#9CA3AF"
-              multiline
-              autoFocus
-            />
-            {motivoError && (
-              <Text style={{ color: '#DC2626', fontSize: 12, marginTop: -8, marginBottom: 10 }}>
-                El motivo es obligatorio para suspender
-              </Text>
-            )}
-            <Text style={s.modalNote}>
-              Se enviará un email al restaurante y se abrirá WhatsApp con el motivo.
-            </Text>
-            <View style={s.modalActions}>
-              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setSuspendModal(null)}>
-                <Text style={s.modalCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.modalSuspendBtn} onPress={confirmarSuspender}>
-                <Ionicons name="pause-circle" size={16} color="#fff" />
-                <Text style={s.modalSuspendText}>Suspender</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Modal: Rechazar */}
       <Modal visible={!!rechazarModal} transparent animationType="fade" onRequestClose={() => setRechazarModal(null)}>

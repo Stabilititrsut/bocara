@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { enviarEmail, templateOlvidoContrasena, templateBienvenidaRestaurante } = require('../services/email');
+const { enviarEmail, templateOlvidoContrasena, templateBienvenidaRestaurante, templateVerificacionOTP } = require('../services/email');
 const { geocodeAddress } = require('../utils/geo');
 const router = express.Router();
 
@@ -15,6 +15,9 @@ const twilio = (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
 
 // OTP de teléfono en memoria (TTL: 10 min)
 const phoneOtpStore = new Map();
+
+// OTP de verificación de email (TTL: 30 min)
+const emailOtpStore = new Map();
 
 // OTP de reset de contraseña en memoria (TTL: 15 min)
 const resetOtpStore = new Map();
@@ -170,6 +173,79 @@ router.post('/registro-completo', async (req, res) => {
       .select()
       .single();
 
+    if (error) {
+      if (error.code === '23505') return res.status(400).json({ error: 'Este email ya está registrado' });
+      return res.status(400).json({ error: error.message });
+    }
+
+    try { await supabase.rpc('sumar_puntos', { user_id: usuario.id, puntos: 10 }); } catch { }
+
+    const token = jwt.sign(
+      { id: usuario.id, email: usuario.email, rol: 'cliente' },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+    const { password_hash, ...u } = usuario;
+    res.status(201).json({ token, usuario: u, esNuevo: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/auth/enviar-otp-email — genera y envía código OTP de 6 dígitos con branding Bocara
+router.post('/enviar-otp-email', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email requerido' });
+  const emailNorm = email.toLowerCase().trim();
+
+  // Verificar que el email no esté ya registrado
+  const { data: existe } = await supabase.from('usuarios').select('id').eq('email', emailNorm).maybeSingle();
+  if (existe) return res.status(400).json({ error: 'Este email ya está registrado. Inicia sesión o usa otro correo.' });
+
+  const codigo = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = Date.now() + 30 * 60 * 1000;
+  emailOtpStore.set(emailNorm, { codigo, expiresAt });
+  console.log(`[otp-email] Código generado para ${emailNorm} — válido 30 min`);
+
+  const sent = await enviarEmail({
+    to: emailNorm,
+    subject: 'Verifica tu cuenta — Bocara Food',
+    html: templateVerificacionOTP(codigo),
+  });
+
+  if (!sent.ok && process.env.NODE_ENV === 'production') {
+    return res.status(500).json({ error: 'No se pudo enviar el código de verificación. Intenta de nuevo.' });
+  }
+  res.json({ ok: true });
+});
+
+// POST /api/auth/verificar-otp-email — valida OTP y crea la cuenta cliente
+router.post('/verificar-otp-email', async (req, res) => {
+  const { email, codigo, nombre, apellido, password, telefono } = req.body;
+  if (!email || !codigo || !nombre || !password)
+    return res.status(400).json({ error: 'Faltan campos requeridos' });
+
+  const emailNorm = email.toLowerCase().trim();
+  const stored = emailOtpStore.get(emailNorm);
+
+  if (!stored)
+    return res.status(400).json({ error: 'No hay código activo para este correo. Solicita uno nuevo.' });
+  if (Date.now() > stored.expiresAt) {
+    emailOtpStore.delete(emailNorm);
+    return res.status(400).json({ error: 'El código expiró. Solicita uno nuevo.' });
+  }
+  if (stored.codigo !== codigo.trim())
+    return res.status(400).json({ error: 'Código incorrecto. Verifica el código en tu correo.' });
+
+  emailOtpStore.delete(emailNorm);
+
+  try {
+    const hash = await bcrypt.hash(password, 10);
+    const insertData = { email: emailNorm, password_hash: hash, nombre: nombre.trim(), rol: 'cliente' };
+    if (apellido) insertData.apellido = apellido.trim();
+    if (telefono) insertData.telefono = telefono.trim();
+
+    let { data: usuario, error } = await supabase.from('usuarios').insert([insertData]).select().single();
     if (error) {
       if (error.code === '23505') return res.status(400).json({ error: 'Este email ya está registrado' });
       return res.status(400).json({ error: error.message });

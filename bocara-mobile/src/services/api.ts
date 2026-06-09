@@ -54,6 +54,10 @@ export const authAPI = {
     api.post('/auth/reset-password', data),
   checkEmail: (email: string) =>
     api.get('/auth/check-email', { params: { email } }),
+  enviarOtpEmail: (email: string) =>
+    api.post('/auth/enviar-otp-email', { email }),
+  verificarOtpRegistro: (data: { email: string; codigo: string; nombre: string; apellido?: string; password: string; telefono?: string }) =>
+    api.post('/auth/verificar-otp-email', data),
 };
 
 export const negociosAPI = {
@@ -129,7 +133,7 @@ export const adminAPI = {
   negocioDetalle: (id: string) => api.get(`/negocios/${id}`),
   usuarios: (params?: any) => api.get('/admin/usuarios', { params }),
   gestionarUsuario: (id: string, data: any) => api.put(`/admin/usuarios/${id}`, data),
-  suspenderUsuario: (id: string) => api.put(`/admin/usuarios/${id}/suspender`),
+  suspenderUsuario: (id: string, motivo?: string) => api.put(`/admin/usuarios/${id}/suspender`, { motivo }),
   rehabilitarUsuario: (id: string, rol_restaurar?: string) =>
     api.put(`/admin/usuarios/${id}/rehabilitar`, { rol_restaurar }),
   negocios: (params?: any) => api.get('/admin/negocios', { params }),

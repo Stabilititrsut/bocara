@@ -3,7 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
-const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido } = require('../services/email');
+const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario } = require('../services/email');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -73,11 +73,24 @@ router.put('/usuarios/:id', authMiddleware, adminOnly, async (req, res) => {
 
 // PUT /api/admin/usuarios/:id/suspender
 router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res) => {
-  const { data: u } = await supabase.from('usuarios').select('rol').eq('id', req.params.id).single();
+  const { motivo } = req.body || {};
+  const { data: u } = await supabase.from('usuarios').select('rol,email,nombre,apellido').eq('id', req.params.id).single();
   if (!u) return res.status(404).json({ error: 'Usuario no encontrado' });
   if (u.rol === 'admin') return res.status(403).json({ error: 'No se puede suspender a un administrador' });
   const { data, error } = await supabase.from('usuarios').update({ rol: 'suspendido' }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  // Enviar email de notificación
+  if (u.email && motivo) {
+    const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
+    console.log(`[suspender-usuario] Enviando email a ${u.email} — motivo: "${motivo}"`);
+    enviarEmail({
+      to: u.email,
+      subject: 'Cuenta suspendida — Bocara Food',
+      html: templateSuspendidoUsuario(nombreDisplay, u.email, motivo),
+    }).catch(e => console.error('[suspender-usuario] Error email:', e.message));
+  }
+
   res.json(data);
 });
 

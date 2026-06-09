@@ -5,7 +5,6 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { supabase } from '@/src/services/supabase';
 import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -81,22 +80,8 @@ export default function RegistroClienteScreen() {
       // Guardar datos del formulario para usarlos después de la verificación
       await AsyncStorage.setItem('bocara_pending_registro', JSON.stringify(form));
 
-      // Enviar OTP al email vía Supabase Auth
-      console.log('[EMAIL VERIFY] enviando código a:', form.email.trim().toLowerCase());
-      const { error } = await supabase.auth.signInWithOtp({
-        email: form.email.trim().toLowerCase(),
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: 'https://bocara.vercel.app/auth/callback',
-        },
-      });
-
-      if (error) {
-        console.log('[EMAIL VERIFY] error enviando correo:', error.message);
-        setErrors({ email: 'No se pudo enviar el código. Verifica el correo e intenta de nuevo.' });
-        return;
-      }
-      console.log('[EMAIL VERIFY] código generado y enviado correctamente');
+      // Enviar OTP de verificación via nuestro backend (email con branding Bocara)
+      await authAPI.enviarOtpEmail(form.email.trim().toLowerCase());
 
       // Navegar a pantalla de verificación
       router.push(`/verificar-email?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
