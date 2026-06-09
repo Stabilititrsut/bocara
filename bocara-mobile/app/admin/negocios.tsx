@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, RefreshControl, TextInput, ActivityIndicator, Modal,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -11,6 +12,7 @@ const DARK = '#1E293B';
 type Filtro = 'todos' | 'pendientes' | 'verificados' | 'inactivos';
 
 export default function AdminNegociosScreen() {
+  const router = useRouter();
   const [negocios, setNegocios] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -127,7 +129,9 @@ export default function AdminNegociosScreen() {
         )}
 
         {filtrados.map((n) => (
-          <View key={n.id} style={s.card}>
+          <TouchableOpacity key={n.id} style={s.card} activeOpacity={0.85}
+            onPress={() => router.push(`/admin/restaurante-detalle?id=${n.id}` as any)}>
+
             <View style={s.cardTop}>
               <View style={{ flex: 1 }}>
                 <Text style={s.nombre}>{n.nombre}</Text>
@@ -196,7 +200,7 @@ export default function AdminNegociosScreen() {
                 )}
               </View>
             )}
-          </View>
+          </TouchableOpacity>
         ))}
         <View style={{ height: 24 }} />
       </ScrollView>

@@ -1,10 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl, ActivityIndicator, Share, Alert,
+  SafeAreaView, RefreshControl, ActivityIndicator, Share, Alert, Platform,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+
+let XLSX: any = null;
+try { XLSX = require('xlsx'); } catch {}
 
 const DARK = '#1E293B';
 const DARK2 = '#0F172A';
@@ -33,17 +37,82 @@ export default function AdminFinancieroScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function exportarCSV() {
+  async function exportarExcel() {
     if (!datos?.resumen?.length) return Alert.alert('Sin datos', 'No hay datos para exportar en este período.');
-    const encabezado = 'Negocio,Zona,Pedidos,Ventas brutas (Q),Comisión Bocara (Q),Pago neto (Q)';
-    const filas = datos.resumen.map((r: any) =>
-      `${r.nombre},${r.zona},${r.pedidos},${r.bruto.toFixed(2)},${r.comision.toFixed(2)},${r.neto.toFixed(2)}`
-    );
-    const totalRow = `TOTAL,,${datos.totales.pedidos},${datos.totales.bruto.toFixed(2)},${datos.totales.comision.toFixed(2)},${datos.totales.neto.toFixed(2)}`;
-    const csv = [encabezado, ...filas, totalRow].join('\n');
+    if (!XLSX) return Alert.alert('Error', 'Librería XLSX no disponible.');
+
     try {
-      await Share.share({ message: csv, title: `Bocara_Financiero_${periodo}.csv` });
-    } catch {}
+      const wb = XLSX.utils.book_new();
+
+      // Hoja 1: Dashboard general
+      const hoja1: any[][] = [
+        ['Bocara — Reporte Financiero', '', `Período: ${periodo}`],
+        [],
+        ['Métrica', 'Valor'],
+        ['Pedidos completados', datos.totales.pedidos],
+        ['Ventas brutas (Q)', datos.totales.bruto],
+        ['Comisión Bocara 25% (Q)', datos.totales.comision],
+        ['Pago a restaurantes 75% (Q)', datos.totales.neto],
+        ['Fecha exportación', new Date().toLocaleDateString('es-GT')],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja1), 'Dashboard');
+
+      // Hoja 2: Por restaurante
+      const hoja2: any[][] = [
+        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas (Q)', 'Comisión Bocara (Q)', 'Pago neto (Q)', 'Promedio por pedido (Q)'],
+        ...datos.resumen.map((r: any) => [
+          r.nombre, r.zona || '', r.pedidos,
+          Number(r.bruto.toFixed(2)),
+          Number(r.comision.toFixed(2)),
+          Number(r.neto.toFixed(2)),
+          r.pedidos > 0 ? Number((r.bruto / r.pedidos).toFixed(2)) : 0,
+        ]),
+        ['TOTAL', '', datos.totales.pedidos,
+          Number(datos.totales.bruto.toFixed(2)),
+          Number(datos.totales.comision.toFixed(2)),
+          Number(datos.totales.neto.toFixed(2)), ''],
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja2), 'Por Restaurante');
+
+      // Hoja 3: Pedidos detallados
+      const hoja3: any[][] = [
+        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión (Q)', 'Estado'],
+        ...pedidos.slice(0, 500).map((p: any) => [
+          p.codigo_recogida || '—',
+          p.negocios?.nombre || '—',
+          p.usuarios?.nombre || '—',
+          new Date(p.created_at || p.creado_en || 0).toLocaleDateString('es-GT'),
+          Number((p.total || 0).toFixed(2)),
+          Number(((p.total || 0) * 0.25).toFixed(2)),
+          p.estado,
+        ]),
+      ];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja3), 'Pedidos Detallados');
+
+      const fecha    = new Date().toISOString().slice(0, 10);
+      const filename = `bocara-reporte-${fecha}.xlsx`;
+      const buffer   = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
+
+      if (Platform.OS === 'web') {
+        // Web: trigger download
+        const byteChars = atob(buffer);
+        const byteNums  = new Array(byteChars.length).fill(0).map((_, i) => byteChars.charCodeAt(i));
+        const blob = new Blob([new Uint8Array(byteNums)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      } else {
+        // Native: save to cache and share
+        const path = `${FileSystem.cacheDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(path, buffer, { encoding: FileSystem.EncodingType.Base64 });
+        await Share.share({ url: path, title: filename });
+      }
+    } catch (e: any) {
+      Alert.alert('Error al exportar', e.message || 'Intenta de nuevo.');
+    }
   }
 
   if (loading) return (
@@ -59,8 +128,8 @@ export default function AdminFinancieroScreen() {
     <SafeAreaView style={s.root}>
       <View style={s.header}>
         <Text style={s.headerTitle}>💰 Módulo Financiero</Text>
-        <TouchableOpacity style={s.exportBtn} onPress={exportarCSV}>
-          <Text style={s.exportBtnText}>📤 Exportar</Text>
+        <TouchableOpacity style={s.exportBtn} onPress={exportarExcel}>
+          <Text style={s.exportBtnText}>📊 Excel</Text>
         </TouchableOpacity>
       </View>
 

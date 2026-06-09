@@ -126,6 +126,7 @@ export const uploadsAPI = {
 
 export const adminAPI = {
   stats: () => api.get('/admin/stats'),
+  negocioDetalle: (id: string) => api.get(`/negocios/${id}`),
   usuarios: (params?: any) => api.get('/admin/usuarios', { params }),
   gestionarUsuario: (id: string, data: any) => api.put(`/admin/usuarios/${id}`, data),
   suspenderUsuario: (id: string) => api.put(`/admin/usuarios/${id}/suspender`),

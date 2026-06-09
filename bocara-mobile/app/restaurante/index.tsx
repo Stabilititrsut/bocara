@@ -73,16 +73,8 @@ export default function DashboardRestauranteScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  if (loading) {
-    return (
-      <View style={s.loadingWrap}>
-        <ActivityIndicator color={GOLD} size="large" />
-      </View>
-    );
-  }
-
   // ─── Pendiente ───────────────────────────────────────────────────────────────
-  if (negocio?.estado_verificacion === 'pendiente' || (!negocio?.activo && negocio?.estado_verificacion !== 'rechazado')) {
+  if (!loading && (negocio?.estado_verificacion === 'pendiente' || (!negocio?.activo && negocio?.estado_verificacion !== 'rechazado'))) {
     return (
       <SafeAreaView style={s.root}>
         <ScrollView
@@ -128,7 +120,7 @@ export default function DashboardRestauranteScreen() {
   }
 
   // ─── Rechazado ───────────────────────────────────────────────────────────────
-  if (negocio?.estado_verificacion === 'rechazado') {
+  if (!loading && negocio?.estado_verificacion === 'rechazado') {
     const CAMPO_LABELS_R: Record<string, string> = {
       nombre_negocio: 'Nombre del negocio',
       direccion:      'Dirección',
@@ -212,9 +204,9 @@ export default function DashboardRestauranteScreen() {
         {/* Métricas */}
         <Text style={s.sectionTitle}>Resumen de hoy</Text>
         <View style={s.metricsRow}>
-          <MetricCard emoji="📦" label="Pedidos"  value={stats?.hoy || 0}                          accent={GOLD} />
-          <MetricCard emoji="💰" label="Ganancias" value={`Q${(stats?.ingresos || 0).toFixed(0)}`} accent='#22C55E' />
-          <MetricCard emoji="⏱️" label="Activas"  value={stats?.activas || 0}                      accent='#60A5FA' />
+          <MetricCard emoji="📦" label="Pedidos"  value={loading ? '—' : (stats?.hoy || 0)}                          accent={GOLD} />
+          <MetricCard emoji="💰" label="Ganancias" value={loading ? '—' : `Q${(stats?.ingresos || 0).toFixed(0)}`}   accent='#22C55E' />
+          <MetricCard emoji="⏱️" label="Activas"  value={loading ? '—' : (stats?.activas || 0)}                      accent='#60A5FA' />
         </View>
 
         {/* Últimos pedidos */}

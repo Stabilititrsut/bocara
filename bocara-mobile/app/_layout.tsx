@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Image } from 'expo-image';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
 import { CartProvider } from '@/src/context/CartContext';
 import { LocationProvider } from '@/src/context/LocationContext';
@@ -67,24 +66,22 @@ async function registrarPushToken() {
 
 // ── Splash animado de Bocara ──────────────────────────────────────────────────
 function BocaraSplash({ fast, onDone }: { fast: boolean; onDone: () => void }) {
-  const logoOpacity   = useRef(new Animated.Value(0)).current;
   const textOpacity   = useRef(new Animated.Value(0)).current;
   const screenOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     if (fast) {
-      // Sesión en caché: logo rápido + salida suave ≈ 550ms total
+      // Sesión en caché: aparición rápida ≈ 600ms total
       Animated.sequence([
-        Animated.timing(logoOpacity,   { toValue: 1, duration: 250, useNativeDriver: true }),
-        Animated.delay(100),
-        Animated.timing(screenOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+        Animated.timing(textOpacity,   { toValue: 1, duration: 200, useNativeDriver: true }),
+        Animated.delay(150),
+        Animated.timing(screenOpacity, { toValue: 0, duration: 250, useNativeDriver: true }),
       ]).start(() => onDone());
     } else {
-      // Primera vez / sesión expirada: intro completo ≈ 1.7s
+      // Primera vez / sesión expirada: intro completo ≈ 1.5s
       Animated.sequence([
-        Animated.timing(logoOpacity,   { toValue: 1, duration: 500, useNativeDriver: true }),
-        Animated.timing(textOpacity,   { toValue: 1, duration: 300, useNativeDriver: true }),
-        Animated.delay(500),
+        Animated.timing(textOpacity,   { toValue: 1, duration: 400, useNativeDriver: true }),
+        Animated.delay(700),
         Animated.timing(screenOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
       ]).start(() => onDone());
     }
@@ -92,31 +89,19 @@ function BocaraSplash({ fast, onDone }: { fast: boolean; onDone: () => void }) {
 
   return (
     <Animated.View style={[ss.splash, { opacity: screenOpacity }]}>
-      <View style={ss.center}>
-        <Animated.View style={{ opacity: logoOpacity }}>
-          <Image
-            source={require('@/assets/images/logo.png')}
-            style={ss.logo}
-            contentFit="contain"
-          />
-        </Animated.View>
-
-        <Animated.View style={[ss.textWrap, { opacity: textOpacity }]}>
-          <Text style={ss.title}>Bocara</Text>
-          <Text style={ss.sub}>Rescata comida · Ahorra dinero</Text>
-        </Animated.View>
-      </View>
+      <Animated.View style={[ss.center, { opacity: textOpacity }]}>
+        <Text style={ss.title}>Bocara</Text>
+        <Text style={ss.sub}>Food</Text>
+      </Animated.View>
     </Animated.View>
   );
 }
 
 const ss = StyleSheet.create({
-  splash:   { ...StyleSheet.absoluteFillObject, backgroundColor: '#1A1A1A', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
-  center:   { alignItems: 'center' },
-  logo:     { width: 120, height: 120, borderRadius: 28 },
-  textWrap: { alignItems: 'center', marginTop: 24 },
-  title:    { fontSize: 36, fontWeight: '900', color: '#C8A97E', letterSpacing: -1 },
-  sub:      { fontSize: 14, color: 'rgba(255,255,255,0.6)', marginTop: 6, letterSpacing: 0.3 },
+  splash: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1A1A1A', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
+  center: { alignItems: 'center' },
+  title:  { fontSize: 42, fontWeight: 'bold', color: '#FFFFFF', letterSpacing: -1 },
+  sub:    { fontSize: 18, color: '#C8A97E', marginTop: 8, fontWeight: '600' },
 });
 
 // ── Auth guard + routing ──────────────────────────────────────────────────────
