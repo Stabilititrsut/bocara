@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, Alert, TextInput, RefreshControl, Modal,
+  SafeAreaView, ActivityIndicator, TextInput, RefreshControl, Modal,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { adminAPI } from '@/src/services/api';
@@ -38,32 +38,26 @@ export default function AdminContenidoScreen() {
   useEffect(() => { cargar(); }, [cargar]);
 
   async function aprobar(id: string, nombre: string) {
-    Alert.alert(
-      'Aprobar contenido',
-      `¿Aprobar "${nombre}"? Estará visible para los clientes de Bocara.`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Aprobar', style: 'default', onPress: async () => {
-            setProcesando(id);
-            setErroresItem(prev => ({ ...prev, [id]: '' }));
-            console.log('[contenido] aprobar →', { id, nombre });
-            try {
-              await adminAPI.aprobarBolsa(id);
-              console.log('[contenido] aprobar OK:', id);
-              setItems(prev => prev.filter(i => i.id !== id));
-              showToast(`✅ "${nombre}" aprobado y activo en Bocara`);
-            } catch (e: any) {
-              console.error('[contenido] aprobar error:', e.message);
-              setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al aprobar' }));
-              showToast(`Error: ${e.message}`, false);
-            } finally {
-              setProcesando(null);
-            }
-          },
-        },
-      ]
-    );
+    console.log('[contenido] CLICK aprobar', { id, nombre });
+    showToast(`Aprobando "${nombre}"...`);
+    setProcesando(id);
+    setErroresItem(prev => ({ ...prev, [id]: '' }));
+    try {
+      await adminAPI.aprobarBolsa(id);
+      console.log('[contenido] aprobar OK:', id);
+      await cargar();
+      showToast(`✅ "${nombre}" aprobado y activo en Bocara`);
+    } catch (e: any) {
+      const mensaje = (e as any)?.response?.data?.error
+        || (e as any)?.response?.data?.message
+        || e?.message
+        || 'Error al aprobar';
+      console.error('[contenido] aprobar error:', mensaje, e);
+      setErroresItem(prev => ({ ...prev, [id]: mensaje }));
+      showToast(`Error: ${mensaje}`, false);
+    } finally {
+      setProcesando(null);
+    }
   }
 
   async function rechazar() {
@@ -235,6 +229,9 @@ export default function AdminContenidoScreen() {
                     }
                   </TouchableOpacity>
                 </View>
+                <TouchableOpacity style={s.btnTest} onPress={() => showToast(`TEST OK · ID: ${item.id.slice(0, 8)}`)}>
+                  <Text style={s.btnTestText}>TEST TOQUE</Text>
+                </TouchableOpacity>
               </View>
             );
           })
@@ -333,6 +330,8 @@ const s = StyleSheet.create({
   },
   btnRechazarText: { color: Colors.error, fontWeight: '800', fontSize: 15 },
   btnDisabled: { opacity: 0.5 },
+  btnTest: { marginTop: 8, alignItems: 'center', paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#334155' },
+  btnTestText: { fontSize: 10, color: '#64748B', fontWeight: '700', letterSpacing: 0.8 },
   errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
   errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
   toast: { position: 'absolute', top: 70, left: 16, right: 16, zIndex: 99, borderRadius: 12, padding: 14 },
