@@ -27,6 +27,7 @@ const CATEGORIAS = [
   { label: 'Sushi',         emoji: '🍣', bg: '#E3F2FD' },
   { label: 'Pizza',         emoji: '🍕', bg: '#FFF8E1' },
   { label: 'Comida Típica', emoji: '🫕', bg: '#F3E5F5' },
+  { label: 'Otros',         emoji: '📦', bg: '#E8F5E9' },
 ];
 
 function NegocioCard({ negocio, onPress }: { negocio: any; onPress: () => void }) {
@@ -101,7 +102,9 @@ export default function HomeScreen() {
 
   useEffect(() => { setLoading(true); cargar(); }, [cargar]);
 
-  const filtrados = catSelected === 'Todos' ? negocios : negocios.filter(n => n.categoria === catSelected);
+  const filtrados = catSelected === 'Todos'
+    ? negocios
+    : negocios.filter(n => n.categoria?.toLowerCase() === catSelected.toLowerCase());
   const totalDisponibles = negocios.reduce((sum, n) => sum + (n.cantidad_bolsas || 0), 0);
 
   const nombreCorto = usuario?.nombre ? usuario.nombre.split(' ')[0] : null;

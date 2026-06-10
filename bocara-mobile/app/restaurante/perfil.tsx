@@ -9,7 +9,7 @@ import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 
-const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otro'];
+const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
 
 export default function PerfilRestauranteScreen() {
   const [negocio, setNegocio] = useState<any>(null);
