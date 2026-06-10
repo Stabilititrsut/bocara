@@ -178,7 +178,9 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, co2_salvado_kg, imagen_url } = req.body;
+    permite_envio, co2_salvado_kg, imagen_url,
+    categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
+    es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
@@ -205,6 +207,13 @@ router.post('/', authMiddleware, async (req, res) => {
       co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
+      categoria_menu: categoria_menu || null,
+      es_tiempo_limitado: es_tiempo_limitado ?? false,
+      es_promocion: es_promocion ?? false,
+      es_descuento: es_descuento ?? false,
+      es_destacado: es_destacado ?? false,
+      es_mas_vendido: es_mas_vendido ?? false,
+      es_precio_bajo: es_precio_bajo ?? false,
     }])
     .select()
     .single();
@@ -253,7 +262,9 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','co2_salvado_kg','activo','estado_aprobacion','imagen_url'];
+    'permite_envio','co2_salvado_kg','activo','estado_aprobacion','imagen_url',
+    'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
+    'es_destacado','es_mas_vendido','es_precio_bajo'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 

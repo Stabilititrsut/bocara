@@ -9,6 +9,15 @@ import { pickImage } from '@/src/utils/pickImage';
 
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
 
+const MENU_CLASIFS = [
+  { key: 'es_tiempo_limitado', label: 'Tiempo Limitado', emoji: '⏱️' },
+  { key: 'es_promocion',       label: 'Promoción',       emoji: '🏷️' },
+  { key: 'es_descuento',       label: 'Descuento',       emoji: '💸' },
+  { key: 'es_destacado',       label: 'Destacado',       emoji: '⭐' },
+  { key: 'es_mas_vendido',     label: 'Más vendido',     emoji: '🔥' },
+  { key: 'es_precio_bajo',     label: 'Precio bajo',     emoji: '💰' },
+];
+
 const FORM_INIT = {
   tipo_form: 'bolsa' as 'bolsa' | 'cupon',
   nombre: '', descripcion: '', contenido: '',
@@ -17,6 +26,14 @@ const FORM_INIT = {
   hora_recogida_inicio: '18:00', hora_recogida_fin: '20:00',
   co2_salvado_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
+  // Clasificación en el menú
+  categoria_menu: '',
+  es_tiempo_limitado: true,
+  es_promocion: false,
+  es_descuento: false,
+  es_destacado: false,
+  es_mas_vendido: false,
+  es_precio_bajo: false,
 };
 
 export default function BolsasRestauranteScreen() {
@@ -101,6 +118,13 @@ export default function BolsasRestauranteScreen() {
         imagen_url: b.imagen_url || '',
         activo: b.activo,
         categoria: b.categoria || 'Porcentaje',
+        categoria_menu: b.categoria_menu || '',
+        es_tiempo_limitado: b.es_tiempo_limitado ?? (b.tipo !== 'cupon'),
+        es_promocion: b.es_promocion ?? (b.tipo === 'cupon'),
+        es_descuento: b.es_descuento ?? (b.precio_original > b.precio_descuento),
+        es_destacado: b.es_destacado ?? false,
+        es_mas_vendido: b.es_mas_vendido ?? false,
+        es_precio_bajo: b.es_precio_bajo ?? false,
       });
     } else {
       setEditId(null);
@@ -119,18 +143,29 @@ export default function BolsasRestauranteScreen() {
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
       return alertar('El código de la promoción es requerido');
 
+    const precOrig = parseFloat(form.precio_original) || 0;
+    const precDesc = parseFloat(form.precio_descuento) || 0;
+
     const payload: any = {
       negocio_id: negocioId,
       tipo: form.tipo_form,
       nombre: form.nombre.trim(),
       descripcion: form.descripcion.trim(),
       contenido: form.tipo_form === 'cupon' ? form.contenido.trim().toUpperCase() : form.contenido.trim(),
-      precio_original: parseFloat(form.precio_original),
-      precio_descuento: parseFloat(form.precio_descuento),
+      precio_original: precOrig,
+      precio_descuento: precDesc,
       cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
       hora_recogida_inicio: form.hora_recogida_inicio,
       hora_recogida_fin: form.hora_recogida_fin,
       imagen_url: form.imagen_url || null,
+      // Clasificación en el menú
+      categoria_menu: form.categoria_menu || null,
+      es_tiempo_limitado: form.es_tiempo_limitado,
+      es_promocion: form.es_promocion,
+      es_descuento: form.es_descuento || (precOrig > precDesc),
+      es_destacado: form.es_destacado,
+      es_mas_vendido: form.es_mas_vendido,
+      es_precio_bajo: form.es_precio_bajo,
     };
     if (form.tipo_form === 'bolsa') payload.co2_salvado_kg = parseFloat(form.co2_salvado_kg) || 0.5;
     if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
@@ -295,7 +330,7 @@ export default function BolsasRestauranteScreen() {
                 <View style={s.tipoSelector}>
                   <TouchableOpacity
                     style={[s.tipoBtn, form.tipo_form === 'bolsa' && s.tipoBtnActive]}
-                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'bolsa' }))}
+                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'bolsa', es_tiempo_limitado: true, es_promocion: false }))}
                   >
                     <Text style={[s.tipoBtnEmoji]}>⏱️</Text>
                     <Text style={[s.tipoBtnLabel, form.tipo_form === 'bolsa' && s.tipoBtnLabelActive]}>Disponible por{'\n'}Tiempo Limitado</Text>
@@ -303,7 +338,7 @@ export default function BolsasRestauranteScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[s.tipoBtn, form.tipo_form === 'cupon' && s.tipoBtnActive]}
-                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'cupon' }))}
+                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'cupon', es_promocion: true, es_tiempo_limitado: false }))}
                   >
                     <Text style={[s.tipoBtnEmoji]}>🏷️</Text>
                     <Text style={[s.tipoBtnLabel, form.tipo_form === 'cupon' && s.tipoBtnLabelActive]}>Promoción</Text>
@@ -407,6 +442,25 @@ export default function BolsasRestauranteScreen() {
             {form.tipo_form === 'bolsa' && (
               <Field label="CO₂ salvado (kg)" value={form.co2_salvado_kg} onChange={set('co2_salvado_kg')} placeholder="0.5" keyboard="numeric" />
             )}
+
+            <Text style={s.sectionLabel}>🏷️ Clasificación en el menú</Text>
+            <Text style={s.clasifHint}>
+              Selecciona dónde debe aparecer este producto en los filtros de la tienda.
+              El administrador revisará la publicación antes de mostrarla a los clientes.
+            </Text>
+            <View style={s.clasifGrid}>
+              {MENU_CLASIFS.map(({ key, label, emoji }) => (
+                <TouchableOpacity
+                  key={key}
+                  style={[s.clasifChip, (form as any)[key] && s.clasifChipActive]}
+                  onPress={() => set(key)(!(form as any)[key])}
+                  activeOpacity={0.8}
+                >
+                  <Text style={s.clasifChipEmoji}>{emoji}</Text>
+                  <Text style={[s.clasifChipText, (form as any)[key] && s.clasifChipTextActive]}>{label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
 
             <View style={{ height: 40 }} />
           </ScrollView>
@@ -532,4 +586,16 @@ const s = StyleSheet.create({
   discChipActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
   discChipText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
   discChipTextActive: { color: Colors.white, fontWeight: '800' },
+
+  clasifHint: { fontSize: 12, color: Colors.textSecondary, lineHeight: 18, marginBottom: 12, marginTop: -6 },
+  clasifGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
+  clasifChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.white,
+  },
+  clasifChipActive: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
+  clasifChipEmoji: { fontSize: 14 },
+  clasifChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  clasifChipTextActive: { color: '#fff', fontWeight: '700' },
 });

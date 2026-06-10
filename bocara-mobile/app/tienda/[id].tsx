@@ -22,13 +22,15 @@ const LOGO_SIZE = 60;
 const LOGO_R    = 30;
 const CARD_W    = Math.floor((SW - 48) / 2);
 
-type FilterKey = 'todos' | 'descuentos' | 'tiempo_limitado' | 'promociones' | 'precio';
+type FilterKey = 'todos' | 'descuentos' | 'tiempo_limitado' | 'promociones' | 'mas_vendidos' | 'destacados' | 'precio';
 
 const FILTROS: { key: FilterKey; label: string }[] = [
   { key: 'todos',           label: 'Todos' },
   { key: 'descuentos',      label: 'Descuentos' },
   { key: 'tiempo_limitado', label: 'Tiempo Limitado' },
   { key: 'promociones',     label: 'Promociones' },
+  { key: 'mas_vendidos',    label: 'Más vendidos' },
+  { key: 'destacados',      label: 'Los mejores' },
   { key: 'precio',          label: 'Precio más bajo' },
 ];
 
@@ -138,13 +140,24 @@ export default function TiendaScreen() {
   const filtradas = useMemo(() => {
     switch (filtro) {
       case 'descuentos':
-        return bolsas.filter(b => b.precio_original > b.precio_descuento);
+        // Usa flag o detecta automáticamente por precio
+        return bolsas.filter(b => b.es_descuento || b.precio_original > b.precio_descuento);
       case 'tiempo_limitado':
-        return bolsas.filter(b => b.tipo !== 'cupon');
+        // Usa flag o infiere por tipo
+        return bolsas.filter(b => b.es_tiempo_limitado || b.tipo !== 'cupon');
       case 'promociones':
-        return bolsas.filter(b => b.tipo === 'cupon');
+        // Usa flag o infiere por tipo cupon
+        return bolsas.filter(b => b.es_promocion || b.tipo === 'cupon');
+      case 'mas_vendidos':
+        return bolsas
+          .filter(b => b.es_mas_vendido || (b.veces_pedido || 0) > 0)
+          .sort((a, b) => (b.veces_pedido || 0) - (a.veces_pedido || 0));
+      case 'destacados':
+        return bolsas.filter(b => b.es_destacado);
       case 'precio':
-        return [...bolsas].sort((a, b) => a.precio_descuento - b.precio_descuento);
+        return [...bolsas].sort((a, b) =>
+          (a.precio_descuento ?? a.precio_original) - (b.precio_descuento ?? b.precio_original)
+        );
       default:
         return bolsas;
     }

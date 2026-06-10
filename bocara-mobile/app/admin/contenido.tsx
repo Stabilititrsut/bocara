@@ -190,6 +190,20 @@ export default function AdminContenidoScreen() {
                   )}
                 </View>
 
+                {/* Clasificación marcada por el restaurante */}
+                {(item.es_tiempo_limitado || item.es_promocion || item.es_descuento ||
+                  item.es_destacado || item.es_mas_vendido || item.es_precio_bajo) && (
+                  <View style={s.clasifRow}>
+                    <Text style={s.clasifLabel}>Clasificación:</Text>
+                    {item.es_tiempo_limitado && <View style={s.clasifBadge}><Text style={s.clasifBadgeTxt}>⏱️ T. Limitado</Text></View>}
+                    {item.es_promocion       && <View style={s.clasifBadge}><Text style={s.clasifBadgeTxt}>🏷️ Promoción</Text></View>}
+                    {item.es_descuento       && <View style={s.clasifBadge}><Text style={s.clasifBadgeTxt}>💸 Descuento</Text></View>}
+                    {item.es_destacado       && <View style={[s.clasifBadge, s.clasifBadgeGold]}><Text style={s.clasifBadgeTxt}>⭐ Destacado</Text></View>}
+                    {item.es_mas_vendido     && <View style={[s.clasifBadge, s.clasifBadgeGold]}><Text style={s.clasifBadgeTxt}>🔥 Más vendido</Text></View>}
+                    {item.es_precio_bajo     && <View style={s.clasifBadge}><Text style={s.clasifBadgeTxt}>💰 Precio bajo</Text></View>}
+                  </View>
+                )}
+
                 {/* Propietario */}
                 <View style={s.propietarioRow}>
                   <Text style={s.propietarioLabel}>👤 Propietario:</Text>
@@ -315,6 +329,11 @@ const s = StyleSheet.create({
   metaChipText: { fontSize: 11, color: '#94A3B8', fontWeight: '600' },
   co2Chip: { backgroundColor: '#14532D' },
   co2Text: { color: '#86EFAC' },
+  clasifRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginBottom: 10 },
+  clasifLabel: { fontSize: 10, color: '#64748B', fontWeight: '700' },
+  clasifBadge: { backgroundColor: '#1A2744', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  clasifBadgeGold: { backgroundColor: '#451A03' },
+  clasifBadgeTxt: { fontSize: 10, color: '#94A3B8', fontWeight: '700' },
   propietarioRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
   propietarioLabel: { fontSize: 11, color: '#64748B', fontWeight: '700' },
   propietarioVal: { fontSize: 11, color: '#94A3B8', flex: 1 },
