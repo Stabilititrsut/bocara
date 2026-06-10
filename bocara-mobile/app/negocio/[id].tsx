@@ -18,6 +18,7 @@ function BolsaCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const agotada = bolsa.cantidad_disponible === 0;
+  console.log('imagen URL:', bolsa.imagen_url);
 
   return (
     <TouchableOpacity
@@ -28,7 +29,13 @@ function BolsaCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
     >
       <View style={[s.bolsaImgWrap, { height: CARD_IMG_H }]}>
         {bolsa.imagen_url ? (
-          <Image source={{ uri: bolsa.imagen_url }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+          <Image
+            source={{ uri: bolsa.imagen_url }}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            transition={200}
+            onError={() => console.warn('imagen falló:', bolsa.imagen_url)}
+          />
         ) : (
           <View style={[StyleSheet.absoluteFill, { backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' }]}>
             <Text style={{ fontSize: 38 }}>🥐</Text>

@@ -1,4 +1,5 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
@@ -6,9 +7,26 @@ const { enviarNotificacionesMultiples, guardarNotificacion } = require('../servi
 const { getReservadoPendiente, getReservasMap } = require('../services/stock');
 const router = express.Router();
 
+async function getNegocioIdParaUsuario(usuarioId) {
+  const { data } = await supabase.from('negocios').select('id').eq('propietario_id', usuarioId).single();
+  return data?.id || null;
+}
+
 // GET /api/bolsas — listar bolsas disponibles con distancia opcional
 router.get('/', async (req, res) => {
   const { tipo, negocio_id, zona, categoria, mi_negocio, lat, lng, max_distancia } = req.query;
+
+  // mi_negocio=true requiere autenticación y filtra solo al negocio del usuario
+  let nIdOwner = null;
+  if (mi_negocio === 'true') {
+    const auth = req.headers.authorization;
+    if (!auth) return res.status(401).json({ error: 'No autenticado' });
+    let jwtUser;
+    try { jwtUser = jwt.verify(auth.split(' ')[1], process.env.JWT_SECRET); }
+    catch { return res.status(401).json({ error: 'Token inválido' }); }
+    nIdOwner = await getNegocioIdParaUsuario(jwtUser.id);
+    if (!nIdOwner) return res.status(404).json({ error: 'Negocio no encontrado' });
+  }
 
   const userLat = lat ? parseFloat(lat) : null;
   const userLng = lng ? parseFloat(lng) : null;
@@ -26,7 +44,9 @@ router.get('/', async (req, res) => {
     query = query.or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
   }
   if (tipo) query = query.eq('tipo', tipo);
-  if (negocio_id) query = query.eq('negocio_id', negocio_id);
+  // Para mi_negocio=true se usa siempre el negocio del usuario autenticado (ignora query param)
+  if (nIdOwner) query = query.eq('negocio_id', nIdOwner);
+  else if (negocio_id) query = query.eq('negocio_id', negocio_id);
 
   let { data, error } = await query;
   if (error) {
@@ -35,7 +55,8 @@ router.get('/', async (req, res) => {
       .from('bolsas')
       .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
       .gt('cantidad_disponible', 0);
-    if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
+    if (nIdOwner) q2 = q2.eq('negocio_id', nIdOwner);
+    else if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
     const r = await q2;
     data = r.data; error = r.error;
   }
@@ -157,14 +178,15 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, co2_salvado_kg } = req.body;
+    permite_envio, co2_salvado_kg, imagen_url } = req.body;
 
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
   const { data: negocio } = await supabase
     .from('negocios').select('id').eq('propietario_id', req.usuario.id).single();
-  const nId = negocio_id || negocio?.id;
+  // Admins pueden especificar negocio_id; restaurantes solo pueden usar su propio negocio
+  const nId = req.usuario.rol === 'admin' ? (negocio_id || negocio?.id) : negocio?.id;
   if (!nId) return res.status(400).json({ error: 'Negocio no encontrado' });
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
@@ -181,6 +203,7 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
       co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
+      imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
     }])
     .select()
@@ -200,6 +223,7 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_fin: hora_recogida_fin || '20:00',
         permite_envio: permite_envio || false,
         co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
+        imagen_url: imagen_url || null,
       }])
       .select()
       .single();
@@ -229,7 +253,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','co2_salvado_kg','activo','estado_aprobacion'];
+    'permite_envio','co2_salvado_kg','activo','estado_aprobacion','imagen_url'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
@@ -253,6 +277,14 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
 // DELETE /api/bolsas/:id — desactivar bolsa
 router.delete('/:id', authMiddleware, async (req, res) => {
+  const { data: bolsa } = await supabase
+    .from('bolsas')
+    .select('negocio_id, negocios(propietario_id)')
+    .eq('id', req.params.id)
+    .single();
+  if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+  if (bolsa.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
+    return res.status(403).json({ error: 'No autorizado' });
   await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
   res.json({ ok: true });
 });

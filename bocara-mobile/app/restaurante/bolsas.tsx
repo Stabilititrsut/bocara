@@ -313,35 +313,33 @@ export default function BolsasRestauranteScreen() {
               </View>
             )}
 
-            {/* Foto — solo para bolsas */}
-            {form.tipo_form === 'bolsa' && (
-              <>
-                <Text style={s.sectionLabel}>📷 Foto</Text>
-                <TouchableOpacity
-                  style={[s.fotoBtn, uploadingFoto && { opacity: 0.6 }]}
-                  onPress={seleccionarFotoBolsa}
-                  disabled={uploadingFoto}
-                  activeOpacity={0.8}
-                >
-                  {form.imagen_url
-                    ? <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
-                    : <View style={s.fotoPlaceholder}>
-                        <Text style={{ fontSize: 40 }}>⏱️</Text>
-                        <Text style={s.fotoPlaceholderText}>Toca para agregar foto</Text>
-                      </View>
+            {/* Foto */}
+            <>
+              <Text style={s.sectionLabel}>📷 Foto</Text>
+              <TouchableOpacity
+                style={[s.fotoBtn, uploadingFoto && { opacity: 0.6 }]}
+                onPress={seleccionarFotoBolsa}
+                disabled={uploadingFoto}
+                activeOpacity={0.8}
+              >
+                {form.imagen_url
+                  ? <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
+                  : <View style={s.fotoPlaceholder}>
+                      <Text style={{ fontSize: 40 }}>{form.tipo_form === 'cupon' ? '🏷️' : '⏱️'}</Text>
+                      <Text style={s.fotoPlaceholderText}>Toca para agregar foto</Text>
+                    </View>
+                }
+                <View style={s.fotoOverlay}>
+                  {uploadingFoto
+                    ? <ActivityIndicator color={Colors.white} />
+                    : <Text style={s.fotoOverlayText}>{form.imagen_url ? '📷 Cambiar foto' : '📷 Seleccionar foto'}</Text>
                   }
-                  <View style={s.fotoOverlay}>
-                    {uploadingFoto
-                      ? <ActivityIndicator color={Colors.white} />
-                      : <Text style={s.fotoOverlayText}>{form.imagen_url ? '📷 Cambiar foto' : '📷 Seleccionar foto'}</Text>
-                    }
-                  </View>
-                </TouchableOpacity>
-                {uploadFotoError ? (
-                  <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {uploadFotoError}</Text></View>
-                ) : null}
-              </>
-            )}
+                </View>
+              </TouchableOpacity>
+              {uploadFotoError ? (
+                <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {uploadFotoError}</Text></View>
+              ) : null}
+            </>
 
             <Text style={s.sectionLabel}>📝 Información</Text>
             <Field label="Nombre *" value={form.nombre} onChange={set('nombre')} placeholder={form.tipo_form === 'cupon' ? 'Ej. Descuento miércoles' : 'Ej. Bolsa de panadería'} />

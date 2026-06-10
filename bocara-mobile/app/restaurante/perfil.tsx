@@ -337,7 +337,7 @@ export default function PerfilRestauranteScreen() {
         <Text style={s.label}>Categoría</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }} contentContainerStyle={{ gap: 8 }}>
           {CATEGORIAS.map((cat) => (
-            <TouchableOpacity key={cat} style={[s.chip, form.categoria === cat && s.chipActive]} onPress={() => setForm((f: any) => ({ ...f, categoria: cat }))}>
+            <TouchableOpacity key={cat} style={[s.chip, form.categoria === cat && s.chipActive]} onPress={() => set('categoria')(cat)}>
               <Text style={[s.chipText, form.categoria === cat && s.chipTextActive]}>{cat}</Text>
             </TouchableOpacity>
           ))}
