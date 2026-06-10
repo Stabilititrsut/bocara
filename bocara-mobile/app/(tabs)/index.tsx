@@ -116,9 +116,9 @@ export default function HomeScreen() {
     for (let i = 0; i < items.length; i += 2) {
       rows.push(
         <View key={i} style={s.gridRow}>
-          <NegocioCard negocio={items[i]} onPress={() => router.push(`/negocio/${items[i].id}` as any)} />
+          <NegocioCard negocio={items[i]} onPress={() => router.push(`/tienda/${items[i].id}` as any)} />
           {items[i + 1]
-            ? <NegocioCard negocio={items[i + 1]} onPress={() => router.push(`/negocio/${items[i + 1].id}` as any)} />
+            ? <NegocioCard negocio={items[i + 1]} onPress={() => router.push(`/tienda/${items[i + 1].id}` as any)} />
             : <View style={{ width: CARD_W }} />
           }
         </View>

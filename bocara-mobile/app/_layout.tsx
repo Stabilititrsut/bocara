@@ -165,7 +165,7 @@ function AuthGuard() {
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
         (usuario.rol === 'admin'       && segments[0] === 'admin');
 
-      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios'];
+      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios', 'tienda', 'negocio'];
 
       if (!inCorrectSection && !allowedSections.includes(segments[0] as string)) {
         let rutaDestino = '/(tabs)/';
@@ -193,6 +193,8 @@ function AuthGuard() {
         <Stack.Screen name="registro-restaurante" />
         <Stack.Screen name="forgot-password" />
         <Stack.Screen name="verificar-email" />
+        <Stack.Screen name="tienda/[id]"   options={{ headerShown: false }} />
+        <Stack.Screen name="negocio/[id]"  options={{ headerShown: false }} />
         <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
         <Stack.Screen name="pago"          options={{ headerShown: false }} />
         <Stack.Screen name="pago-exitoso"  options={{ headerShown: false }} />
