@@ -127,7 +127,7 @@ router.get('/previos/:negocioId', authMiddleware, async (req, res) => {
     if (!pedidos || pedidos.length === 0) return res.json([]);
 
     // Contar veces pedido por bolsa
-    const vecesPedido: Record<string, number> = {};
+    const vecesPedido = {};
     for (const p of pedidos) {
       vecesPedido[p.bolsa_id] = (vecesPedido[p.bolsa_id] || 0) + 1;
     }
@@ -136,8 +136,8 @@ router.get('/previos/:negocioId', authMiddleware, async (req, res) => {
     const { data: bolsas } = await supabase
       .from('bolsas').select('*').in('id', ids).eq('activo', true);
 
-    res.json((bolsas || []).map((b: any) => ({ ...b, veces_pedido: vecesPedido[b.id] || 1 })));
-  } catch (err: any) {
+    res.json((bolsas || []).map((b) => ({ ...b, veces_pedido: vecesPedido[b.id] || 1 })));
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

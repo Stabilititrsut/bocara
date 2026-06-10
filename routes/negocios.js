@@ -96,9 +96,9 @@ router.get('/:id/detalle', async (req, res) => {
   const bolsas = data || [];
 
   // Contar cuántas veces fue pedida cada bolsa (pedidos recogidos)
-  const vecesPedidoMap: Record<string, number> = {};
+  const vecesPedidoMap = {};
   if (bolsas.length > 0) {
-    const ids = bolsas.map((b: any) => b.id);
+    const ids = bolsas.map((b) => b.id);
     const { data: peds } = await supabase
       .from('pedidos').select('bolsa_id').in('bolsa_id', ids).eq('estado', 'recogido');
     for (const p of (peds || [])) {
@@ -106,12 +106,12 @@ router.get('/:id/detalle', async (req, res) => {
     }
   }
 
-  const enrich = (b: any) => ({ ...b, veces_pedido: vecesPedidoMap[b.id] || 0 });
+  const enrich = (b) => ({ ...b, veces_pedido: vecesPedidoMap[b.id] || 0 });
   res.json({
     negocio,
     bolsas: {
-      tiempo_limitado: bolsas.filter((b: any) => b.tipo !== 'cupon').map(enrich),
-      promocion:       bolsas.filter((b: any) => b.tipo === 'cupon').map(enrich),
+      tiempo_limitado: bolsas.filter((b) => b.tipo !== 'cupon').map(enrich),
+      promocion:       bolsas.filter((b) => b.tipo === 'cupon').map(enrich),
     },
   });
 });
