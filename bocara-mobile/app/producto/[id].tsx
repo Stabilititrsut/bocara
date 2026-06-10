@@ -47,27 +47,31 @@ function Stars({ rating, size = 13 }: { rating: number; size?: number }) {
   );
 }
 
-function MapCard({ lat, lng, direccion, zona }: {
+function MapCard({ lat, lng, direccion, zona, googleMapsUrl, wazeUrl }: {
   lat?: number | null; lng?: number | null; direccion?: string; zona?: string;
+  googleMapsUrl?: string | null; wazeUrl?: string | null;
 }) {
   const [mapErr, setMapErr] = useState(false);
   const hasCoords = lat != null && lng != null;
+  const canNavigate = !!(googleMapsUrl || hasCoords);
   const mapUrl = hasCoords && !mapErr
     ? `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lng}&zoom=15&size=400x200&markers=${lat},${lng},red-pushpin`
     : null;
 
   const openGoogleMaps = () => {
-    if (!hasCoords) return;
-    Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`);
+    const url = googleMapsUrl || (hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}` : null);
+    if (url) Linking.openURL(url);
+    else Alert.alert('Sin ubicación', 'Este negocio aún no tiene ubicación registrada.');
   };
   const openWaze = () => {
-    if (!hasCoords) return;
-    Linking.openURL(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`);
+    const url = wazeUrl || (hasCoords ? `https://waze.com/ul?ll=${lat},${lng}&navigate=yes` : null);
+    if (url) Linking.openURL(url);
+    else Alert.alert('Sin ubicación', 'Este negocio aún no tiene ubicación registrada.');
   };
 
   return (
     <View style={ms.wrap}>
-      <TouchableOpacity style={ms.mapBox} onPress={openGoogleMaps} activeOpacity={0.88} disabled={!hasCoords}>
+      <TouchableOpacity style={ms.mapBox} onPress={openGoogleMaps} activeOpacity={0.88} disabled={!canNavigate}>
         {mapUrl ? (
           <Image
             source={{ uri: mapUrl }}
@@ -102,22 +106,22 @@ function MapCard({ lat, lng, direccion, zona }: {
 
       <View style={ms.navRow}>
         <TouchableOpacity
-          style={[ms.navBtnGoogle, !hasCoords && ms.navBtnOff]}
+          style={[ms.navBtnGoogle, !canNavigate && ms.navBtnOff]}
           onPress={openGoogleMaps}
-          disabled={!hasCoords}
+          disabled={!canNavigate}
           activeOpacity={0.85}
         >
-          <Ionicons name="navigate-outline" size={15} color={hasCoords ? Colors.white : Colors.textLight} />
-          <Text style={[ms.navText, !hasCoords && ms.navTextOff]}>Google Maps</Text>
+          <Ionicons name="navigate-outline" size={15} color={canNavigate ? Colors.white : Colors.textLight} />
+          <Text style={[ms.navText, !canNavigate && ms.navTextOff]}>Google Maps</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[ms.navBtnWaze, !hasCoords && ms.navBtnOff]}
+          style={[ms.navBtnWaze, !canNavigate && ms.navBtnOff]}
           onPress={openWaze}
-          disabled={!hasCoords}
+          disabled={!canNavigate}
           activeOpacity={0.85}
         >
           <Text style={{ fontSize: 15 }}>🚗</Text>
-          <Text style={[ms.navText, !hasCoords && ms.navTextOff]}>Waze</Text>
+          <Text style={[ms.navText, !canNavigate && ms.navTextOff]}>Waze</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -440,6 +444,8 @@ export default function ProductoScreen() {
                 lng={bolsa.negocios?.longitud}
                 direccion={bolsa.negocios?.direccion}
                 zona={bolsa.negocios?.zona}
+                googleMapsUrl={bolsa.negocios?.google_maps_url}
+                wazeUrl={bolsa.negocios?.waze_url}
               />
             </View>
 

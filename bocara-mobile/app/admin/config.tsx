@@ -224,6 +224,23 @@ export default function AdminConfigScreen() {
           }
         </TouchableOpacity>
 
+        {/* SQL para nuevas columnas de ubicación */}
+        <Text style={s.sectionTitle}>SQL — Columnas de ubicación</Text>
+        <View style={[card(), { padding: 16, marginBottom: 20 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <Ionicons name="code-slash" size={18} color={GOLD} />
+            <Text style={{ fontSize: 14, fontWeight: '700', color: TEXT }}>Ejecutar en Supabase → SQL Editor</Text>
+          </View>
+          <Text style={{ fontSize: 12, color: TEXT2, marginBottom: 10, lineHeight: 18 }}>
+            Agrega los campos de punto de referencia y links de navegación a la tabla negocios.
+          </Text>
+          <View style={s.codeBox}>
+            <Text style={s.codeText}>
+              {'ALTER TABLE negocios\nADD COLUMN IF NOT EXISTS punto_referencia text,\nADD COLUMN IF NOT EXISTS google_maps_url text,\nADD COLUMN IF NOT EXISTS waze_url text;'}
+            </Text>
+          </View>
+        </View>
+
         {/* Geocodificación */}
         <Text style={s.sectionTitle}>Herramientas</Text>
         <View style={[card(), s.geoCard]}>

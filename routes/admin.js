@@ -369,21 +369,26 @@ router.post('/geocodificar-negocios', authMiddleware, adminOnly, async (req, res
   if (error) return res.status(500).json({ error: error.message });
 
   const resultados = { ok: 0, sin_resultado: 0, errores: 0 };
+  console.log(`[geocodificar] Iniciando geocodificación de ${negocios?.length || 0} negocios`);
   // Nominatim pide máximo 1 req/seg — procesamos secuencialmente con delay
   for (const n of (negocios || [])) {
     try {
-      const coords = await geocodeAddress(n.direccion, n.zona, n.ciudad);
+      const coords = await geocodeAddress(n.direccion, n.zona, n.ciudad, n.nombre);
       if (coords) {
         await supabase.from('negocios').update({ latitud: coords.lat, longitud: coords.lng }).eq('id', n.id);
         resultados.ok++;
+        console.log(`[geocodificar] ✓ ${n.nombre}: ${coords.lat}, ${coords.lng}`);
       } else {
         resultados.sin_resultado++;
+        console.warn(`[geocodificar] ✗ Sin resultado: "${n.nombre}" — ${n.direccion}, ${n.zona}`);
       }
       await new Promise(r => setTimeout(r, 1100)); // respetar rate limit de Nominatim
-    } catch {
+    } catch (e) {
       resultados.errores++;
+      console.error(`[geocodificar] Error con "${n.nombre}":`, e.message);
     }
   }
+  console.log(`[geocodificar] Resultado final:`, resultados);
   res.json({ total: negocios?.length || 0, ...resultados });
 });
 

@@ -1,12 +1,57 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView, Linking, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import { Colors } from '@/constants/Colors';
+import { pedidosAPI } from '@/src/services/api';
 
 export default function QrRecogidaScreen() {
-  const { codigo, tipo } = useLocalSearchParams<{ codigo: string; tipo: string; pedidoId: string }>();
+  const { codigo, tipo, pedidoId } = useLocalSearchParams<{ codigo: string; tipo: string; pedidoId: string }>();
   const router = useRouter();
   const esEnvio = tipo === 'envio';
+
+  const [negocioNav, setNegocioNav] = useState<{
+    nombre?: string;
+    direccion?: string;
+    zona?: string;
+    punto_referencia?: string;
+    google_maps_url?: string;
+    waze_url?: string;
+    latitud?: number | null;
+    longitud?: number | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!pedidoId || esEnvio) return;
+    pedidosAPI.detalle(pedidoId).then((res) => {
+      const n = res.data?.negocios || res.data?.negocio;
+      if (n) setNegocioNav(n);
+    }).catch(() => {});
+  }, [pedidoId, esEnvio]);
+
+  function abrirGoogleMaps() {
+    const url = negocioNav?.google_maps_url
+      || (negocioNav?.latitud != null && negocioNav?.longitud != null
+        ? `https://www.google.com/maps/dir/?api=1&destination=${negocioNav.latitud},${negocioNav.longitud}`
+        : null);
+    if (url) Linking.openURL(url);
+    else Alert.alert('Sin ubicación', 'El negocio aún no tiene ubicación registrada.');
+  }
+
+  function abrirWaze() {
+    const url = negocioNav?.waze_url
+      || (negocioNav?.latitud != null && negocioNav?.longitud != null
+        ? `https://waze.com/ul?ll=${negocioNav.latitud},${negocioNav.longitud}&navigate=yes`
+        : null);
+    if (url) Linking.openURL(url);
+    else Alert.alert('Sin ubicación', 'El negocio aún no tiene ubicación registrada.');
+  }
+
+  const tieneNavegacion = !!(
+    negocioNav?.google_maps_url ||
+    negocioNav?.waze_url ||
+    (negocioNav?.latitud != null && negocioNav?.longitud != null)
+  );
 
   return (
     <SafeAreaView style={s.root}>
@@ -45,6 +90,34 @@ export default function QrRecogidaScreen() {
               <Text style={s.instruccionItem}>2. Muestra el QR o el código al personal</Text>
               <Text style={s.instruccionItem}>3. ¡Disfruta tu bolsa rescatada! 🌱</Text>
             </View>
+
+            {/* Cómo llegar — se muestra si hay datos de navegación */}
+            {(negocioNav || tieneNavegacion) && (
+              <View style={s.navCard}>
+                <Text style={s.navTitle}>📍 Cómo llegar</Text>
+                {negocioNav?.nombre ? (
+                  <Text style={s.navNombre}>{negocioNav.nombre}</Text>
+                ) : null}
+                {(negocioNav?.direccion || negocioNav?.zona) ? (
+                  <Text style={s.navDireccion}>
+                    {[negocioNav.direccion, negocioNav.zona].filter(Boolean).join(' · ')}
+                  </Text>
+                ) : null}
+                {negocioNav?.punto_referencia ? (
+                  <Text style={s.navReferencia}>🔖 {negocioNav.punto_referencia}</Text>
+                ) : null}
+                <View style={s.navBtns}>
+                  <TouchableOpacity style={s.navBtnGoogle} onPress={abrirGoogleMaps}>
+                    <Text style={{ fontSize: 16 }}>🗺️</Text>
+                    <Text style={s.navBtnText}>Google Maps</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={s.navBtnWaze} onPress={abrirWaze}>
+                    <Text style={{ fontSize: 16 }}>🚗</Text>
+                    <Text style={s.navBtnText}>Waze</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
           </>
         )}
 
@@ -107,6 +180,27 @@ const s = StyleSheet.create({
   },
   instruccionTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 10 },
   instruccionItem: { fontSize: 13, color: Colors.textSecondary, marginBottom: 6, lineHeight: 20 },
+
+  navCard: {
+    backgroundColor: Colors.white, borderRadius: 16, padding: 16,
+    width: '100%', marginTop: 12,
+    borderWidth: 1.5, borderColor: Colors.border,
+  },
+  navTitle: { fontSize: 15, fontWeight: '800', color: Colors.brown, marginBottom: 6 },
+  navNombre: { fontSize: 14, fontWeight: '700', color: Colors.brown, marginBottom: 2 },
+  navDireccion: { fontSize: 13, color: Colors.textSecondary, marginBottom: 4 },
+  navReferencia: { fontSize: 12, color: Colors.textSecondary, marginBottom: 12, fontStyle: 'italic' },
+  navBtns: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  navBtnGoogle: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    backgroundColor: Colors.brown, borderRadius: 12, paddingVertical: 12,
+  },
+  navBtnWaze: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    backgroundColor: '#00B4D8', borderRadius: 12, paddingVertical: 12,
+  },
+  navBtnText: { color: Colors.white, fontSize: 13, fontWeight: '700' },
+
   envioCard: {
     backgroundColor: Colors.white, borderRadius: 20, padding: 24,
     alignItems: 'center', marginTop: 20, width: '100%', gap: 8,

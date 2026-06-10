@@ -14,9 +14,10 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 // Geocode a street address in Guatemala using Nominatim (OpenStreetMap, free, no key)
 // Returns { lat, lng } or null if not found / on error
-async function geocodeAddress(direccion, zona = '', ciudad = 'Guatemala') {
+async function geocodeAddress(direccion, zona = '', ciudad = 'Guatemala', nombre = '') {
   if (!direccion) return null;
-  const partes = [direccion, zona, ciudad, 'Guatemala'].filter(Boolean);
+  const zonaStr = zona ? (String(zona).toLowerCase().startsWith('zona') ? String(zona) : `Zona ${zona}`) : '';
+  const partes = [nombre, direccion, zonaStr, ciudad, 'Guatemala'].filter(Boolean);
   const q = partes.join(', ');
   try {
     const res = await axios.get('https://nominatim.openstreetmap.org/search', {

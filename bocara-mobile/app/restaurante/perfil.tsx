@@ -56,6 +56,9 @@ export default function PerfilRestauranteScreen() {
         categoria: res.data.categoria || '',
         latitud: res.data.latitud != null ? String(res.data.latitud) : '',
         longitud: res.data.longitud != null ? String(res.data.longitud) : '',
+        punto_referencia: res.data.punto_referencia || '',
+        google_maps_url: res.data.google_maps_url || '',
+        waze_url: res.data.waze_url || '',
       };
       setForm(loaded);
       setOriginalForm(loaded);
@@ -390,6 +393,52 @@ export default function PerfilRestauranteScreen() {
           </TouchableOpacity>
           <Text style={s.coordsHint}>O busca en maps.google.com, haz clic derecho y copia las coordenadas.</Text>
         </View>
+
+        {/* Links de navegación */}
+        <View style={s.sectionRow}>
+          <Text style={s.sectionTitle}>Links de navegación 🗺️</Text>
+          {(['punto_referencia','google_maps_url','waze_url'] as const).some(k => camposPendientes.has(k)) && (
+            <View style={s.pendienteBadge}><Text style={s.pendienteBadgeText}>⏳ Pendiente</Text></View>
+          )}
+        </View>
+
+        <View style={{ backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#FDE68A' }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#92400E', marginBottom: 6 }}>📌 ¿Cómo obtener el link?</Text>
+          <Text style={{ fontSize: 12, color: '#B45309', lineHeight: 18 }}>
+            {'Google Maps: Abre maps.google.com → busca tu negocio → toca "Compartir" → copia el link.\n\nWaze: Abre waze.com → busca tu dirección → toca los 3 puntos → "Compartir lugar".'}
+          </Text>
+        </View>
+
+        <Text style={s.label}>Punto de referencia</Text>
+        <TextInput
+          style={s.input}
+          placeholder="Ej. Frente al parque central, local 5"
+          placeholderTextColor={Colors.textLight}
+          value={form.punto_referencia}
+          onChangeText={set('punto_referencia')}
+        />
+
+        <Text style={s.label}>Link de Google Maps</Text>
+        <TextInput
+          style={s.input}
+          placeholder="https://maps.app.goo.gl/..."
+          placeholderTextColor={Colors.textLight}
+          value={form.google_maps_url}
+          onChangeText={set('google_maps_url')}
+          autoCapitalize="none"
+          keyboardType="url"
+        />
+
+        <Text style={s.label}>Link de Waze</Text>
+        <TextInput
+          style={s.input}
+          placeholder="https://waze.com/ul?ll=..."
+          placeholderTextColor={Colors.textLight}
+          value={form.waze_url}
+          onChangeText={set('waze_url')}
+          autoCapitalize="none"
+          keyboardType="url"
+        />
 
         {/* Foto del DPI */}
         <View style={s.sectionRow}>
