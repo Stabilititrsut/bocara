@@ -359,7 +359,7 @@ router.post('/geocodificar', authMiddleware, adminOnly, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   let geocodificados = 0;
-  let fallidos = 0;
+  const sin_resultado = [];
   console.log(`[geocodificar] Iniciando para ${negocios?.length || 0} negocios sin coords`);
   for (const n of (negocios || [])) {
     try {
@@ -369,17 +369,17 @@ router.post('/geocodificar', authMiddleware, adminOnly, async (req, res) => {
         geocodificados++;
         console.log(`[geocodificar] ✓ ${n.nombre}: ${coords.lat}, ${coords.lng}`);
       } else {
-        fallidos++;
-        console.warn(`[geocodificar] ✗ Sin resultado: "${n.nombre}" — ${n.direccion}, ${n.zona}`);
+        sin_resultado.push(n.nombre);
+        console.warn(`[geocodificar] ✗ Sin resultado: "${n.nombre}" — dir="${n.direccion}" zona="${n.zona}" ciudad="${n.ciudad}"`);
       }
       await new Promise(r => setTimeout(r, 1100));
     } catch (e) {
-      fallidos++;
+      sin_resultado.push(n.nombre);
       console.error(`[geocodificar] Error con "${n.nombre}":`, e.message);
     }
   }
-  console.log(`[geocodificar] Resultado: ${geocodificados} geocodificados, ${fallidos} fallidos`);
-  res.json({ geocodificados, fallidos, total: negocios?.length || 0 });
+  console.log(`[geocodificar] Resultado: ${geocodificados} geocodificados, ${sin_resultado.length} sin resultado`);
+  res.json({ geocodificados, fallidos: sin_resultado.length, sin_resultado, total: negocios?.length || 0 });
 });
 
 // GET /api/admin/geocodificar-negocios/count — cuántos negocios faltan por geocodificar

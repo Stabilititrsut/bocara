@@ -15,15 +15,34 @@ function haversine(lat1, lon1, lat2, lon2) {
 // Geocode a street address in Guatemala using Nominatim (OpenStreetMap, free, no key)
 // Returns { lat, lng } or null if not found / on error
 async function geocodeAddress(direccion, zona = '', ciudad = 'Guatemala', nombre = '') {
-  if (!direccion) return null;
+  if (!direccion && !zona) return null;
   const zonaStr = zona ? (String(zona).toLowerCase().startsWith('zona') ? String(zona) : `Zona ${zona}`) : '';
-  const partes = [nombre, direccion, zonaStr, ciudad, 'Guatemala'].filter(Boolean);
-  const q = partes.join(', ');
+
+  // Query principal: dirección + zona + ciudad (el nombre del negocio no es parte de una dirección postal)
+  if (direccion) {
+    const q = [direccion, zonaStr, ciudad, 'Guatemala'].filter(Boolean).join(', ');
+    console.log(`[nominatim] query="${q}"`);
+    const hit = await _nominatim(q);
+    if (hit) return hit;
+  }
+
+  // Fallback: solo zona + ciudad — para negocios con dirección incompleta
+  if (zonaStr) {
+    const qFallback = [zonaStr, ciudad || 'Guatemala', 'Guatemala'].filter(Boolean).join(', ');
+    console.log(`[nominatim] fallback="${qFallback}"`);
+    const hit = await _nominatim(qFallback);
+    if (hit) return hit;
+  }
+
+  return null;
+}
+
+async function _nominatim(q) {
   try {
     const res = await axios.get('https://nominatim.openstreetmap.org/search', {
       params: { q, format: 'json', limit: 1, countrycodes: 'gt' },
       headers: { 'User-Agent': 'BocararApp/1.0 (contacto@bocara.gt)' },
-      timeout: 5000,
+      timeout: 8000,
     });
     const hit = res.data?.[0];
     if (hit) return { lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) };

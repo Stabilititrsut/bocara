@@ -16,8 +16,14 @@ export default function AdminContenidoScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [procesando, setProcesando] = useState<string | null>(null);
   const [erroresItem, setErroresItem] = useState<Record<string, string>>({});
+  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [modalRechazo, setModalRechazo] = useState<{ id: string; nombre: string } | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
+
+  function showToast(msg: string, ok = true) {
+    setToast({ msg, ok });
+    setTimeout(() => setToast(null), 3500);
+  }
 
   const cargar = useCallback(async () => {
     try {
@@ -46,10 +52,11 @@ export default function AdminContenidoScreen() {
               await adminAPI.aprobarBolsa(id);
               console.log('[contenido] aprobar OK:', id);
               setItems(prev => prev.filter(i => i.id !== id));
-              Alert.alert('✅ Aprobado', `"${nombre}" ya está activo en Bocara.`);
+              showToast(`✅ "${nombre}" aprobado y activo en Bocara`);
             } catch (e: any) {
               console.error('[contenido] aprobar error:', e.message);
               setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al aprobar' }));
+              showToast(`Error: ${e.message}`, false);
             } finally {
               setProcesando(null);
             }
@@ -61,15 +68,20 @@ export default function AdminContenidoScreen() {
 
   async function rechazar() {
     if (!modalRechazo) return;
-    setProcesando(modalRechazo.id);
+    const { id, nombre } = modalRechazo;
+    setProcesando(id);
     setModalRechazo(null);
+    setErroresItem(prev => ({ ...prev, [id]: '' }));
+    console.log('[contenido] rechazar →', { id, nombre });
     try {
-      await adminAPI.rechazarBolsa(modalRechazo.id, motivoRechazo);
-      setItems(prev => prev.filter(i => i.id !== modalRechazo.id));
-      Alert.alert('Rechazado', 'El propietario fue notificado.');
+      await adminAPI.rechazarBolsa(id, motivoRechazo);
+      console.log('[contenido] rechazar OK:', id);
+      setItems(prev => prev.filter(i => i.id !== id));
+      showToast(`"${nombre}" rechazado. Propietario notificado.`);
     } catch (e: any) {
       console.error('[contenido] rechazar error:', e.message);
-      Alert.alert('Error al rechazar', e.message);
+      setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al rechazar' }));
+      showToast(`Error: ${e.message}`, false);
     } finally {
       setProcesando(null);
       setMotivoRechazo('');
@@ -93,6 +105,13 @@ export default function AdminContenidoScreen() {
           <Text style={s.badgeText}>{items.length}</Text>
         </View>
       </View>
+
+      {/* Toast global */}
+      {toast && (
+        <View style={[s.toast, toast.ok ? s.toastOk : s.toastErr]}>
+          <Text style={s.toastText}>{toast.msg}</Text>
+        </View>
+      )}
 
       <ScrollView
         contentContainerStyle={s.scroll}
@@ -198,7 +217,7 @@ export default function AdminContenidoScreen() {
                   <TouchableOpacity
                     style={[s.btnRechazar, procesando === item.id && s.btnDisabled]}
                     onPress={() => { setModalRechazo({ id: item.id, nombre: item.nombre }); setMotivoRechazo(''); }}
-                    disabled={!!procesando}
+                    disabled={procesando === item.id}
                   >
                     {procesando === item.id
                       ? <ActivityIndicator color={Colors.error} size="small" />
@@ -208,7 +227,7 @@ export default function AdminContenidoScreen() {
                   <TouchableOpacity
                     style={[s.btnAprobar, procesando === item.id && s.btnDisabled]}
                     onPress={() => aprobar(item.id, item.nombre)}
-                    disabled={!!procesando}
+                    disabled={procesando === item.id}
                   >
                     {procesando === item.id
                       ? <ActivityIndicator color={Colors.white} size="small" />
@@ -316,6 +335,10 @@ const s = StyleSheet.create({
   btnDisabled: { opacity: 0.5 },
   errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
   errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
+  toast: { position: 'absolute', top: 70, left: 16, right: 16, zIndex: 99, borderRadius: 12, padding: 14 },
+  toastOk: { backgroundColor: '#14532D' },
+  toastErr: { backgroundColor: '#450A0A' },
+  toastText: { color: '#fff', fontWeight: '700', fontSize: 13, textAlign: 'center' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalCard: {
     backgroundColor: DARK, borderTopLeftRadius: 24, borderTopRightRadius: 24,

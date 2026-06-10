@@ -54,8 +54,9 @@ export default function AdminConfigScreen() {
   const [saving,      setSaving]      = useState(false);
   const [hasTable,    setHasTable]    = useState(true);
   const [showSQL,     setShowSQL]     = useState(false);
-  const [geoLoading,  setGeoLoading]  = useState(false);
-  const [geoMsg,      setGeoMsg]      = useState('');
+  const [geoLoading,       setGeoLoading]       = useState(false);
+  const [geoMsg,           setGeoMsg]           = useState('');
+  const [geoSinResultado,  setGeoSinResultado]  = useState<string[]>([]);
 
   const cargar = useCallback(async () => {
     try {
@@ -91,6 +92,7 @@ export default function AdminConfigScreen() {
   async function geocodificar() {
     setGeoLoading(true);
     setGeoMsg('Geocodificando... espera un momento');
+    setGeoSinResultado([]);
     try {
       const token = await AsyncStorage.getItem('bocara_token');
       const res = await fetch(`${API_BASE_URL}/admin/geocodificar`, {
@@ -102,7 +104,10 @@ export default function AdminConfigScreen() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Error desconocido');
-      setGeoMsg(`✓ ${data.geocodificados} negocios geocodificados · ${data.fallidos} sin resultado`);
+      setGeoMsg(`✓ ${data.geocodificados} geocodificados · ${data.fallidos} sin resultado (de ${data.total})`);
+      if (Array.isArray(data.sin_resultado) && data.sin_resultado.length > 0) {
+        setGeoSinResultado(data.sin_resultado);
+      }
     } catch (e: any) {
       setGeoMsg(`Error: ${e.message}`);
     } finally {
@@ -251,6 +256,16 @@ export default function AdminConfigScreen() {
             }
           </TouchableOpacity>
           {geoMsg ? <Text style={s.geoMsgText}>{geoMsg}</Text> : null}
+          {geoSinResultado.length > 0 && (
+            <View style={{ marginTop: 8, backgroundColor: '#FEF3C7', borderRadius: 10, padding: 10 }}>
+              <Text style={{ fontSize: 12, color: '#92400E', fontWeight: '700', marginBottom: 4 }}>
+                Sin resultado ({geoSinResultado.length}):
+              </Text>
+              <Text style={{ fontSize: 12, color: '#B45309', lineHeight: 18 }}>
+                {geoSinResultado.join(', ')}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={{ height: 40 }} />
