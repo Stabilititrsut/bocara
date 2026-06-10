@@ -229,9 +229,6 @@ export default function AdminContenidoScreen() {
                     }
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity style={s.btnTest} onPress={() => showToast(`TEST OK · ID: ${item.id.slice(0, 8)}`)}>
-                  <Text style={s.btnTestText}>TEST TOQUE</Text>
-                </TouchableOpacity>
               </View>
             );
           })
@@ -330,9 +327,7 @@ const s = StyleSheet.create({
   },
   btnRechazarText: { color: Colors.error, fontWeight: '800', fontSize: 15 },
   btnDisabled: { opacity: 0.5 },
-  btnTest: { marginTop: 8, alignItems: 'center', paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#334155' },
-  btnTestText: { fontSize: 10, color: '#64748B', fontWeight: '700', letterSpacing: 0.8 },
-  errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
+errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
   errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
   toast: { position: 'absolute', top: 70, left: 16, right: 16, zIndex: 99, borderRadius: 12, padding: 14 },
   toastOk: { backgroundColor: '#14532D' },
