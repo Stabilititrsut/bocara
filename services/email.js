@@ -1,5 +1,9 @@
 const nodemailer = require('nodemailer');
 
+// Diagnóstico de vars de entorno al cargar el módulo
+console.log('EMAIL_USER:', process.env.EMAIL_USER ? 'configurado' : 'FALTA');
+console.log('EMAIL_PASS:', process.env.EMAIL_PASS ? 'configurado' : 'FALTA');
+
 let transporter = null;
 
 function getTransporter() {
@@ -510,4 +514,83 @@ function templateSuspendidoUsuario(nombreUsuario, emailUsuario, motivo) {
 </html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario };
+function templateRehabilitadoUsuario(nombreUsuario, emailUsuario) {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F5F0EB;font-family:'Helvetica Neue',Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08)">
+
+        <tr>
+          <td style="background:#1A1A1A;padding:36px 40px;text-align:center">
+            <div style="font-size:32px;font-weight:900;letter-spacing:-1px;color:#C8A97E;margin-bottom:4px">
+              Bocara <span style="color:#FFFFFF">Food</span>
+            </div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center">
+            <div style="display:inline-block;background:#DCFCE7;border-radius:50%;width:72px;height:72px;line-height:72px;font-size:36px">✅</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 40px 8px;text-align:center">
+            <h1 style="margin:0;font-size:26px;font-weight:900;color:#1A1A1A">Tu cuenta ha sido reactivada</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 40px 28px;text-align:center">
+            <p style="margin:0;font-size:15px;color:#64748B;line-height:24px">
+              Hola, <strong style="color:#1A1A1A">${nombreUsuario}</strong>. Tu cuenta asociada a
+              <strong style="color:#1A1A1A">${emailUsuario}</strong> ha sido <strong style="color:#22C55E">reactivada</strong> en Bocara Food.
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px">
+            <div style="height:2px;background:linear-gradient(90deg,transparent,#C8A97E,transparent)"></div>
+          </td>
+        </tr>
+        <tr><td style="height:28px"></td></tr>
+
+        <tr>
+          <td style="padding:0 40px 28px">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#F0FDF4;border-radius:16px;border-left:4px solid #22C55E">
+              <tr><td style="padding:18px 22px">
+                <div style="font-size:13px;font-weight:700;color:#15803D;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">¿Qué significa esto?</div>
+                <div style="font-size:14px;color:#1A1A1A;line-height:22px">
+                  Ya puedes iniciar sesión normalmente en la app y acceder a todas las funciones de Bocara Food.
+                </div>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px 36px;text-align:center">
+            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+              Ir a la app →
+            </a>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="background:#1A1A1A;padding:22px 40px;text-align:center">
+            <div style="font-size:12px;color:rgba(255,255,255,0.5);line-height:20px">
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario };

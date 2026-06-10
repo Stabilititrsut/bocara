@@ -3,7 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
-const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario } = require('../services/email');
+const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario } = require('../services/email');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -98,8 +98,22 @@ router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res
 router.put('/usuarios/:id/rehabilitar', authMiddleware, adminOnly, async (req, res) => {
   const { rol_restaurar } = req.body;
   const rolFinal = rol_restaurar || 'cliente';
+
+  const { data: u } = await supabase.from('usuarios').select('email,nombre,apellido').eq('id', req.params.id).single();
+
   const { data, error } = await supabase.from('usuarios').update({ rol: rolFinal }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  if (u?.email) {
+    const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
+    console.log(`[rehabilitar-usuario] Enviando email a ${u.email}`);
+    enviarEmail({
+      to: u.email,
+      subject: '✅ Tu cuenta en Bocara Food ha sido reactivada',
+      html: templateRehabilitadoUsuario(nombreDisplay, u.email),
+    }).catch(e => console.error('[rehabilitar-usuario] Error email:', e.message));
+  }
+
   res.json(data);
 });
 
