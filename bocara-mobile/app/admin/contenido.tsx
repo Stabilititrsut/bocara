@@ -15,6 +15,7 @@ export default function AdminContenidoScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [procesando, setProcesando] = useState<string | null>(null);
+  const [erroresItem, setErroresItem] = useState<Record<string, string>>({});
   const [modalRechazo, setModalRechazo] = useState<{ id: string; nombre: string } | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
 
@@ -39,13 +40,16 @@ export default function AdminContenidoScreen() {
         {
           text: 'Aprobar', style: 'default', onPress: async () => {
             setProcesando(id);
+            setErroresItem(prev => ({ ...prev, [id]: '' }));
+            console.log('[contenido] aprobar →', { id, nombre });
             try {
               await adminAPI.aprobarBolsa(id);
+              console.log('[contenido] aprobar OK:', id);
               setItems(prev => prev.filter(i => i.id !== id));
               Alert.alert('✅ Aprobado', `"${nombre}" ya está activo en Bocara.`);
             } catch (e: any) {
               console.error('[contenido] aprobar error:', e.message);
-              Alert.alert('Error al aprobar', e.message);
+              setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al aprobar' }));
             } finally {
               setProcesando(null);
             }
@@ -182,6 +186,13 @@ export default function AdminContenidoScreen() {
                   </Text>
                 </View>
 
+                {/* Error inline */}
+                {!!erroresItem[item.id] && (
+                  <View style={s.errorCard}>
+                    <Text style={s.errorText}>⚠️ {erroresItem[item.id]}</Text>
+                  </View>
+                )}
+
                 {/* Acciones */}
                 <View style={s.cardActions}>
                   <TouchableOpacity
@@ -303,6 +314,8 @@ const s = StyleSheet.create({
   },
   btnRechazarText: { color: Colors.error, fontWeight: '800', fontSize: 15 },
   btnDisabled: { opacity: 0.5 },
+  errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
+  errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalCard: {
     backgroundColor: DARK, borderTopLeftRadius: 24, borderTopRightRadius: 24,

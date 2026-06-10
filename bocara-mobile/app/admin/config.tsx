@@ -3,8 +3,9 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { adminAPI } from '@/src/services/api';
+import { adminAPI, API_BASE_URL } from '@/src/services/api';
 
 const BG     = '#F8FAFC';
 const CARD   = '#FFFFFF';
@@ -88,36 +89,24 @@ export default function AdminConfigScreen() {
   }
 
   async function geocodificar() {
+    setGeoLoading(true);
+    setGeoMsg('Geocodificando... espera un momento');
     try {
-      const cnt = await adminAPI.geocodificarNegociosCount();
-      const total = cnt.data.count as number;
-      if (total === 0) {
-        Alert.alert('Sin pendientes', 'Todos los negocios ya tienen coordenadas.');
-        return;
-      }
-      Alert.alert(
-        'Geocodificar negocios',
-        `${total} negocio${total !== 1 ? 's' : ''} sin coordenadas (~${total}s). ¿Continuar?`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          {
-            text: 'Iniciar', onPress: async () => {
-              setGeoLoading(true);
-              setGeoMsg(`Geocodificando ${total} negocios...`);
-              try {
-                const res = await adminAPI.geocodificarNegocios();
-                const { ok, sin_resultado, errores } = res.data;
-                setGeoMsg(`✓ ${ok} geocodificados · ${sin_resultado} sin resultado · ${errores} errores`);
-              } catch (e: any) {
-                setGeoMsg('');
-                Alert.alert('Error', e.message);
-              } finally { setGeoLoading(false); }
-            },
-          },
-        ]
-      );
+      const token = await AsyncStorage.getItem('bocara_token');
+      const res = await fetch(`${API_BASE_URL}/admin/geocodificar`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Error desconocido');
+      setGeoMsg(`✓ ${data.geocodificados} negocios geocodificados · ${data.fallidos} sin resultado`);
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      setGeoMsg(`Error: ${e.message}`);
+    } finally {
+      setGeoLoading(false);
     }
   }
 

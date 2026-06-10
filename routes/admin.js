@@ -350,6 +350,38 @@ router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   res.json(data || []);
 });
 
+// POST /api/admin/geocodificar — geocodifica todos los negocios sin coordenadas (endpoint canónico)
+router.post('/geocodificar', authMiddleware, adminOnly, async (req, res) => {
+  const { data: negocios, error } = await supabase
+    .from('negocios')
+    .select('id,nombre,direccion,zona,ciudad')
+    .or('latitud.is.null,longitud.is.null');
+  if (error) return res.status(500).json({ error: error.message });
+
+  let geocodificados = 0;
+  let fallidos = 0;
+  console.log(`[geocodificar] Iniciando para ${negocios?.length || 0} negocios sin coords`);
+  for (const n of (negocios || [])) {
+    try {
+      const coords = await geocodeAddress(n.direccion, n.zona, n.ciudad, n.nombre);
+      if (coords) {
+        await supabase.from('negocios').update({ latitud: coords.lat, longitud: coords.lng }).eq('id', n.id);
+        geocodificados++;
+        console.log(`[geocodificar] ✓ ${n.nombre}: ${coords.lat}, ${coords.lng}`);
+      } else {
+        fallidos++;
+        console.warn(`[geocodificar] ✗ Sin resultado: "${n.nombre}" — ${n.direccion}, ${n.zona}`);
+      }
+      await new Promise(r => setTimeout(r, 1100));
+    } catch (e) {
+      fallidos++;
+      console.error(`[geocodificar] Error con "${n.nombre}":`, e.message);
+    }
+  }
+  console.log(`[geocodificar] Resultado: ${geocodificados} geocodificados, ${fallidos} fallidos`);
+  res.json({ geocodificados, fallidos, total: negocios?.length || 0 });
+});
+
 // GET /api/admin/geocodificar-negocios/count — cuántos negocios faltan por geocodificar
 router.get('/geocodificar-negocios/count', authMiddleware, adminOnly, async (req, res) => {
   const { count, error } = await supabase
