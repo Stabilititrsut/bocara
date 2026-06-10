@@ -77,6 +77,45 @@ router.get('/feed', async (req, res) => {
   res.json(Array.from(map.values()).sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
 });
 
+// GET /api/negocios/:id/detalle — detalle con bolsas agrupadas + veces_pedido
+router.get('/:id/detalle', async (req, res) => {
+  const { data: negocio, error } = await supabase
+    .from('negocios').select('*').eq('id', req.params.id).single();
+  if (error || !negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  let { data, error: bErr } = await supabase
+    .from('bolsas').select('*')
+    .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0)
+    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
+    .order('created_at', { ascending: false });
+  if (bErr) {
+    const r = await supabase.from('bolsas').select('*')
+      .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0);
+    data = r.data;
+  }
+  const bolsas = data || [];
+
+  // Contar cuántas veces fue pedida cada bolsa (pedidos recogidos)
+  const vecesPedidoMap: Record<string, number> = {};
+  if (bolsas.length > 0) {
+    const ids = bolsas.map((b: any) => b.id);
+    const { data: peds } = await supabase
+      .from('pedidos').select('bolsa_id').in('bolsa_id', ids).eq('estado', 'recogido');
+    for (const p of (peds || [])) {
+      vecesPedidoMap[p.bolsa_id] = (vecesPedidoMap[p.bolsa_id] || 0) + 1;
+    }
+  }
+
+  const enrich = (b: any) => ({ ...b, veces_pedido: vecesPedidoMap[b.id] || 0 });
+  res.json({
+    negocio,
+    bolsas: {
+      tiempo_limitado: bolsas.filter((b: any) => b.tipo !== 'cupon').map(enrich),
+      promocion:       bolsas.filter((b: any) => b.tipo === 'cupon').map(enrich),
+    },
+  });
+});
+
 // GET /api/negocios/:id — detalle con bolsas
 router.get('/:id', async (req, res) => {
   const { data: negocio, error } = await supabase

@@ -114,6 +114,34 @@ router.get('/restaurante', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/pedidos/previos/:negocioId — bolsas que el usuario ya pidió en este negocio
+router.get('/previos/:negocioId', authMiddleware, async (req, res) => {
+  try {
+    const { data: pedidos } = await supabase
+      .from('pedidos')
+      .select('bolsa_id')
+      .eq('usuario_id', req.usuario.id)
+      .eq('negocio_id', req.params.negocioId)
+      .not('bolsa_id', 'is', null);
+
+    if (!pedidos || pedidos.length === 0) return res.json([]);
+
+    // Contar veces pedido por bolsa
+    const vecesPedido: Record<string, number> = {};
+    for (const p of pedidos) {
+      vecesPedido[p.bolsa_id] = (vecesPedido[p.bolsa_id] || 0) + 1;
+    }
+    const ids = Object.keys(vecesPedido);
+
+    const { data: bolsas } = await supabase
+      .from('bolsas').select('*').in('id', ids).eq('activo', true);
+
+    res.json((bolsas || []).map((b: any) => ({ ...b, veces_pedido: vecesPedido[b.id] || 1 })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/pedidos/:id — detalle de pedido
 router.get('/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase

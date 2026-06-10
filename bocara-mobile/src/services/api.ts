@@ -64,6 +64,7 @@ export const negociosAPI = {
   listar: (params?: any) => api.get('/negocios', { params }),
   feed: (params?: any) => api.get('/negocios/feed', { params }),
   detalle: (id: string) => api.get(`/negocios/${id}`),
+  detalleCompleto: (id: string) => api.get(`/negocios/${id}/detalle`),
   bolsas: (id: string) => api.get(`/negocios/${id}/bolsas`),
   miNegocio: () => api.get('/negocios/mi-negocio'),
   actualizar: (id: string, data: any) => api.put(`/negocios/${id}`, data),
@@ -83,6 +84,7 @@ export const pedidosAPI = {
   listar: () => api.get('/pedidos'),
   detalle: (id: string) => api.get(`/pedidos/${id}`),
   restaurante: () => api.get('/pedidos/restaurante'),
+  previosEnNegocio: (negocioId: string) => api.get(`/pedidos/previos/${negocioId}`),
   actualizarEstado: (id: string, estado: string) =>
     api.put(`/pedidos/${id}/estado`, { estado }),
   crear: (data: { bolsa_id: string; tipo_entrega: string; direccion_envio?: any }) =>
