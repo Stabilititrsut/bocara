@@ -16,7 +16,7 @@ router.get('/', async (req, res) => {
 
   let query = supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
     .eq('activo', true)
     .order('created_at', { ascending: false });
 
@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
     // Fallback sin columnas opcionales (estado_aprobacion puede no existir aún)
     let q2 = supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
+      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
       .gt('cantidad_disponible', 0);
     if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
     const r = await q2;
@@ -42,6 +42,8 @@ router.get('/', async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
 
   let resultado = data || [];
+  if (resultado.length > 0) console.log('[BOLSAS] total:', resultado.length, '| sample imagen_url:', resultado[0]?.imagen_url || '(sin imagen)');
+
 
   // Solo bolsas de negocios activos/aprobados (excepto cuando el restaurante consulta sus propias bolsas)
   if (mi_negocio !== 'true') {
@@ -111,7 +113,7 @@ router.get('/:id', async (req, res) => {
 
   let { data, error } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url)')
     .eq('id', req.params.id)
     .single();
 
@@ -120,7 +122,7 @@ router.get('/:id', async (req, res) => {
     console.warn('[BOLSAS DETAIL] join falló, reintentando sin negocios join:', error.message);
     const r2 = await supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud)')
+      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
       .eq('id', req.params.id)
       .single();
     data = r2.data;

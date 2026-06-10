@@ -62,7 +62,9 @@ export const authAPI = {
 
 export const negociosAPI = {
   listar: (params?: any) => api.get('/negocios', { params }),
+  feed: (params?: any) => api.get('/negocios/feed', { params }),
   detalle: (id: string) => api.get(`/negocios/${id}`),
+  bolsas: (id: string) => api.get(`/negocios/${id}/bolsas`),
   miNegocio: () => api.get('/negocios/mi-negocio'),
   actualizar: (id: string, data: any) => api.put(`/negocios/${id}`, data),
   estadisticas: (id: string) => api.get(`/negocios/${id}/estadisticas`),
@@ -156,6 +158,10 @@ export const adminAPI = {
   aprobarBolsa: (id: string) => api.put(`/admin/bolsas/${id}/aprobar`),
   rechazarBolsa: (id: string, motivo?: string) =>
     api.put(`/admin/bolsas/${id}/rechazar`, { motivo }),
+};
+
+export const promocionesAPI = {
+  listar: (params?: any) => api.get('/bolsas', { params: { tipo: 'cupon', activo: true, ...params } }),
 };
 
 export default api;

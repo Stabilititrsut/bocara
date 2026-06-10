@@ -41,6 +41,42 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
+router.get('/feed', async (req, res) => {
+  const { zona, categoria } = req.query;
+  let { data: bolsas, error } = await supabase
+    .from('bolsas')
+    .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio)')
+    .eq('activo', true)
+    .gt('cantidad_disponible', 0)
+    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
+  if (error) {
+    const r = await supabase
+      .from('bolsas')
+      .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio)')
+      .eq('activo', true)
+      .gt('cantidad_disponible', 0);
+    bolsas = r.data; error = r.error;
+  }
+  if (error) return res.status(500).json({ error: error.message });
+
+  const map = new Map();
+  for (const b of (bolsas || [])) {
+    const n = b.negocios;
+    if (!n) continue;
+    if (zona && String(n.zona) !== String(zona)) continue;
+    if (categoria && n.categoria !== categoria) continue;
+    const disc = b.precio_original > 0
+      ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
+    if (!map.has(n.id)) map.set(n.id, { ...n, cantidad_bolsas: 0, max_descuento: 0 });
+    const e = map.get(n.id);
+    e.cantidad_bolsas++;
+    if (disc > e.max_descuento) e.max_descuento = disc;
+  }
+
+  res.json(Array.from(map.values()).sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
+});
+
 // GET /api/negocios/:id — detalle con bolsas
 router.get('/:id', async (req, res) => {
   const { data: negocio, error } = await supabase
@@ -224,6 +260,30 @@ router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
       const d = p.created_at || p.creado_en;
       return d && new Date(d).toDateString() === new Date().toDateString();
     }).length,
+  });
+});
+
+// GET /api/negocios/:id/bolsas — bolsas aprobadas vigentes agrupadas por tipo
+router.get('/:id/bolsas', async (req, res) => {
+  let { data, error } = await supabase
+    .from('bolsas')
+    .select('*')
+    .eq('negocio_id', req.params.id)
+    .eq('activo', true)
+    .gt('cantidad_disponible', 0)
+    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
+    .order('created_at', { ascending: false });
+  if (error) {
+    const r = await supabase.from('bolsas').select('*')
+      .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0)
+      .order('created_at', { ascending: false });
+    data = r.data; error = r.error;
+  }
+  if (error) return res.status(500).json({ error: error.message });
+  const bolsas = data || [];
+  res.json({
+    tiempo_limitado: bolsas.filter(b => b.tipo !== 'cupon'),
+    promociones: bolsas.filter(b => b.tipo === 'cupon'),
   });
 });
 
