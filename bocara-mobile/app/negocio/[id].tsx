@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Dimensions, Linking, ActivityIndicator, Platform, StatusBar,
+  ImageBackground,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,24 +19,16 @@ const SURF  = '#F5F0EB';
 const GRAY  = '#8A8A8A';
 
 const { width: SW } = Dimensions.get('window');
-const COVER_H   = 200;
-const LOGO_SIZE = 72;
-const LOGO_R    = LOGO_SIZE / 2;   // 36 — how many px the logo overlaps the cover
+const COVER_H   = 220;
+const LOGO_SIZE = 70;
+const LOGO_R    = LOGO_SIZE / 2;  // 35
 
-type FilterKey = 'todos' | 'descuentos' | 'vendidos' | 'precio';
-
-const CHIPS: { key: FilterKey; label: string }[] = [
-  { key: 'todos',      label: 'Todos' },
-  { key: 'descuentos', label: 'Descuentos' },
-  { key: 'vendidos',   label: 'Más vendidos' },
-  { key: 'precio',     label: 'Precio ↑' },
-];
+type FilterKey = 'todos' | 'descuentos' | 'vendidos' | 'previos' | 'precio';
 
 // ─── Mini card para "Volver a pedir" ────────────────────────────────────────
-function PrevioCard({ item, fallback }: { item: any; fallback?: string }) {
+function PrevioCard({ item, onAgregar }: { item: any; onAgregar: (b: any) => void }) {
   const router = useRouter();
-  const { agregar } = useCart();
-  const imgSrc = item.imagen_url || fallback;
+  const imgSrc = item.imagen_url;
   return (
     <TouchableOpacity
       style={pv.card}
@@ -54,7 +47,11 @@ function PrevioCard({ item, fallback }: { item: any; fallback?: string }) {
       <Text style={pv.nombre} numberOfLines={2}>{item.nombre}</Text>
       <View style={pv.row}>
         <Text style={pv.precio}>Q{item.precio_descuento?.toFixed(2)}</Text>
-        <TouchableOpacity style={pv.addBtn} onPress={() => agregar(item)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+        <TouchableOpacity
+          style={pv.addBtn}
+          onPress={() => onAgregar(item)}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+        >
           <Ionicons name="add" size={16} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -62,20 +59,15 @@ function PrevioCard({ item, fallback }: { item: any; fallback?: string }) {
   );
 }
 
-// ─── Section header ──────────────────────────────────────────────────────────
-function SectionHeader({ title }: { title: string }) {
-  return <Text style={s.sectionTitle}>{title}</Text>;
-}
-
 // ─── 2-column grid renderer ──────────────────────────────────────────────────
-function Grid({ items, fallback }: { items: any[]; fallback?: string }) {
+function Grid({ items, onAgregar }: { items: any[]; onAgregar: (b: any) => void }) {
   const rows: React.ReactNode[] = [];
   for (let i = 0; i < items.length; i += 2) {
     rows.push(
       <View key={i} style={s.gridRow}>
-        <ProductCard item={items[i]} fallbackImg={fallback} />
+        <ProductCard bolsa={items[i]} onAgregar={onAgregar} />
         {items[i + 1]
-          ? <ProductCard item={items[i + 1]} fallbackImg={fallback} />
+          ? <ProductCard bolsa={items[i + 1]} onAgregar={onAgregar} />
           : <View style={{ width: CARD_W }} />}
       </View>
     );
@@ -88,17 +80,17 @@ export default function NegocioDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
-  const { items: cartItems, total, cantidad } = useCart();
+  const { items: cartItems, total, cantidad, agregar } = useCart();
 
-  const [negocio,      setNegocio]      = useState<any>(null);
+  const [negocio,        setNegocio]        = useState<any>(null);
   const [tiempoLimitado, setTiempoLimitado] = useState<any[]>([]);
-  const [promocion,    setPromocion]    = useState<any[]>([]);
-  const [previos,      setPrevios]      = useState<any[]>([]);
-  const [filtro,       setFiltro]       = useState<FilterKey>('todos');
-  const [filtradas,    setFiltradas]    = useState<any[]>([]);
-  const [favorito,     setFavorito]     = useState(false);
-  const [toggling,     setToggling]     = useState(false);
-  const [loading,      setLoading]      = useState(true);
+  const [promocion,      setPromocion]      = useState<any[]>([]);
+  const [previos,        setPrevios]        = useState<any[]>([]);
+  const [filtro,         setFiltro]         = useState<FilterKey>('todos');
+  const [filtradas,      setFiltradas]      = useState<any[]>([]);
+  const [favorito,       setFavorito]       = useState(false);
+  const [toggling,       setToggling]       = useState(false);
+  const [loading,        setLoading]        = useState(true);
 
   // Carga inicial
   useEffect(() => {
@@ -117,6 +109,11 @@ export default function NegocioDetailScreen() {
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
 
+  // Si previos se vacía y el filtro activo es 'previos', reset
+  useEffect(() => {
+    if (filtro === 'previos' && previos.length === 0) setFiltro('todos');
+  }, [previos]);
+
   // Aplicar filtro reactivamente
   useEffect(() => {
     const todos = [
@@ -128,18 +125,28 @@ export default function NegocioDetailScreen() {
       res = todos.filter(b => b.precio_original > b.precio_descuento);
     } else if (filtro === 'vendidos') {
       res = [...todos].sort((a, b) => (b.veces_pedido || 0) - (a.veces_pedido || 0));
+    } else if (filtro === 'previos') {
+      res = previos.map(b => ({ ...b, _sec: 'previos' }));
     } else if (filtro === 'precio') {
       res = [...todos].sort((a, b) => a.precio_descuento - b.precio_descuento);
     }
     setFiltradas(res);
-  }, [filtro, tiempoLimitado, promocion]);
+  }, [filtro, tiempoLimitado, promocion, previos]);
 
-  // Mayor descuento disponible para la pill
+  // Chips dinámicos — "Ordenar otra vez" solo si hay historial
+  const chips: { key: FilterKey; label: string }[] = [
+    { key: 'todos',      label: 'Todos' },
+    { key: 'descuentos', label: 'Descuentos' },
+    { key: 'vendidos',   label: 'Más vendidos' },
+    ...(previos.length > 0 ? [{ key: 'previos' as FilterKey, label: 'Ordenar otra vez' }] : []),
+    { key: 'precio',     label: 'Precio ↑' },
+  ];
+
+  // Descuento máximo para la pill informativa
   const maxDesc = Math.max(
     0,
     ...[...tiempoLimitado, ...promocion].map(b =>
-      b.precio_original > 0
-        ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0
+      b.precio_original > 0 ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0
     )
   );
 
@@ -161,9 +168,9 @@ export default function NegocioDetailScreen() {
   }
 
   const tieneUbicacion = !!(negocio?.google_maps_url || negocio?.waze_url || (negocio?.latitud && negocio?.longitud));
-  const todoVacio = tiempoLimitado.length === 0 && promocion.length === 0;
-  const topPad = Platform.OS === 'ios' ? insets.top : (StatusBar.currentHeight || 0) + 4;
-  const cartBarH = 62 + insets.bottom;
+  const todoVacio      = tiempoLimitado.length === 0 && promocion.length === 0;
+  const topPad         = Platform.OS === 'ios' ? insets.top : (StatusBar.currentHeight || 0) + 4;
+  const mostrarFiltradas = filtro !== 'todos';
 
   if (loading) {
     return (
@@ -173,29 +180,24 @@ export default function NegocioDetailScreen() {
     );
   }
 
-  // ── Contenido de secciones según filtro ──────────────────────────────────
-  const mostrarFiltradas = filtro !== 'todos';
-  const filtTiempo = filtradas.filter(b => b._sec === 'tiempo_limitado');
-  const filtPromo  = filtradas.filter(b => b._sec === 'promocion');
-
   return (
     <View style={s.root}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={[1]}
-        contentContainerStyle={{ paddingBottom: cantidad > 0 ? cartBarH + 12 : 24 }}
+        contentContainerStyle={{ paddingBottom: cantidad > 0 ? 84 + insets.bottom : 24 }}
       >
 
         {/* ──────────────────────────────────────────────────────────
             CHILD 0 — Cover + Info + Promo pills
         ────────────────────────────────────────────────────────── */}
         <View>
-          {/* Cover */}
-          <View style={[s.cover, { height: COVER_H + topPad }]}>
-            {negocio?.imagen_url
-              ? <Image source={{ uri: negocio.imagen_url }} style={StyleSheet.absoluteFill} contentFit="cover" />
-              : <View style={[StyleSheet.absoluteFill, { backgroundColor: GOLD }]} />
-            }
+          {/* Cover con ImageBackground */}
+          <ImageBackground
+            source={negocio?.imagen_url ? { uri: negocio.imagen_url } : undefined}
+            style={[s.cover, { height: COVER_H + topPad, backgroundColor: GOLD }]}
+            resizeMode="cover"
+          >
             <View style={s.coverOverlay} />
 
             {/* Top buttons */}
@@ -212,18 +214,23 @@ export default function NegocioDetailScreen() {
                 />
               </TouchableOpacity>
             </View>
-          </View>
+          </ImageBackground>
 
-          {/* Info section — logo floats out of cover */}
+          {/* Info section — logo floats over the cover edge */}
           <View style={s.infoSection}>
-            {/* Floating logo circle */}
+            {/* Floating logo */}
             <View style={[s.logoCircle, { marginTop: -LOGO_R }]}>
-              {negocio?.imagen_url
-                ? <Image source={{ uri: negocio.imagen_url }} style={s.logoImg} contentFit="cover" />
-                : <View style={[s.logoImg, { backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' }]}>
-                    <Text style={{ fontSize: 26 }}>🏪</Text>
-                  </View>
-              }
+              {negocio?.logo_url || negocio?.imagen_url ? (
+                <Image
+                  source={{ uri: negocio.logo_url || negocio.imagen_url }}
+                  style={s.logoImg}
+                  contentFit="cover"
+                />
+              ) : (
+                <View style={[s.logoImg, { alignItems: 'center', justifyContent: 'center' }]}>
+                  <Text style={{ fontSize: 26 }}>🏪</Text>
+                </View>
+              )}
             </View>
 
             {/* Name + meta */}
@@ -280,8 +287,8 @@ export default function NegocioDetailScreen() {
                 </Text>
               </View>
               <View style={[s.pill, s.pillDark]}>
-                <Text style={s.pillEmoji}>⏰</Text>
-                <Text style={[s.pillText, s.pillTextDark]}>Recogida en local · Sin envío</Text>
+                <Text style={s.pillEmoji}>📦</Text>
+                <Text style={[s.pillText, s.pillTextDark]}>Solo recogida en local</Text>
               </View>
             </ScrollView>
           </View>
@@ -296,7 +303,7 @@ export default function NegocioDetailScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={s.chipsContent}
           >
-            {CHIPS.map(({ key, label }) => (
+            {chips.map(({ key, label }) => (
               <TouchableOpacity
                 key={key}
                 style={[s.chip, filtro === key && s.chipActive]}
@@ -314,17 +321,17 @@ export default function NegocioDetailScreen() {
         ────────────────────────────────────────────────────────── */}
         <View style={s.content}>
 
-          {/* Volver a pedir (solo si hay historial) */}
-          {previos.length > 0 && (
+          {/* Volver a pedir (solo si hay historial Y filtro es 'todos') */}
+          {previos.length > 0 && filtro === 'todos' && (
             <View style={s.section}>
-              <SectionHeader title="🔁 Volver a pedir" />
+              <Text style={s.sectionTitle}>🔁 Volver a pedir</Text>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={{ gap: 12, paddingRight: 4 }}
               >
                 {previos.map(item => (
-                  <PrevioCard key={item.id} item={item} fallback={negocio?.imagen_url} />
+                  <PrevioCard key={item.id} item={item} onAgregar={agregar} />
                 ))}
               </ScrollView>
             </View>
@@ -343,8 +350,10 @@ export default function NegocioDetailScreen() {
             <>
               {filtradas.length > 0 ? (
                 <View style={s.section}>
-                  <SectionHeader title={CHIPS.find(c => c.key === filtro)?.label || ''} />
-                  <Grid items={filtradas} fallback={negocio?.imagen_url} />
+                  <Text style={s.sectionTitle}>
+                    {chips.find(c => c.key === filtro)?.label || ''}
+                  </Text>
+                  <Grid items={filtradas} onAgregar={agregar} />
                 </View>
               ) : (
                 <View style={s.empty}>
@@ -359,14 +368,14 @@ export default function NegocioDetailScreen() {
             <>
               {tiempoLimitado.length > 0 && (
                 <View style={s.section}>
-                  <SectionHeader title="⏱️ Tiempo Limitado" />
-                  <Grid items={tiempoLimitado} fallback={negocio?.imagen_url} />
+                  <Text style={s.sectionTitle}>⏱️ Tiempo Limitado</Text>
+                  <Grid items={tiempoLimitado} onAgregar={agregar} />
                 </View>
               )}
               {promocion.length > 0 && (
                 <View style={s.section}>
-                  <SectionHeader title="🏷️ Promociones" />
-                  <Grid items={promocion} fallback={negocio?.imagen_url} />
+                  <Text style={s.sectionTitle}>🏷️ Promociones</Text>
+                  <Grid items={promocion} onAgregar={agregar} />
                 </View>
               )}
             </>
@@ -424,8 +433,8 @@ const s = StyleSheet.create({
   loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   // Cover
-  cover: { backgroundColor: GOLD },
-  coverOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
+  cover: { overflow: 'hidden' },
+  coverOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)' },
   coverTop: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 16, paddingBottom: 12,
@@ -473,7 +482,7 @@ const s = StyleSheet.create({
   pillsRow: { maxHeight: 56 },
   pill: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
-    backgroundColor: SURF, borderRadius: 50,
+    backgroundColor: '#FFF9E6', borderRadius: 50,
     paddingHorizontal: 14, paddingVertical: 10,
   },
   pillDark: { backgroundColor: DARK },
@@ -506,27 +515,30 @@ const s = StyleSheet.create({
   empty: { alignItems: 'center', paddingVertical: 56, gap: 10 },
   emptyText: { fontSize: 15, color: GRAY, fontWeight: '600', textAlign: 'center' },
 
-  // Cart bar
+  // Cart bar — fondo oscuro con botón dorado
   cartBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: GOLD,
+    minHeight: 64,
+    backgroundColor: DARK,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, paddingTop: 14,
     elevation: 14,
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.14, shadowRadius: 10,
+    shadowOpacity: 0.18, shadowRadius: 12,
   },
   cartLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   cartBadge: {
-    backgroundColor: DARK, borderRadius: 14, minWidth: 26, height: 26,
+    backgroundColor: GOLD, borderRadius: 14, minWidth: 26, height: 26,
     alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7,
   },
-  cartBadgeTxt: { color: '#fff', fontWeight: '900', fontSize: 12 },
-  cartInfo: { fontSize: 14, fontWeight: '700', color: DARK },
+  cartBadgeTxt: { color: DARK, fontWeight: '900', fontSize: 12 },
+  cartInfo: { fontSize: 14, fontWeight: '700', color: '#fff' },
   cartBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: DARK, borderRadius: 20,
+    backgroundColor: GOLD, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 9,
   },
-  cartBtnTxt: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  cartBtnTxt: { color: DARK, fontWeight: '800', fontSize: 13 },
 });

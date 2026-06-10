@@ -3,6 +3,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCart } from '@/src/context/CartContext';
+import { Bolsa } from '@/src/types';
 
 const { width: SW } = Dimensions.get('window');
 export const CARD_W = Math.floor((SW - 44) / 2);
@@ -12,35 +13,33 @@ const DARK  = '#1A1A1A';
 const SURF  = '#F5F0EB';
 const BADGE = '#FFD600';
 
-interface Props {
-  item: any;
-  fallbackImg?: string;
+export interface ProductCardProps {
+  bolsa: Bolsa;
+  onAgregar: (bolsa: Bolsa) => void;
   width?: number;
 }
 
-export default function ProductCard({ item, fallbackImg, width }: Props) {
+export default function ProductCard({ bolsa, onAgregar, width }: ProductCardProps) {
   const router = useRouter();
-  const { items, agregar } = useCart();
-  const cartCount = items.find(i => i.bolsa.id === item.id)?.cantidad || 0;
+  const { items } = useCart();
+  const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
 
-  const pct = item.precio_original > 0
-    ? Math.round((1 - item.precio_descuento / item.precio_original) * 100) : 0;
-  const agotado = item.cantidad_disponible === 0;
-  const imgSrc  = item.imagen_url || fallbackImg;
+  const pct = bolsa.precio_original > 0
+    ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
+  const agotado = bolsa.cantidad_disponible === 0;
   const w       = width ?? CARD_W;
 
   return (
     <View style={[s.card, { width: w }, agotado && s.agotado]}>
-      {/* Image area */}
       <TouchableOpacity
-        style={[s.imgWrap]}
-        onPress={() => router.push(`/producto/${item.id}` as any)}
+        style={s.imgWrap}
+        onPress={() => router.push(`/producto/${bolsa.id}` as any)}
         activeOpacity={0.92}
         disabled={agotado}
       >
-        {imgSrc ? (
+        {bolsa.imagen_url ? (
           <Image
-            source={{ uri: imgSrc }}
+            source={{ uri: bolsa.imagen_url }}
             style={StyleSheet.absoluteFill}
             contentFit="cover"
             transition={180}
@@ -52,7 +51,6 @@ export default function ProductCard({ item, fallbackImg, width }: Props) {
           </View>
         )}
 
-        {/* Discount badge */}
         {pct > 0 && !agotado && (
           <View style={s.badge}>
             <Text style={s.badgeText}>{pct}% DTO</Text>
@@ -65,22 +63,21 @@ export default function ProductCard({ item, fallbackImg, width }: Props) {
         )}
       </TouchableOpacity>
 
-      {/* Info area */}
       <View style={s.body}>
-        <Text style={s.nombre} numberOfLines={2}>{item.nombre}</Text>
+        <Text style={s.nombre} numberOfLines={2}>{bolsa.nombre}</Text>
 
         <View style={s.bottomRow}>
           <View>
-            <Text style={s.precio}>Q{item.precio_descuento?.toFixed(2)}</Text>
-            {item.precio_original > item.precio_descuento && (
-              <Text style={s.orig}>Q{item.precio_original?.toFixed(2)}</Text>
+            <Text style={s.precio}>Q{bolsa.precio_descuento?.toFixed(2)}</Text>
+            {bolsa.precio_original > bolsa.precio_descuento && (
+              <Text style={s.orig}>Q{bolsa.precio_original?.toFixed(2)}</Text>
             )}
           </View>
 
           {!agotado && (
             <TouchableOpacity
               style={[s.addBtn, cartCount > 0 && s.addBtnActive]}
-              onPress={() => agregar(item)}
+              onPress={() => onAgregar(bolsa)}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               activeOpacity={0.85}
             >
