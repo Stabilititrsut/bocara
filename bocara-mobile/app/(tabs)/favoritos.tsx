@@ -1,21 +1,20 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, RefreshControl, Dimensions,
+  SafeAreaView, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { favoritosAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
+import { useAuth } from '@/src/context/AuthContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 import { Colors } from '@/constants/Colors';
 
 const GOLD = '#C8A97E';
 const DARK = '#1A1A1A';
 const RED  = '#E53935';
-
-const { width: SW } = Dimensions.get('window');
 
 type TabKey = 'negocios' | 'bolsas';
 
@@ -43,6 +42,7 @@ const gs = StyleSheet.create({
 export default function FavoritosScreen() {
   const router = useRouter();
   const { agregar } = useCart();
+  const { usuario } = useAuth();
 
   const [activeTab,  setActiveTab]  = useState<TabKey>('negocios');
   const [negocios,   setNegocios]   = useState<any[]>([]);
@@ -51,23 +51,50 @@ export default function FavoritosScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const cargar = useCallback(async () => {
+    if (!usuario) { setLoading(false); setRefreshing(false); return; }
     try {
       const [negRes, bolsasRes] = await Promise.all([
         favoritosAPI.listar(),
         favoritosAPI.listarBolsas().catch(() => ({ data: [] })),
       ]);
+      console.log('[favoritos] negocios cargados:', negRes.data?.length ?? 0);
+      console.log('[favoritos] bolsas cargadas:', bolsasRes.data?.length ?? 0);
+      // GET /favoritos/negocios devuelve negocios planos [{id,nombre,categoria,...}]
       setNegocios(negRes.data || []);
       setBolsas(bolsasRes.data || []);
-    } catch {}
-    finally { setLoading(false); setRefreshing(false); }
-  }, []);
+    } catch (err: any) {
+      console.log('[favoritos] error cargando:', err?.message);
+    } finally { setLoading(false); setRefreshing(false); }
+  }, [usuario]);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  // Recargar cada vez que el usuario vuelve a esta pantalla
+  useFocusEffect(
+    useCallback(() => {
+      setLoading(true);
+      cargar();
+    }, [cargar])
+  );
 
   async function quitarNegocio(negocioId: string) {
-    setNegocios(prev => prev.filter(n => n.negocio_id !== negocioId));
+    // Optimistic: quitar de la lista inmediatamente
+    setNegocios(prev => prev.filter(n => n.id !== negocioId));
     try { await favoritosAPI.quitar(negocioId); }
-    catch { cargar(); }
+    catch { cargar(); } // si falla, recargar
+  }
+
+  if (!usuario) {
+    return (
+      <SafeAreaView style={s.root}>
+        <View style={s.header}><Text style={s.headerTitle}>Favoritos</Text></View>
+        <View style={s.empty}>
+          <Ionicons name="person-outline" size={56} color={Colors.textLight} />
+          <Text style={s.emptyTitle}>Inicia sesión para ver tus favoritos</Text>
+          <TouchableOpacity style={s.emptyBtn} onPress={() => router.push('/login' as any)}>
+            <Text style={s.emptyBtnText}>Iniciar sesión</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   if (loading) {
@@ -95,10 +122,10 @@ export default function FavoritosScreen() {
           <Ionicons
             name={activeTab === 'negocios' ? 'storefront' : 'storefront-outline'}
             size={16}
-            color={activeTab === 'negocios' ? DARK : Colors.textSecondary}
+            color={activeTab === 'negocios' ? '#fff' : Colors.textSecondary}
           />
           <Text style={[s.tabText, activeTab === 'negocios' && s.tabTextActive]}>
-            Negocios {negocios.length > 0 ? `(${negocios.length})` : ''}
+            Negocios{negocios.length > 0 ? ` (${negocios.length})` : ''}
           </Text>
         </TouchableOpacity>
 
@@ -110,10 +137,10 @@ export default function FavoritosScreen() {
           <Ionicons
             name={activeTab === 'bolsas' ? 'bag' : 'bag-outline'}
             size={16}
-            color={activeTab === 'bolsas' ? DARK : Colors.textSecondary}
+            color={activeTab === 'bolsas' ? '#fff' : Colors.textSecondary}
           />
           <Text style={[s.tabText, activeTab === 'bolsas' && s.tabTextActive]}>
-            Productos {bolsas.length > 0 ? `(${bolsas.length})` : ''}
+            Productos{bolsas.length > 0 ? ` (${bolsas.length})` : ''}
           </Text>
         </TouchableOpacity>
       </View>
@@ -144,21 +171,20 @@ export default function FavoritosScreen() {
               </TouchableOpacity>
             </View>
           ) : (
-            negocios.map(item => {
-              const neg = item.negocios;
-              if (!neg) return null;
-              const rating = neg.calificacion_promedio || 0;
+            // GET /favoritos/negocios devuelve [{id, nombre, categoria, zona, imagen_url, calificacion_promedio}]
+            negocios.map(negocio => {
+              const rating = negocio.calificacion_promedio || 0;
               return (
                 <TouchableOpacity
-                  key={item.negocio_id}
+                  key={negocio.id}
                   style={s.card}
-                  onPress={() => router.push(`/negocio/${item.negocio_id}` as any)}
+                  onPress={() => router.push(`/negocio/${negocio.id}` as any)}
                   activeOpacity={0.88}
                 >
                   <View style={s.cardImgWrap}>
-                    {neg.imagen_url ? (
+                    {negocio.imagen_url ? (
                       <Image
-                        source={{ uri: neg.imagen_url }}
+                        source={{ uri: negocio.imagen_url }}
                         style={StyleSheet.absoluteFill}
                         contentFit="cover"
                         transition={200}
@@ -171,24 +197,24 @@ export default function FavoritosScreen() {
                   </View>
 
                   <View style={s.cardInfo}>
-                    <Text style={s.cardNombre} numberOfLines={1}>{neg.nombre}</Text>
-                    {neg.categoria ? <Text style={s.cardCat}>{neg.categoria}</Text> : null}
+                    <Text style={s.cardNombre} numberOfLines={1}>{negocio.nombre}</Text>
+                    {negocio.categoria ? <Text style={s.cardCat}>{negocio.categoria}</Text> : null}
                     <View style={s.cardMeta}>
                       <Ionicons name="star" size={11} color={GOLD} />
                       <Text style={s.metaText}>{rating > 0 ? rating.toFixed(1) : 'Nuevo'}</Text>
-                      {neg.zona ? (
+                      {negocio.zona ? (
                         <>
                           <View style={s.metaDot} />
-                          <Text style={s.metaText}>Zona {neg.zona}</Text>
+                          <Text style={s.metaText}>Zona {negocio.zona}</Text>
                         </>
                       ) : null}
                     </View>
                   </View>
 
-                  {/* Quitar de favoritos */}
+                  {/* Botón quitar favorito — corazón rojo lleno */}
                   <TouchableOpacity
                     style={s.heartBtn}
-                    onPress={() => quitarNegocio(item.negocio_id)}
+                    onPress={() => quitarNegocio(negocio.id)}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     activeOpacity={0.7}
                   >
@@ -281,10 +307,13 @@ const s = StyleSheet.create({
   // Grid
   gridWrap: { paddingTop: 4 },
 
-  // Empty state
+  // Empty / not logged
   empty: { paddingTop: 80, alignItems: 'center', gap: 12 },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: Colors.textPrimary, textAlign: 'center' },
-  emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22, paddingHorizontal: 20 },
+  emptyText: {
+    fontSize: 14, color: Colors.textSecondary,
+    textAlign: 'center', lineHeight: 22, paddingHorizontal: 20,
+  },
   emptyBtn: {
     backgroundColor: DARK, borderRadius: 50,
     paddingHorizontal: 28, paddingVertical: 12, marginTop: 4,

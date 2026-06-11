@@ -107,7 +107,7 @@ export default function NegocioDetailScreen() {
       setTiempoLimitado(bolsas?.tiempo_limitado || []);
       setPromocion(bolsas?.promocion || []);
       setPrevios(prevRes.data || []);
-      setFavorito(favRes.data?.es_favorito ?? false);
+      setFavorito(favRes.data?.esFavorito ?? false);
       setFavBolsaIds(new Set((favBolsasRes.data || []).map((b: any) => b.id)));
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
@@ -155,11 +155,19 @@ export default function NegocioDetailScreen() {
 
   async function toggleFav() {
     if (toggling) return;
+    console.log('[negocio] toggleFav id:', id, 'era favorito:', favorito);
     setToggling(true);
+    // Optimistic update
+    setFavorito(!favorito);
     try {
-      if (favorito) { await favoritosAPI.quitar(id!); setFavorito(false); }
-      else          { await favoritosAPI.agregar(id!); setFavorito(true); }
-    } catch { } finally { setToggling(false); }
+      let response;
+      if (favorito) response = await favoritosAPI.quitar(id!);
+      else          response = await favoritosAPI.agregar(id!);
+      console.log('[negocio] respuesta API favorito:', response?.data);
+    } catch (err: any) {
+      console.log('[negocio] error toggle favorito:', err?.message);
+      setFavorito(favorito); // revertir
+    } finally { setToggling(false); }
   }
 
   function abrirMapa(tipo: 'google' | 'waze') {

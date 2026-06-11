@@ -3,104 +3,98 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const router = express.Router();
 
-// GET /api/favoritos  —  lista negocios favoritos del usuario
-router.get('/', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase
-    .from('favoritos')
-    .select('*, negocios(id,nombre,imagen_url,categoria,zona,calificacion_promedio,verificado,activo)')
-    .eq('usuario_id', req.usuario.id)
-    .order('created_at', { ascending: false });
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
-});
+// SQL a ejecutar en Supabase si la tabla no existe o necesita migración:
+console.log(`
+[FAVORITOS] SQL requerido en Supabase (ejecutar si la tabla no existe):
+  CREATE TABLE IF NOT EXISTS favoritos (
+    id          uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    usuario_id  uuid NOT NULL,
+    tipo        text NOT NULL CHECK (tipo IN ('negocio','bolsa')),
+    referencia_id uuid NOT NULL,
+    created_at  timestamp DEFAULT now(),
+    UNIQUE(usuario_id, tipo, referencia_id)
+  );
+`);
 
-// GET /api/favoritos/negocios  —  alias explícito
+// GET /api/favoritos/negocios — negocios favoritos del usuario
 router.get('/negocios', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase
+  console.log('[FAV] GET /negocios usuario:', req.usuario?.id);
+  const { data: favs, error } = await supabase
     .from('favoritos')
-    .select('*, negocios(id,nombre,imagen_url,categoria,zona,calificacion_promedio,verificado,activo)')
+    .select('referencia_id')
     .eq('usuario_id', req.usuario.id)
-    .order('created_at', { ascending: false });
+    .eq('tipo', 'negocio');
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  if (!favs?.length) return res.json([]);
+  const ids = favs.map(f => f.referencia_id);
+  const { data: negocios, error: err2 } = await supabase
+    .from('negocios')
+    .select('id, nombre, categoria, zona, imagen_url, calificacion_promedio')
+    .in('id', ids);
+  if (err2) return res.status(500).json({ error: err2.message });
+  res.json(negocios || []);
 });
 
-// GET /api/favoritos/bolsas  —  lista bolsas favoritas con datos completos
+// GET /api/favoritos/bolsas — bolsas favoritas del usuario
 router.get('/bolsas', authMiddleware, async (req, res) => {
-  const { data, error } = await supabase
+  console.log('[FAV] GET /bolsas usuario:', req.usuario?.id);
+  const { data: favs, error } = await supabase
     .from('favoritos')
-    .select('bolsa_id, bolsas(*, negocios(id,nombre,imagen_url))')
+    .select('referencia_id')
     .eq('usuario_id', req.usuario.id)
-    .not('bolsa_id', 'is', null)
-    .order('created_at', { ascending: false });
+    .eq('tipo', 'bolsa');
   if (error) return res.status(500).json({ error: error.message });
-  const bolsas = (data || []).map(f => f.bolsas).filter(Boolean);
-  res.json(bolsas);
+  if (!favs?.length) return res.json([]);
+  const ids = favs.map(f => f.referencia_id);
+  const { data: bolsas, error: err2 } = await supabase
+    .from('bolsas')
+    .select('*, negocios(id, nombre, imagen_url)')
+    .in('id', ids);
+  if (err2) return res.status(500).json({ error: err2.message });
+  res.json(bolsas || []);
 });
 
-// GET /api/favoritos/check/:negocio_id
-router.get('/check/:negocio_id', authMiddleware, async (req, res) => {
+// GET /api/favoritos/check/:tipo/:referenciaId
+router.get('/check/:tipo/:referenciaId', authMiddleware, async (req, res) => {
+  console.log('[FAV] GET /check', req.params.tipo, req.params.referenciaId, 'usuario:', req.usuario?.id);
   const { data } = await supabase
     .from('favoritos')
     .select('id')
     .eq('usuario_id', req.usuario.id)
-    .eq('negocio_id', req.params.negocio_id)
+    .eq('tipo', req.params.tipo)
+    .eq('referencia_id', req.params.referenciaId)
     .single();
-  res.json({ es_favorito: !!data });
+  res.json({ esFavorito: !!data });
 });
 
-// GET /api/favoritos/check-bolsa/:bolsa_id
-router.get('/check-bolsa/:bolsa_id', authMiddleware, async (req, res) => {
-  const { data } = await supabase
-    .from('favoritos')
-    .select('id')
-    .eq('usuario_id', req.usuario.id)
-    .eq('bolsa_id', req.params.bolsa_id)
-    .single();
-  res.json({ es_favorito: !!data });
-});
-
-// POST /api/favoritos  —  acepta negocio_id o bolsa_id
+// POST /api/favoritos — agrega favorito
 router.post('/', authMiddleware, async (req, res) => {
-  const { negocio_id, bolsa_id } = req.body;
-  if (!negocio_id && !bolsa_id) return res.status(400).json({ error: 'negocio_id o bolsa_id requerido' });
-
-  const registro = { usuario_id: req.usuario.id };
-  const conflicto = negocio_id
-    ? 'usuario_id,negocio_id'
-    : 'usuario_id,bolsa_id';
-
-  if (negocio_id) registro.negocio_id = negocio_id;
-  if (bolsa_id)   registro.bolsa_id   = bolsa_id;
-
-  const { data, error } = await supabase
-    .from('favoritos')
-    .upsert([registro], { onConflict: conflicto })
-    .select()
-    .single();
-  if (error) return res.status(400).json({ error: error.message });
-  res.status(201).json(data);
-});
-
-// DELETE /api/favoritos/:negocio_id  —  elimina favorito de negocio
-router.delete('/:negocio_id', authMiddleware, async (req, res) => {
+  console.log('[FAV] POST /favoritos body:', req.body, 'usuario:', req.usuario?.id);
+  const { tipo, referencia_id } = req.body;
+  const usuario_id = req.usuario.id;
+  if (!tipo || !referencia_id)
+    return res.status(400).json({ error: 'Faltan campos: tipo y referencia_id' });
   const { error } = await supabase
     .from('favoritos')
-    .delete()
-    .eq('usuario_id', req.usuario.id)
-    .eq('negocio_id', req.params.negocio_id);
-  if (error) return res.status(400).json({ error: error.message });
+    .upsert({ usuario_id, tipo, referencia_id }, { onConflict: 'usuario_id,tipo,referencia_id' });
+  if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 });
 
-// DELETE /api/favoritos/bolsa/:bolsa_id  —  elimina favorito de bolsa
-router.delete('/bolsa/:bolsa_id', authMiddleware, async (req, res) => {
+// DELETE /api/favoritos/:referenciaId?tipo=negocio|bolsa
+router.delete('/:referenciaId', authMiddleware, async (req, res) => {
+  const usuario_id = req.usuario.id;
+  const { referenciaId } = req.params;
+  const tipo = req.query.tipo;
+  console.log('[FAV] DELETE /favoritos', referenciaId, 'tipo:', tipo, 'usuario:', usuario_id);
+  if (!tipo) return res.status(400).json({ error: 'Falta query param tipo' });
   const { error } = await supabase
     .from('favoritos')
     .delete()
-    .eq('usuario_id', req.usuario.id)
-    .eq('bolsa_id', req.params.bolsa_id);
-  if (error) return res.status(400).json({ error: error.message });
+    .eq('usuario_id', usuario_id)
+    .eq('referencia_id', referenciaId)
+    .eq('tipo', tipo);
+  if (error) return res.status(500).json({ error: error.message });
   res.json({ ok: true });
 });
 

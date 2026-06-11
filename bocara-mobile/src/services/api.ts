@@ -120,14 +120,14 @@ export const notificacionesAPI = {
 };
 
 export const favoritosAPI = {
-  listar: () => api.get('/favoritos'),
+  listar:       () => api.get('/favoritos/negocios'),
   listarBolsas: () => api.get('/favoritos/bolsas'),
-  check: (negocio_id: string) => api.get(`/favoritos/check/${negocio_id}`),
-  checkBolsa: (bolsa_id: string) => api.get(`/favoritos/check-bolsa/${bolsa_id}`),
-  agregar: (negocio_id: string) => api.post('/favoritos', { negocio_id }),
-  agregarBolsa: (bolsa_id: string) => api.post('/favoritos', { bolsa_id }),
-  quitar: (negocio_id: string) => api.delete(`/favoritos/${negocio_id}`),
-  quitarBolsa: (bolsa_id: string) => api.delete(`/favoritos/bolsa/${bolsa_id}`),
+  check:        (negocio_id: string) => api.get(`/favoritos/check/negocio/${negocio_id}`),
+  checkBolsa:   (bolsa_id: string)   => api.get(`/favoritos/check/bolsa/${bolsa_id}`),
+  agregar:      (negocio_id: string) => api.post('/favoritos', { tipo: 'negocio', referencia_id: negocio_id }),
+  agregarBolsa: (bolsa_id: string)   => api.post('/favoritos', { tipo: 'bolsa',   referencia_id: bolsa_id }),
+  quitar:       (negocio_id: string) => api.delete(`/favoritos/${negocio_id}`, { params: { tipo: 'negocio' } }),
+  quitarBolsa:  (bolsa_id: string)   => api.delete(`/favoritos/${bolsa_id}`,   { params: { tipo: 'bolsa' } }),
 };
 
 export const uploadsAPI = {

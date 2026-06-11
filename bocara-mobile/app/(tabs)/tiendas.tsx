@@ -29,7 +29,7 @@ export default function TiendasScreen() {
         favoritosAPI.listar().catch(() => ({ data: [] })),
       ]);
       setNegocios(feedRes.data || []);
-      setFavIds(new Set((favRes.data || []).map((f: any) => f.negocio_id)));
+      setFavIds(new Set((favRes.data || []).map((f: any) => f.id)));
     } catch {}
     finally { setLoading(false); setRefreshing(false); }
   }, []);
