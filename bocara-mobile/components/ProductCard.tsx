@@ -1,8 +1,10 @@
+import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCart } from '@/src/context/CartContext';
+import { favoritosAPI } from '@/src/services/api';
 import { Bolsa } from '@/src/types';
 
 const { width: SW } = Dimensions.get('window');
@@ -12,22 +14,39 @@ const GOLD  = '#C8A97E';
 const DARK  = '#1A1A1A';
 const SURF  = '#F5F0EB';
 const BADGE = '#FFD600';
+const RED   = '#E53935';
 
 export interface ProductCardProps {
   bolsa: Bolsa;
   onAgregar: (bolsa: Bolsa) => void;
   width?: number;
+  showFavorite?: boolean;
+  isFavorited?: boolean;
 }
 
-export default function ProductCard({ bolsa, onAgregar, width }: ProductCardProps) {
+export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isFavorited }: ProductCardProps) {
   const router = useRouter();
   const { items } = useCart();
   const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
+  const [isFav, setIsFav] = useState(!!isFavorited);
+
+  useEffect(() => { setIsFav(!!isFavorited); }, [isFavorited]);
 
   const pct = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const agotado = bolsa.cantidad_disponible === 0;
   const w       = width ?? CARD_W;
+
+  async function toggleFav() {
+    const prev = isFav;
+    setIsFav(!prev);
+    try {
+      if (prev) await favoritosAPI.quitarBolsa(bolsa.id);
+      else      await favoritosAPI.agregarBolsa(bolsa.id);
+    } catch {
+      setIsFav(prev);
+    }
+  }
 
   return (
     <View style={[s.card, { width: w }, agotado && s.agotado]}>
@@ -60,6 +79,21 @@ export default function ProductCard({ bolsa, onAgregar, width }: ProductCardProp
           <View style={[s.badge, { backgroundColor: '#9CA3AF' }]}>
             <Text style={s.badgeText}>Agotado</Text>
           </View>
+        )}
+
+        {showFavorite && (
+          <TouchableOpacity
+            style={s.favBtn}
+            onPress={toggleFav}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={isFav ? 'heart' : 'heart-outline'}
+              size={14}
+              color={isFav ? RED : '#fff'}
+            />
+          </TouchableOpacity>
         )}
       </TouchableOpacity>
 
@@ -127,6 +161,17 @@ const s = StyleSheet.create({
     paddingVertical: 3,
   },
   badgeText: { fontSize: 10, fontWeight: '900', color: DARK },
+  favBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   body: { padding: 10 },
   nombre: { fontSize: 13, fontWeight: '700', color: DARK, lineHeight: 18, marginBottom: 8 },
   bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },

@@ -121,9 +121,13 @@ export const notificacionesAPI = {
 
 export const favoritosAPI = {
   listar: () => api.get('/favoritos'),
+  listarBolsas: () => api.get('/favoritos/bolsas'),
   check: (negocio_id: string) => api.get(`/favoritos/check/${negocio_id}`),
+  checkBolsa: (bolsa_id: string) => api.get(`/favoritos/check-bolsa/${bolsa_id}`),
   agregar: (negocio_id: string) => api.post('/favoritos', { negocio_id }),
+  agregarBolsa: (bolsa_id: string) => api.post('/favoritos', { bolsa_id }),
   quitar: (negocio_id: string) => api.delete(`/favoritos/${negocio_id}`),
+  quitarBolsa: (bolsa_id: string) => api.delete(`/favoritos/bolsa/${bolsa_id}`),
 };
 
 export const uploadsAPI = {

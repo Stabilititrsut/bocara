@@ -34,6 +34,10 @@ export default function TabsLayout() {
         options={{ tabBarIcon: ({ focused }) => <TabIcon name="storefront" label="Tiendas" focused={focused} /> }}
       />
       <Tabs.Screen
+        name="favoritos"
+        options={{ tabBarIcon: ({ focused }) => <TabIcon name="heart" label="Favoritos" focused={focused} /> }}
+      />
+      <Tabs.Screen
         name="promociones"
         options={{ tabBarIcon: ({ focused }) => <TabIcon name="pricetag" label="Promos" focused={focused} /> }}
       />

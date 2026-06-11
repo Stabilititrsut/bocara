@@ -136,8 +136,8 @@ export default function TiendasScreen() {
                 key={n.id}
                 style={s.card}
                 onPress={() => {
-                  console.log('[tiendas] abrir tienda:', n.id, n.nombre);
-                  router.push(`/tienda/${n.id}` as any);
+                  console.log('[tiendas] abrir negocio:', n.id, n.nombre);
+                  router.push(`/negocio/${n.id}` as any);
                 }}
                 activeOpacity={0.88}
               >

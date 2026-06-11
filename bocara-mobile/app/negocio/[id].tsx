@@ -60,14 +60,14 @@ function PrevioCard({ item, onAgregar }: { item: any; onAgregar: (b: any) => voi
 }
 
 // ─── 2-column grid renderer ──────────────────────────────────────────────────
-function Grid({ items, onAgregar }: { items: any[]; onAgregar: (b: any) => void }) {
+function Grid({ items, onAgregar, favBolsaIds }: { items: any[]; onAgregar: (b: any) => void; favBolsaIds?: Set<string> }) {
   const rows: React.ReactNode[] = [];
   for (let i = 0; i < items.length; i += 2) {
     rows.push(
       <View key={i} style={s.gridRow}>
-        <ProductCard bolsa={items[i]} onAgregar={onAgregar} />
+        <ProductCard bolsa={items[i]} onAgregar={onAgregar} showFavorite isFavorited={favBolsaIds?.has(items[i].id)} />
         {items[i + 1]
-          ? <ProductCard bolsa={items[i + 1]} onAgregar={onAgregar} />
+          ? <ProductCard bolsa={items[i + 1]} onAgregar={onAgregar} showFavorite isFavorited={favBolsaIds?.has(items[i + 1].id)} />
           : <View style={{ width: CARD_W }} />}
       </View>
     );
@@ -90,6 +90,7 @@ export default function NegocioDetailScreen() {
   const [filtradas,      setFiltradas]      = useState<any[]>([]);
   const [favorito,       setFavorito]       = useState(false);
   const [toggling,       setToggling]       = useState(false);
+  const [favBolsaIds,    setFavBolsaIds]    = useState<Set<string>>(new Set());
   const [loading,        setLoading]        = useState(true);
 
   // Carga inicial
@@ -99,13 +100,15 @@ export default function NegocioDetailScreen() {
       negociosAPI.detalleCompleto(id),
       pedidosAPI.previosEnNegocio(id).catch(() => ({ data: [] })),
       favoritosAPI.check(id).catch(() => ({ data: { es_favorito: false } })),
-    ]).then(([negRes, prevRes, favRes]) => {
+      favoritosAPI.listarBolsas().catch(() => ({ data: [] })),
+    ]).then(([negRes, prevRes, favRes, favBolsasRes]) => {
       const { negocio: neg, bolsas } = negRes.data;
       setNegocio(neg);
       setTiempoLimitado(bolsas?.tiempo_limitado || []);
       setPromocion(bolsas?.promocion || []);
       setPrevios(prevRes.data || []);
       setFavorito(favRes.data?.es_favorito ?? false);
+      setFavBolsaIds(new Set((favBolsasRes.data || []).map((b: any) => b.id)));
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
 
@@ -210,7 +213,7 @@ export default function NegocioDetailScreen() {
                 <Ionicons
                   name={favorito ? 'heart' : 'heart-outline'}
                   size={20}
-                  color={favorito ? '#EF4444' : '#fff'}
+                  color={favorito ? '#E53935' : '#fff'}
                 />
               </TouchableOpacity>
             </View>
@@ -353,7 +356,7 @@ export default function NegocioDetailScreen() {
                   <Text style={s.sectionTitle}>
                     {chips.find(c => c.key === filtro)?.label || ''}
                   </Text>
-                  <Grid items={filtradas} onAgregar={agregar} />
+                  <Grid items={filtradas} onAgregar={agregar} favBolsaIds={favBolsaIds} />
                 </View>
               ) : (
                 <View style={s.empty}>
@@ -369,13 +372,13 @@ export default function NegocioDetailScreen() {
               {tiempoLimitado.length > 0 && (
                 <View style={s.section}>
                   <Text style={s.sectionTitle}>⏱️ Tiempo Limitado</Text>
-                  <Grid items={tiempoLimitado} onAgregar={agregar} />
+                  <Grid items={tiempoLimitado} onAgregar={agregar} favBolsaIds={favBolsaIds} />
                 </View>
               )}
               {promocion.length > 0 && (
                 <View style={s.section}>
                   <Text style={s.sectionTitle}>🏷️ Promociones</Text>
-                  <Grid items={promocion} onAgregar={agregar} />
+                  <Grid items={promocion} onAgregar={agregar} favBolsaIds={favBolsaIds} />
                 </View>
               )}
             </>
