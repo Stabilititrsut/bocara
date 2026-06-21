@@ -47,6 +47,7 @@ export default function BolsasRestauranteScreen() {
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [uploadFotoError, setUploadFotoError] = useState('');
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
+  const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<any>(null);
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -104,6 +105,7 @@ export default function BolsasRestauranteScreen() {
 
   function abrir(b?: any) {
     setUploadFotoError('');
+    setSaving(false);
     if (b) {
       setEditId(b.id);
       setForm({
@@ -141,11 +143,13 @@ export default function BolsasRestauranteScreen() {
   }
 
   async function guardar() {
+    if (saving) return;
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
       return alertar('Nombre, precio original y precio Bocara son requeridos');
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
       return alertar('El código de la promoción es requerido');
 
+    setSaving(true);
     const precOrig = parseFloat(form.precio_original) || 0;
     const precDesc = parseFloat(form.precio_descuento) || 0;
 
@@ -179,7 +183,11 @@ export default function BolsasRestauranteScreen() {
       else await bolsasAPI.crear(payload);
       setModal(false);
       cargar();
-    } catch (e: any) { alertar(e.message || 'Error al guardar'); }
+    } catch (e: any) {
+      alertar(e.message || 'Error al guardar');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function eliminar(id: string) {
@@ -324,12 +332,15 @@ export default function BolsasRestauranteScreen() {
           })}
 
           <View style={s.modalHeader}>
-            <TouchableOpacity onPress={() => setModal(false)}>
+            <TouchableOpacity onPress={() => setModal(false)} disabled={saving}>
               <Text style={s.cancelText}>Cancelar</Text>
             </TouchableOpacity>
             <Text style={s.modalTitle}>{editId ? 'Editar publicación' : 'Nueva publicación'}</Text>
-            <TouchableOpacity onPress={guardar}>
-              <Text style={s.saveText}>Guardar</Text>
+            <TouchableOpacity onPress={guardar} disabled={saving}>
+              {saving
+                ? <ActivityIndicator color={Colors.orange} size="small" />
+                : <Text style={s.saveText}>Guardar</Text>
+              }
             </TouchableOpacity>
           </View>
 
