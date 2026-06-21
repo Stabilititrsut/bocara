@@ -7,13 +7,19 @@ import { notificacionesAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
 const TIPO_CONFIG: Record<string, { emoji: string; color: string }> = {
-  negocio_aprobado:  { emoji: '🎉', color: '#22C55E' },
-  negocio_rechazado: { emoji: '❌', color: '#EF4444' },
-  bolsa_aprobada:    { emoji: '✅', color: '#22C55E' },
-  bolsa_rechazada:   { emoji: '❌', color: '#EF4444' },
-  nuevo_pedido:      { emoji: '🛍️', color: Colors.orange },
-  pedido_listo:      { emoji: '🔔', color: Colors.orange },
-  default:           { emoji: '📬', color: Colors.textSecondary },
+  negocio_aprobado:      { emoji: '🎉', color: '#22C55E' },
+  negocio_rechazado:     { emoji: '❌', color: '#EF4444' },
+  negocio_suspendido:    { emoji: '⚠️', color: '#F59E0B' },
+  bolsa_aprobada:        { emoji: '✅', color: '#22C55E' },
+  bolsa_rechazada:       { emoji: '❌', color: '#EF4444' },
+  nuevo_pedido:          { emoji: '🛍️', color: Colors.orange },
+  pedido_en_preparacion: { emoji: '👨‍🍳', color: '#7C3AED' },
+  pedido_listo:          { emoji: '🔔', color: Colors.orange },
+  liquidacion:           { emoji: '💸', color: '#22C55E' },
+  liquidacion_pagada:    { emoji: '💸', color: '#22C55E' },
+  perfil_aprobado:       { emoji: '✅', color: '#22C55E' },
+  perfil_rechazado:      { emoji: '❌', color: '#EF4444' },
+  default:               { emoji: '📬', color: Colors.textSecondary },
 };
 
 export default function RestauranteNotificacionesScreen() {
@@ -84,6 +90,13 @@ export default function RestauranteNotificacionesScreen() {
                     {!n.leida && <View style={s.unreadDot} />}
                   </View>
                   <Text style={s.cardCuerpo} numberOfLines={3}>{n.cuerpo || n.mensaje}</Text>
+                  {n.created_at && (
+                    <Text style={s.cardFecha}>
+                      {new Date(n.created_at).toLocaleDateString('es-GT', { day: 'numeric', month: 'short' })}
+                      {' · '}
+                      {new Date(n.created_at).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  )}
                 </View>
               </TouchableOpacity>
             );
@@ -111,6 +124,7 @@ const s = StyleSheet.create({
   cardTitulo: { fontSize: 14, fontWeight: '800', color: Colors.brown, flex: 1 },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.orange },
   cardCuerpo: { fontSize: 13, color: Colors.textSecondary, lineHeight: 18 },
+  cardFecha:  { fontSize: 11, color: Colors.textLight, marginTop: 4 },
   empty: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 10, padding: 32 },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: Colors.brown },
   emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center' },

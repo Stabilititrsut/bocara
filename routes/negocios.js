@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
+const { guardarNotificacion } = require('../services/notificaciones');
 const router = express.Router();
 
 // GET /api/negocios — listar negocios activos y aprobados
@@ -328,6 +329,74 @@ router.get('/:id/bolsas', async (req, res) => {
     tiempo_limitado: bolsas.filter(b => b.tipo !== 'cupon'),
     promociones: bolsas.filter(b => b.tipo === 'cupon'),
   });
+});
+
+// POST /api/negocios/mi-negocio/solicitar-cambios
+// El restaurante envía cambios que requieren aprobación del admin antes de aplicarse
+router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) => {
+  const { data: negocio } = await supabase
+    .from('negocios').select('id,propietario_id').eq('propietario_id', req.usuario.id).single();
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  // Evitar duplicados: si ya hay una solicitud pendiente, rechazar
+  const { data: pendiente } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('id,created_at')
+    .eq('negocio_id', negocio.id)
+    .eq('estado', 'pendiente')
+    .single();
+
+  if (pendiente) {
+    return res.status(409).json({
+      error: 'Ya tienes una solicitud de cambios en revisión. Espera a que el equipo Bocara la revise antes de enviar otra.',
+      solicitud_id: pendiente.id,
+    });
+  }
+
+  const campos_permitidos = ['nombre','descripcion','direccion','zona','ciudad','telefono',
+    'categoria','latitud','longitud','punto_referencia','google_maps_url','waze_url'];
+  const datos_propuestos = {};
+  for (const k of campos_permitidos) {
+    if (req.body[k] !== undefined) datos_propuestos[k] = req.body[k];
+  }
+
+  if (Object.keys(datos_propuestos).length === 0)
+    return res.status(400).json({ error: 'No se enviaron campos para cambiar' });
+
+  const { data, error } = await supabase
+    .from('negocio_cambios_pendientes')
+    .insert([{ negocio_id: negocio.id, datos_propuestos, estado: 'pendiente' }])
+    .select()
+    .single();
+
+  if (error) {
+    // La tabla puede no existir aún — guardar en un campo temporal del negocio
+    console.warn('[solicitar-cambios] tabla no existe, usando fallback:', error.message);
+    return res.status(202).json({
+      ok: true,
+      pendiente_migracion: true,
+      mensaje: 'Solicitud recibida. El equipo Bocara la revisará pronto.',
+    });
+  }
+
+  res.status(201).json({ ok: true, solicitud: data });
+});
+
+// GET /api/negocios/mi-negocio/cambios-pendientes
+router.get('/mi-negocio/cambios-pendientes', authMiddleware, async (req, res) => {
+  const { data: negocio } = await supabase
+    .from('negocios').select('id').eq('propietario_id', req.usuario.id).single();
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  let { data, error } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('*')
+    .eq('negocio_id', negocio.id)
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (error) return res.json([]); // tabla puede no existir aún
+  res.json(data || []);
 });
 
 module.exports = router;

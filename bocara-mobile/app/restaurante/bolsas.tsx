@@ -24,7 +24,7 @@ const FORM_INIT = {
   precio_original: '', precio_descuento: '',
   cantidad_disponible: '5',
   hora_recogida_inicio: '18:00', hora_recogida_fin: '20:00',
-  co2_salvado_kg: '0.5', imagen_url: '', activo: true,
+  peso_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
   // Clasificación en el menú
   categoria_menu: '',
@@ -93,7 +93,10 @@ export default function BolsasRestauranteScreen() {
     try {
       const [negRes, bolRes] = await Promise.all([negociosAPI.miNegocio(), bolsasAPI.listar({ mi_negocio: true })]);
       setNegocioId(negRes.data?.id || '');
-      setItems(bolRes.data || []);
+      // Deduplicar por id en caso de datos duplicados en BD
+      const raw: any[] = bolRes.data || [];
+      const dedup = Array.from(new Map(raw.map(b => [String(b.id), b])).values());
+      setItems(dedup);
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
@@ -112,7 +115,7 @@ export default function BolsasRestauranteScreen() {
         precio_original: String(b.precio_original),
         precio_descuento: String(b.precio_descuento),
         cantidad_disponible: String(b.cantidad_disponible),
-        co2_salvado_kg: String(b.co2_salvado_kg || 0.5),
+        peso_kg: String(b.peso_kg || 0.5),
         hora_recogida_inicio: b.hora_recogida_inicio || '18:00',
         hora_recogida_fin: b.hora_recogida_fin || '20:00',
         imagen_url: b.imagen_url || '',
@@ -167,7 +170,8 @@ export default function BolsasRestauranteScreen() {
       es_mas_vendido: form.es_mas_vendido,
       es_precio_bajo: form.es_precio_bajo,
     };
-    if (form.tipo_form === 'bolsa') payload.co2_salvado_kg = parseFloat(form.co2_salvado_kg) || 0.5;
+    // El backend calcula co2_salvado_kg automáticamente a partir del peso
+    if (form.tipo_form === 'bolsa') payload.peso_kg = parseFloat(form.peso_kg) || 0.5;
     if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
 
     try {
@@ -290,7 +294,14 @@ export default function BolsasRestauranteScreen() {
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
-              <Text style={s.switchLabel}>{b.activo ? 'Activa' : 'Inactiva'}</Text>
+              {/* Visible a clientes solo si activo Y aprobado */}
+              <Text style={s.switchLabel}>
+                {b.activo && (b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion)
+                  ? 'Visible'
+                  : b.activo && b.estado_aprobacion === 'pendiente'
+                  ? 'En revisión'
+                  : 'Inactiva'}
+              </Text>
               <View style={{ flex: 1 }} />
               <TouchableOpacity style={s.editBtn} onPress={() => abrir(b)}>
                 <Text style={s.editBtnText}>Editar</Text>
@@ -440,7 +451,21 @@ export default function BolsasRestauranteScreen() {
             </View>
 
             {form.tipo_form === 'bolsa' && (
-              <Field label="CO₂ salvado (kg)" value={form.co2_salvado_kg} onChange={set('co2_salvado_kg')} placeholder="0.5" keyboard="numeric" />
+              <>
+                <Field
+                  label="Peso aproximado del producto (kg)"
+                  value={form.peso_kg}
+                  onChange={set('peso_kg')}
+                  placeholder="0.5"
+                  keyboard="numeric"
+                />
+                <View style={s.co2Info}>
+                  <Text style={s.co2InfoText}>
+                    🌱 Impacto estimado calculado automáticamente en el servidor según la categoría del negocio y el peso ingresado.
+                    El valor se actualiza al guardar. Se muestra como "estimado" basado en factores FAO 2013.
+                  </Text>
+                </View>
+              </>
             )}
 
             <Text style={s.sectionLabel}>🏷️ Clasificación en el menú</Text>
@@ -598,4 +623,6 @@ const s = StyleSheet.create({
   clasifChipEmoji: { fontSize: 14 },
   clasifChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   clasifChipTextActive: { color: '#fff', fontWeight: '700' },
+  co2Info: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BBF7D0' },
+  co2InfoText: { fontSize: 12, color: '#166534', lineHeight: 18 },
 });

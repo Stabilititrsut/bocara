@@ -733,4 +733,77 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
   res.json(data);
 });
 
+// GET /api/admin/cambios-perfil — solicitudes de cambio de perfil de restaurantes
+router.get('/cambios-perfil', authMiddleware, adminOnly, async (req, res) => {
+  let { data, error } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('*, negocios(id,nombre,propietario_id,usuarios:propietario_id(nombre,apellido,email))')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) return res.json([]); // tabla puede no existir aún
+  res.json(data || []);
+});
+
+// PUT /api/admin/cambios-perfil/:id/aprobar
+router.put('/cambios-perfil/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
+  const { data: solicitud, error: fetchErr } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('*, negocios(id,propietario_id,nombre)')
+    .eq('id', req.params.id)
+    .single();
+  if (fetchErr || !solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  if (solicitud.estado !== 'pendiente') return res.status(400).json({ error: 'La solicitud ya fue procesada' });
+
+  // Aplicar los cambios propuestos al negocio
+  const { error: updErr } = await supabase
+    .from('negocios')
+    .update(solicitud.datos_propuestos)
+    .eq('id', solicitud.negocio_id);
+  if (updErr) return res.status(400).json({ error: updErr.message });
+
+  // Marcar solicitud como aprobada
+  await supabase.from('negocio_cambios_pendientes')
+    .update({ estado: 'aprobado', updated_at: new Date().toISOString() })
+    .eq('id', req.params.id);
+
+  // Notificar al propietario
+  const propietarioId = solicitud.negocios?.propietario_id;
+  if (propietarioId) {
+    await guardarNotificacion(supabase, propietarioId, 'perfil_aprobado',
+      '✅ Cambios de perfil aprobados',
+      `Los cambios que enviaste para "${solicitud.negocios?.nombre}" fueron aprobados y ya están activos.`,
+      { negocioId: solicitud.negocio_id }
+    );
+  }
+
+  res.json({ ok: true });
+});
+
+// PUT /api/admin/cambios-perfil/:id/rechazar
+router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
+  const { motivo } = req.body;
+  const { data: solicitud, error: fetchErr } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('*, negocios(id,propietario_id,nombre)')
+    .eq('id', req.params.id)
+    .single();
+  if (fetchErr || !solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
+
+  await supabase.from('negocio_cambios_pendientes')
+    .update({ estado: 'rechazado', motivo_rechazo: motivo || null, updated_at: new Date().toISOString() })
+    .eq('id', req.params.id);
+
+  const propietarioId = solicitud.negocios?.propietario_id;
+  if (propietarioId) {
+    const motivoTexto = motivo ? `: ${motivo}` : '. Contacta al equipo Bocara para más información.';
+    await guardarNotificacion(supabase, propietarioId, 'perfil_rechazado',
+      '❌ Cambios de perfil rechazados',
+      `Los cambios enviados para "${solicitud.negocios?.nombre}" fueron rechazados${motivoTexto}`,
+      { negocioId: solicitud.negocio_id, motivo }
+    );
+  }
+
+  res.json({ ok: true });
+});
+
 module.exports = router;

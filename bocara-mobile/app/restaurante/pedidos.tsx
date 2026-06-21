@@ -17,10 +17,15 @@ if (Platform.OS !== 'web') {
   } catch {}
 }
 
-const ESTADOS = ['todos', 'pendiente', 'confirmado', 'listo', 'recogido'];
+const ESTADOS = ['todos', 'confirmado', 'en_preparacion', 'listo', 'recogido', 'cancelado'];
+const ESTADO_LABELS: Record<string, string> = {
+  confirmado: 'Confirmado', en_preparacion: 'En preparación',
+  listo: 'Listo', recogido: 'Recogido', cancelado: 'Cancelado', pendiente: 'Pendiente',
+};
 const ESTADO_COLORS: Record<string, string> = {
   pendiente: Colors.textLight, confirmado: Colors.orange,
-  listo: Colors.green, recogido: Colors.textSecondary, cancelado: Colors.error,
+  en_preparacion: '#7C3AED', listo: Colors.green,
+  recogido: Colors.textSecondary, cancelado: Colors.error,
 };
 
 function QRScannerModal({ visible, onClose, onScanned }: {
@@ -183,7 +188,9 @@ export default function PedidosRestauranteScreen() {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filtros} contentContainerStyle={{ paddingHorizontal: 14 }}>
         {ESTADOS.map((e) => (
           <TouchableOpacity key={e} style={[s.filtroChip, filtro === e && s.filtroActive]} onPress={() => setFiltro(e)}>
-            <Text style={[s.filtroText, filtro === e && s.filtroTextActive]}>{e.charAt(0).toUpperCase() + e.slice(1)}</Text>
+            <Text style={[s.filtroText, filtro === e && s.filtroTextActive]}>
+              {e === 'todos' ? 'Todos' : (ESTADO_LABELS[e] || e)}
+            </Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
@@ -206,11 +213,18 @@ export default function PedidosRestauranteScreen() {
                 <Text style={s.bolsaNombre}>{p.bolsas?.nombre}</Text>
                 {p.usuarios?.nombre && <Text style={s.clienteNombre}>👤 {p.usuarios.nombre}</Text>}
               </View>
-              <View>
+              <View style={{ alignItems: 'flex-end' }}>
                 <Text style={s.total}>Q{p.total?.toFixed(2)}</Text>
                 <View style={[s.estadoBadge, { backgroundColor: (ESTADO_COLORS[p.estado] || Colors.textLight) + '20' }]}>
-                  <Text style={[s.estadoText, { color: ESTADO_COLORS[p.estado] || Colors.textLight }]}>{p.estado}</Text>
+                  <Text style={[s.estadoText, { color: ESTADO_COLORS[p.estado] || Colors.textLight }]}>{ESTADO_LABELS[p.estado] || p.estado}</Text>
                 </View>
+                {p.estado_pago && p.estado_pago !== 'pagado' && (
+                  <View style={[s.estadoBadge, { backgroundColor: p.estado_pago === 'fallido' ? '#FEE2E2' : '#FEF3C7', marginTop: 4 }]}>
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: p.estado_pago === 'fallido' ? Colors.error : '#92400E' }}>
+                      {p.estado_pago === 'fallido' ? '⚠️ Pago fallido' : p.estado_pago === 'pendiente' ? '⏳ Pago pendiente' : p.estado_pago}
+                    </Text>
+                  </View>
+                )}
               </View>
             </View>
             <View style={s.infoRow}>
@@ -219,9 +233,24 @@ export default function PedidosRestauranteScreen() {
               <Text style={s.infoText}>{new Date(p.created_at || p.creado_en).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' })}</Text>
             </View>
             {p.estado === 'confirmado' && (
-              <TouchableOpacity style={s.btnListo} onPress={() => cambiarEstado(p.id, 'listo')}>
-                <Text style={s.btnListoText}>✓ Marcar como listo</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={[s.btnListo, { flex: 1, backgroundColor: '#7C3AED' }]} onPress={() => cambiarEstado(p.id, 'en_preparacion')}>
+                  <Text style={s.btnListoText}>👨‍🍳 En preparación</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.error, paddingHorizontal: 14 }]} onPress={() => cambiarEstado(p.id, 'cancelado')}>
+                  <Text style={s.btnListoText}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {p.estado === 'en_preparacion' && (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity style={[s.btnListo, { flex: 1 }]} onPress={() => cambiarEstado(p.id, 'listo')}>
+                  <Text style={s.btnListoText}>✓ Marcar como listo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.error, paddingHorizontal: 14 }]} onPress={() => cambiarEstado(p.id, 'cancelado')}>
+                  <Text style={s.btnListoText}>✕</Text>
+                </TouchableOpacity>
+              </View>
             )}
             {p.estado === 'listo' && (
               <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.brown }]} onPress={() => cambiarEstado(p.id, 'recogido')}>

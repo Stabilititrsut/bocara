@@ -43,14 +43,26 @@ async function enviarNotificacionesMultiples(tokens, titulo, cuerpo, data = {}) 
 async function guardarNotificacion(supabase, usuarioId, tipo, titulo, mensaje, data = {}) {
   if (!usuarioId) return;
   try {
-    await supabase.from('notificaciones').insert([{
+    const { error } = await supabase.from('notificaciones').insert([{
       usuario_id: usuarioId,
       tipo,
       titulo,
-      cuerpo: mensaje,   // columna en Supabase es 'cuerpo', no 'mensaje'
+      cuerpo: mensaje,
       data,
       leida: false,
     }]);
+    // Fallback si la columna 'data' no existe aún en la tabla
+    if (error && error.message && error.message.includes('data')) {
+      await supabase.from('notificaciones').insert([{
+        usuario_id: usuarioId,
+        tipo,
+        titulo,
+        cuerpo: mensaje,
+        leida: false,
+      }]);
+    } else if (error) {
+      console.error('Guardar notificación error:', error.message);
+    }
   } catch (err) {
     console.error('Guardar notificación error:', err.message);
   }

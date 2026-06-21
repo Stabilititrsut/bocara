@@ -11,11 +11,12 @@ import { Pedido } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 
 const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
-  pendiente:  { label: 'Pendiente',          color: '#FF9800',         bg: '#FFF3E0', icon: 'time-outline' },
-  confirmado: { label: 'Confirmado',          color: Colors.primary,    bg: Colors.accentLight, icon: 'checkmark-circle-outline' },
-  listo:      { label: 'Listo para recoger', color: Colors.accent,     bg: Colors.accentLight, icon: 'storefront-outline' },
-  recogido:   { label: 'Recogido',           color: Colors.textSecondary, bg: Colors.surface, icon: 'bag-check-outline' },
-  cancelado:  { label: 'Cancelado',          color: Colors.error,      bg: Colors.errorLight, icon: 'close-circle-outline' },
+  pendiente:       { label: 'Pendiente',          color: '#FF9800',            bg: '#FFF3E0',       icon: 'time-outline' },
+  confirmado:      { label: 'Confirmado',          color: Colors.primary,       bg: Colors.accentLight, icon: 'checkmark-circle-outline' },
+  en_preparacion:  { label: 'En preparación',      color: '#7C3AED',            bg: '#F5F3FF',       icon: 'restaurant-outline' },
+  listo:           { label: 'Listo para recoger',  color: Colors.accent,        bg: Colors.accentLight, icon: 'storefront-outline' },
+  recogido:        { label: 'Recogido',             color: Colors.textSecondary, bg: Colors.surface,  icon: 'bag-check-outline' },
+  cancelado:       { label: 'Cancelado',            color: Colors.error,         bg: Colors.errorLight, icon: 'close-circle-outline' },
 };
 
 const RESENAS_KEY = 'bocara_resenas_enviadas';
@@ -30,7 +31,7 @@ interface ResenaState {
 
 function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void }) {
   const estado = ESTADO_CONFIG[pedido.estado] || ESTADO_CONFIG.pendiente;
-  const activo = pedido.estado === 'confirmado' || pedido.estado === 'listo';
+  const activo = ['confirmado','en_preparacion','listo'].includes(pedido.estado);
 
   return (
     <View style={[s.card, activo && { borderLeftColor: Colors.primary, borderLeftWidth: 3 }]}>
@@ -63,7 +64,7 @@ function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: 
         </View>
       </View>
 
-      {pedido.tipo_entrega === 'recogida' && (pedido.estado === 'confirmado' || pedido.estado === 'listo') && (
+      {pedido.tipo_entrega === 'recogida' && ['confirmado','en_preparacion','listo'].includes(pedido.estado) && (
         <View style={[s.codigoBox, pedido.estado === 'listo' && s.codigoBoxListo]}>
           <Text style={s.codigoLabel}>{pedido.estado === 'listo' ? '¡Tu bolsa está lista!' : 'Código de recogida'}</Text>
           <Text style={s.codigo}>{pedido.codigo_recogida}</Text>
@@ -76,7 +77,7 @@ function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: 
         </View>
       )}
 
-      {pedido.estado !== 'confirmado' && pedido.estado !== 'listo' && (
+      {!['confirmado','en_preparacion','listo'].includes(pedido.estado) && (
         <Text style={s.refCode}>{pedido.codigo_recogida}</Text>
       )}
 
@@ -167,7 +168,7 @@ export default function PedidosScreen() {
   useEffect(() => { cargar(); }, [cargar]);
 
   useEffect(() => {
-    const tieneActivos = pedidos.some(p => p.estado === 'confirmado' || p.estado === 'listo' || p.estado === 'pendiente');
+    const tieneActivos = pedidos.some(p => ['confirmado','en_preparacion','listo','pendiente'].includes(p.estado));
     if (tieneActivos) {
       pollingRef.current = setInterval(cargar, 10000);
     } else {
@@ -204,7 +205,7 @@ export default function PedidosScreen() {
     </SafeAreaView>
   );
 
-  const activos = pedidos.filter(p => p.estado === 'confirmado' || p.estado === 'listo');
+  const activos = pedidos.filter(p => ['confirmado','en_preparacion','listo'].includes(p.estado));
   const pendientes = pedidos.filter(p => p.estado === 'pendiente');
   const historial = pedidos.filter(p => p.estado === 'recogido');
   const cancelados = pedidos.filter(p => p.estado === 'cancelado');

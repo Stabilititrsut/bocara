@@ -11,6 +11,7 @@ const TABS = [
   { name: 'index',             label: 'Dashboard',  icon: 'stats-chart'       },
   { name: 'verificacion',      label: 'Verificar',  icon: 'checkmark-circle'  },
   { name: 'contenido',         label: 'Contenido',  icon: 'document-text'     },
+  { name: 'cambios-perfil',    label: 'Perfiles',   icon: 'person-circle'     },
   { name: 'liquidaciones',     label: 'Pagos',      icon: 'cash'              },
   { name: 'negocios',          label: 'Negocios',   icon: 'storefront'        },
   { name: 'financiero',        label: 'Finanzas',   icon: 'wallet'            },

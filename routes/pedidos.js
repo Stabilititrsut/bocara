@@ -155,21 +155,39 @@ router.get('/:id', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// Transiciones válidas del estado de pedido
+const TRANSICIONES_VALIDAS = {
+  confirmado:      ['en_preparacion', 'cancelado'],
+  en_preparacion:  ['listo', 'cancelado'],
+  listo:           ['recogido', 'cancelado'],
+  recogido:        [], // terminal
+  cancelado:       [], // terminal
+  pendiente:       ['confirmado', 'cancelado'], // legacy
+};
+
 // PUT /api/pedidos/:id/estado — cambiar estado (restaurante)
 router.put('/:id/estado', authMiddleware, async (req, res) => {
   const { estado } = req.body;
-  const estadosValidos = ['listo', 'recogido', 'cancelado'];
+  const estadosValidos = ['confirmado', 'en_preparacion', 'listo', 'recogido', 'cancelado'];
   if (!estadosValidos.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
 
   const { data: pedido } = await supabase
     .from('pedidos')
-    .select('usuario_id, negocio_id, codigo_recogida, total, tipo_entrega, negocios(propietario_id), usuarios(expo_push_token)')
+    .select('estado, usuario_id, negocio_id, codigo_recogida, total, tipo_entrega, negocios(propietario_id), usuarios(expo_push_token)')
     .eq('id', req.params.id)
     .single();
 
   if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
   if (pedido.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
+
+  // Validar que la transición sea permitida
+  const transicionesPermitidas = TRANSICIONES_VALIDAS[pedido.estado] || [];
+  if (!transicionesPermitidas.includes(estado)) {
+    return res.status(400).json({
+      error: `No se puede cambiar de "${pedido.estado}" a "${estado}". Transiciones válidas: ${transicionesPermitidas.join(', ') || 'ninguna'}`,
+    });
+  }
 
   const { data, error } = await supabase
     .from('pedidos')
@@ -181,6 +199,13 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   if (error) return res.status(400).json({ error: error.message });
 
   const tokenCliente = pedido.usuarios?.expo_push_token;
+
+  if (estado === 'en_preparacion') {
+    await enviarNotificacionPush(tokenCliente, '👨‍🍳 Preparando tu pedido',
+      `Tu pedido ${pedido.codigo_recogida} está en preparación.`,
+      { pedidoId: req.params.id, screen: 'pedidos' });
+    await guardarNotificacion(supabase, pedido.usuario_id, 'pedido_en_preparacion', '👨‍🍳 En preparación', `Tu pedido ${pedido.codigo_recogida} está siendo preparado.`, { pedidoId: req.params.id });
+  }
 
   if (estado === 'listo') {
     await enviarNotificacionPush(tokenCliente, '🛍️ ¡Tu bolsa está lista!',

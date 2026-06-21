@@ -70,6 +70,8 @@ export const negociosAPI = {
   actualizar: (id: string, data: any) => api.put(`/negocios/${id}`, data),
   estadisticas: (id: string) => api.get(`/negocios/${id}/estadisticas`),
   ganancias: (periodo?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo } }),
+  solicitarCambios: (data: any) => api.post('/negocios/mi-negocio/solicitar-cambios', data),
+  cambiosPendientes: () => api.get('/negocios/mi-negocio/cambios-pendientes'),
 };
 
 export const bolsasAPI = {
@@ -164,6 +166,10 @@ export const adminAPI = {
   aprobarBolsa: (id: string) => api.put(`/admin/bolsas/${id}/aprobar`),
   rechazarBolsa: (id: string, motivo?: string) =>
     api.put(`/admin/bolsas/${id}/rechazar`, { motivo }),
+  cambiosPerfil: () => api.get('/admin/cambios-perfil'),
+  aprobarCambioPerfil: (id: string) => api.put(`/admin/cambios-perfil/${id}/aprobar`),
+  rechazarCambioPerfil: (id: string, motivo?: string) =>
+    api.put(`/admin/cambios-perfil/${id}/rechazar`, { motivo }),
 };
 
 export const promocionesAPI = {

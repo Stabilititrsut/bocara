@@ -86,3 +86,86 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS activo            BOOLEAN DEFAULT 
 ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS estado_aprobacion TEXT DEFAULT 'aprobado';
 ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT;
 UPDATE bolsas SET estado_aprobacion = 'aprobado' WHERE estado_aprobacion IS NULL;
+
+-- 10. Peso del producto para cálculo automático de CO₂
+--     Formula: co2_salvado_kg = peso_kg × factor_emision (kgCO₂e/kg)
+--     Fuentes: Our World in Data, FAO (2013), EPA WARM Model
+ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS peso_kg NUMERIC(10,3) DEFAULT 0.5;
+
+-- 11. Campo data en notificaciones (metadata adicional)
+ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS data JSONB;
+
+-- 12. Factores de emisión CO₂ por categoría de negocio (configurables)
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_defecto','3.5')    ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_panaderia','1.0')  ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_restaurante','5.0') ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_cafeteria','3.0')  ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_supermercado','3.5') ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_sushi','5.5')      ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_pizza','2.5')      ON CONFLICT(clave) DO NOTHING;
+INSERT INTO configuracion(clave,valor) VALUES('co2_factor_comida_tipica','5.0') ON CONFLICT(clave) DO NOTHING;
+
+-- 13. Tabla de solicitudes de cambio de perfil de restaurante
+CREATE TABLE IF NOT EXISTS negocio_cambios_pendientes (
+  id               UUID    DEFAULT gen_random_uuid() PRIMARY KEY,
+  negocio_id       UUID    REFERENCES negocios(id) ON DELETE CASCADE,
+  datos_propuestos JSONB   NOT NULL,
+  estado           TEXT    DEFAULT 'pendiente', -- pendiente | aprobado | rechazado
+  motivo_rechazo   TEXT,
+  created_at       TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+  updated_at       TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+);
+
+-- 14. Tabla de factores de emisión CO₂ por categoría de alimento (configurable y versionada)
+--     Alcance: emisiones potencialmente evitadas al rescatar alimento antes de convertirse en desperdicio.
+--     Fuente principal: FAO (2013). "Food Wastage Footprint: Impacts on Natural Resources."
+--     ISBN 978-92-5-107752-8. https://www.fao.org/3/i3347e/i3347e.pdf — Tabla A1.
+--     Los factores NO incluyen Land Use Change (LUC) para mantener estimaciones conservadoras.
+--     Mostrar siempre como "Impacto estimado" — no como medición exacta.
+CREATE TABLE IF NOT EXISTS factores_co2_alimentos (
+  id                    UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+  categoria             TEXT        UNIQUE NOT NULL,
+  factor_kg_co2e_por_kg NUMERIC     NOT NULL CHECK (factor_kg_co2e_por_kg >= 0),
+  fuente                TEXT        NOT NULL,
+  version_fuente        TEXT,
+  fecha_vigencia        DATE,
+  notas                 TEXT,
+  activo                BOOLEAN     DEFAULT true,
+  created_at            TIMESTAMPTZ DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Insertar factores documentados (idempotente — ON CONFLICT DO NOTHING)
+-- Todos los valores provienen de FAO 2013 Tabla A1 salvo donde se indica.
+INSERT INTO factores_co2_alimentos (categoria, factor_kg_co2e_por_kg, fuente, version_fuente, fecha_vigencia, notas) VALUES
+  ('Panadería',     1.0, 'FAO 2013 Food Wastage Footprint Tabla A1', '2013', '2013-01-01',
+   'Cereales y productos de panadería. Factor conservador sin LUC.'),
+  ('Cafetería',     1.5, 'FAO 2013 Food Wastage Footprint Tabla A1', '2013', '2013-01-01',
+   'Estimado: mezcla de cereales (1.0) y productos lácteos (2.0). Sin LUC.'),
+  ('Supermercado',  2.5, 'FAO 2013 Food Wastage Footprint Tabla A1', '2013', '2013-01-01',
+   'Mezcla conservadora de categorías para tiendas de abarrotes generales.'),
+  ('Sushi',         2.4, 'FAO 2013 Food Wastage Footprint Tabla A1', '2013', '2013-01-01',
+   'Pescados y mariscos según FAO 2013. Factor de producción sin transporte.'),
+  ('Pizza',         2.0, 'FAO 2013 Food Wastage Footprint Tabla A1', '2013', '2013-01-01',
+   'Cereales + ingredientes mixtos. Factor conservador basado en contenido mayoritario.'),
+  ('Restaurante',   3.8, 'FAO 2013 + WRAP 2016', '2013/2016', '2016-01-01',
+   'Comida preparada mixta. Estimado ponderado entre cereales, proteína animal y verduras.'),
+  ('Comida Típica', 3.5, 'FAO 2013 Food Wastage Footprint Tabla A1', '2013', '2013-01-01',
+   'Granos + proteína animal mixta (pollo, cerdo). Sin LUC.')
+ON CONFLICT (categoria) DO NOTHING;
+
+-- 15. SQL de diagnóstico para detectar duplicados reales en bolsas (solo lectura)
+--     Ejecutar manualmente cuando se sospeche de duplicados:
+/*
+SELECT
+  negocio_id,
+  lower(trim(nombre)) AS nombre_normalizado,
+  tipo,
+  COUNT(*)            AS cantidad,
+  array_agg(id)       AS ids,
+  array_agg(created_at ORDER BY created_at) AS fechas
+FROM bolsas
+GROUP BY negocio_id, lower(trim(nombre)), tipo
+HAVING COUNT(*) > 1
+ORDER BY cantidad DESC;
+*/

@@ -4,7 +4,7 @@ import {
   StyleSheet, SafeAreaView, ActivityIndicator, Platform,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { negociosAPI, uploadsAPI } from '@/src/services/api';
+import { negociosAPI, uploadsAPI, adminAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
@@ -21,6 +21,7 @@ export default function PerfilRestauranteScreen() {
   const [uploadingImg, setUploadingImg] = useState(false);
   const [imgError, setImgError] = useState('');
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [solicitudPendiente, setSolicitudPendiente] = useState<any>(null);
   const { logout } = useAuth();
   const fileInputRef = useRef<any>(null);
   const dpiInputRef = useRef<any>(null);
@@ -42,6 +43,14 @@ export default function PerfilRestauranteScreen() {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 3500);
   };
+
+  useEffect(() => {
+    // Cargar solicitudes de cambio pendientes para mostrar su estado
+    negociosAPI.cambiosPendientes().then(res => {
+      const lista = res.data || [];
+      if (lista.length > 0) setSolicitudPendiente(lista[0]);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     negociosAPI.miNegocio().then((res) => {
@@ -174,18 +183,34 @@ export default function PerfilRestauranteScreen() {
       const lng = parseFloat(form.longitud);
       payload.latitud  = isNaN(lat) ? null : lat;
       payload.longitud = isNaN(lng) ? null : lng;
-      if (negocio?.estado_verificacion === 'rechazado') payload.estado_verificacion = 'pendiente';
-      await negociosAPI.actualizar(negocio.id, payload);
-      setCamposPendientes(new Set());
-      setOriginalForm({ ...form });
+
       if (negocio?.estado_verificacion === 'rechazado') {
+        // Si fue rechazado: actualizar directamente + reenviar a revisión
+        payload.estado_verificacion = 'pendiente';
+        await negociosAPI.actualizar(negocio.id, payload);
+        setCamposPendientes(new Set());
+        setOriginalForm({ ...form });
         setNegocio((n: any) => ({ ...n, estado_verificacion: 'pendiente' }));
         setRechazoInfo(null);
         showToast('✅ Solicitud re-enviada. El equipo de Bocara la revisará en 24-48h.');
       } else {
-        showToast('✅ Cambios enviados para revisión del equipo Bocara');
+        // Negocio aprobado: crear solicitud de cambio para revisión
+        await negociosAPI.solicitarCambios(payload);
+        setCamposPendientes(new Set());
+        // Recargar solicitudes
+        const res = await negociosAPI.cambiosPendientes();
+        const lista = res.data || [];
+        setSolicitudPendiente(lista.length > 0 ? lista[0] : null);
+        showToast('✅ Cambios enviados. El equipo Bocara los revisará pronto.');
       }
-    } catch (e: any) { showToast(e.message || 'Error al guardar', false); }
+    } catch (e: any) {
+      const msg = (e.message || '');
+      if (msg.includes('solicitud de cambios en revisión') || msg.includes('409')) {
+        showToast('Ya tienes cambios pendientes de revisión. Espera a que se aprueben.', false);
+      } else {
+        showToast(msg || 'Error al guardar', false);
+      }
+    }
     finally { setSaving(false); }
   }
 
@@ -256,6 +281,32 @@ export default function PerfilRestauranteScreen() {
             <Text style={s.toastText}>{toast.msg}</Text>
           </View>
         )}
+
+        {/* Banner: estado de la última solicitud de cambios */}
+        {solicitudPendiente && (
+          <View style={[
+            s.solicitudBanner,
+            solicitudPendiente.estado === 'pendiente' && s.solicitudPendiente,
+            solicitudPendiente.estado === 'aprobado' && s.solicitudAprobada,
+            solicitudPendiente.estado === 'rechazado' && s.solicitudRechazada,
+          ]}>
+            <Text style={s.solicitudEmoji}>
+              {solicitudPendiente.estado === 'pendiente' ? '⏳'
+               : solicitudPendiente.estado === 'aprobado' ? '✅' : '❌'}
+            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={s.solicitudTitulo}>
+                {solicitudPendiente.estado === 'pendiente' ? 'Cambios en revisión'
+                 : solicitudPendiente.estado === 'aprobado' ? 'Cambios aprobados'
+                 : 'Cambios rechazados'}
+              </Text>
+              {solicitudPendiente.estado === 'rechazado' && solicitudPendiente.motivo_rechazo && (
+                <Text style={s.solicitudMotivo}>Motivo: {solicitudPendiente.motivo_rechazo}</Text>
+              )}
+            </View>
+          </View>
+        )}
+
         {rechazoInfo && (
           <View style={s.rechazoCard}>
             <Text style={s.rechazoTitle}>⚠️ Tu solicitud fue rechazada</Text>
@@ -531,6 +582,13 @@ const s = StyleSheet.create({
   rechazoSub: { fontSize: 13, color: '#7F1D1D', fontWeight: '600', marginBottom: 4 },
   rechazoItem: { fontSize: 13, color: '#991B1B', paddingVertical: 2, lineHeight: 20 },
   rechazoMotivo: { fontSize: 12, color: '#7F1D1D', marginTop: 8, fontStyle: 'italic' },
+  solicitudBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderRadius: 12, padding: 12, marginBottom: 14, borderWidth: 1.5, borderColor: '#D1D5DB' },
+  solicitudPendiente: { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' },
+  solicitudAprobada:  { backgroundColor: '#DCFCE7', borderColor: '#A7F3D0' },
+  solicitudRechazada: { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' },
+  solicitudEmoji: { fontSize: 20, marginTop: 1 },
+  solicitudTitulo: { fontSize: 13, fontWeight: '800', color: Colors.brown },
+  solicitudMotivo: { fontSize: 12, color: Colors.textSecondary, marginTop: 3, lineHeight: 18 },
   dpiContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 140, borderWidth: 1.5, borderColor: Colors.border },
   dpiImg: { width: '100%', height: '100%' },
   dpiPlaceholder: { width: '100%', height: '100%', backgroundColor: '#FEF3C7', justifyContent: 'center', alignItems: 'center', gap: 6 },

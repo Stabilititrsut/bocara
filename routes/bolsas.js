@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
 const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
 const { getReservadoPendiente, getReservasMap } = require('../services/stock');
+const { calcularImpactoProducto } = require('../services/impactoAmbiental');
 const router = express.Router();
 
 async function getNegocioIdParaUsuario(usuarioId) {
@@ -178,7 +179,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, co2_salvado_kg, imagen_url,
+    permite_envio, imagen_url, peso_kg,
     categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
     es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
@@ -186,12 +187,35 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
   const { data: negocio } = await supabase
-    .from('negocios').select('id').eq('propietario_id', req.usuario.id).single();
+    .from('negocios').select('id,categoria').eq('propietario_id', req.usuario.id).single();
   // Admins pueden especificar negocio_id; restaurantes solo pueden usar su propio negocio
   const nId = req.usuario.rol === 'admin' ? (negocio_id || negocio?.id) : negocio?.id;
   if (!nId) return res.status(400).json({ error: 'Negocio no encontrado' });
 
+  // Verificar que no exista una bolsa activa con el mismo nombre en este negocio
+  const { data: existentes } = await supabase
+    .from('bolsas')
+    .select('id,nombre,estado_aprobacion')
+    .eq('negocio_id', nId)
+    .ilike('nombre', nombre.trim())
+    .eq('activo', true);
+  if (existentes && existentes.length > 0) {
+    return res.status(409).json({
+      error: `Ya existe una publicación activa con el nombre "${nombre.trim()}". Si necesitas editarla, usa la opción de editar.`,
+      duplicado: true,
+      existente: existentes[0],
+    });
+  }
+
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
+  const pesoKg = parseFloat(peso_kg) || 0.5;
+  // CO₂ calculado automáticamente — no se acepta del cliente
+  const categoriaParaCO2 = categoria || negocio?.categoria || '';
+  const impacto = await calcularImpactoProducto(supabase, pesoKg, categoriaParaCO2);
+  const co2Calculado = impacto.co2e_kg;
+  if (impacto.sin_datos) {
+    console.warn(`[BOLSAS] Sin factor CO₂ para categoría "${categoriaParaCO2}" — co2_salvado_kg quedará en 0`);
+  }
 
   let { data, error } = await supabase
     .from('bolsas')
@@ -204,7 +228,8 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_inicio: hora_recogida_inicio || '18:00',
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
-      co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
+      peso_kg: pesoKg,
+      co2_salvado_kg: co2Calculado,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
       categoria_menu: categoria_menu || null,
@@ -219,7 +244,7 @@ router.post('/', authMiddleware, async (req, res) => {
     .single();
 
   if (error) {
-    // Fallback: columna estado_aprobacion puede no existir aún
+    // Fallback: columnas nuevas pueden no existir aún
     const r = await supabase
       .from('bolsas')
       .insert([{
@@ -231,7 +256,7 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_inicio: hora_recogida_inicio || '18:00',
         hora_recogida_fin: hora_recogida_fin || '20:00',
         permite_envio: permite_envio || false,
-        co2_salvado_kg: parseFloat(co2_salvado_kg) || 0.5,
+        co2_salvado_kg: co2Calculado,
         imagen_url: imagen_url || null,
       }])
       .select()
@@ -262,11 +287,24 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','co2_salvado_kg','activo','estado_aprobacion','imagen_url',
+    'permite_envio','activo','estado_aprobacion','imagen_url',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
     'es_destacado','es_mas_vendido','es_precio_bajo'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
+
+  // Recalcular CO₂ si se envía peso_kg
+  if (req.body.peso_kg !== undefined) {
+    const pesoKg = parseFloat(req.body.peso_kg) || 0.5;
+    updates.peso_kg = pesoKg;
+    const { data: neg } = await supabase.from('negocios').select('categoria').eq('id', bolsa.negocio_id).single();
+    const categoriaParaCO2 = updates.categoria || neg?.categoria || '';
+    const impactoEdit = await calcularImpactoProducto(supabase, pesoKg, categoriaParaCO2);
+    updates.co2_salvado_kg = impactoEdit.co2e_kg;
+    if (impactoEdit.sin_datos) {
+      console.warn(`[BOLSAS] Sin factor CO₂ al editar para categoría "${categoriaParaCO2}"`);
+    }
+  }
 
   // Si un restaurante (no admin) edita una bolsa rechazada, reenviarla a revisión
   if (req.usuario.rol !== 'admin' && bolsa.estado_aprobacion === 'rechazado') {
