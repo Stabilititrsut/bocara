@@ -179,7 +179,7 @@ const CAMPO_LABELS: Record<string, string> = {
 function SolicitudCard({ item, procesando, onAprobar, onRechazar, readonly }: any) {
   const propietario = item.negocios?.usuarios;
   const negocio = item.negocios;
-  const cambios = item.datos_propuestos || {};
+  const cambios = item.cambios || {};
   const esPendiente = item.estado === 'pendiente';
 
   return (

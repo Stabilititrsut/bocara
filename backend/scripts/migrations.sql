@@ -154,6 +154,25 @@ INSERT INTO factores_co2_alimentos (categoria, factor_kg_co2e_por_kg, fuente, ve
    'Granos + proteína animal mixta (pollo, cerdo). Sin LUC.')
 ON CONFLICT (categoria) DO NOTHING;
 
+-- 16. Correcciones en negocio_cambios_pendientes
+--     Agregar usuario_id si no existe
+ALTER TABLE negocio_cambios_pendientes ADD COLUMN IF NOT EXISTS usuario_id UUID REFERENCES usuarios(id);
+--     Renombrar datos_propuestos → cambios si aún existe con el nombre viejo
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'negocio_cambios_pendientes' AND column_name = 'datos_propuestos'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'negocio_cambios_pendientes' AND column_name = 'cambios'
+  ) THEN
+    ALTER TABLE negocio_cambios_pendientes RENAME COLUMN datos_propuestos TO cambios;
+  END IF;
+END $$;
+--     Si la tabla se creó sin ninguna de las dos columnas, agregar cambios
+ALTER TABLE negocio_cambios_pendientes ADD COLUMN IF NOT EXISTS cambios JSONB;
+
 -- 15. SQL de diagnóstico para detectar duplicados reales en bolsas (solo lectura)
 --     Ejecutar manualmente cuando se sospeche de duplicados:
 /*

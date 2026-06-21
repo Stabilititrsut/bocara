@@ -332,54 +332,68 @@ router.get('/:id/bolsas', async (req, res) => {
 });
 
 // POST /api/negocios/mi-negocio/solicitar-cambios
-// El restaurante envía cambios que requieren aprobación del admin antes de aplicarse
+// El restaurante envía { cambios: { campo: valor } } para revisión del admin
 router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) => {
-  const { data: negocio } = await supabase
-    .from('negocios').select('id,propietario_id').eq('propietario_id', req.usuario.id).single();
-  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+  console.log('[CAMBIOS PERFIL] usuario:', req.usuario.id);
 
-  // Evitar duplicados: si ya hay una solicitud pendiente, rechazar
-  const { data: pendiente } = await supabase
-    .from('negocio_cambios_pendientes')
-    .select('id,created_at')
-    .eq('negocio_id', negocio.id)
-    .eq('estado', 'pendiente')
-    .single();
+  const { data: negocio, error: negocioErr } = await supabase
+    .from('negocios').select('id,propietario_id').eq('propietario_id', req.usuario.id).maybeSingle();
+  if (!negocio || negocioErr) return res.status(404).json({ error: 'Negocio no encontrado' });
+  console.log('[CAMBIOS PERFIL] negocio:', negocio.id);
 
-  if (pendiente) {
-    return res.status(409).json({
-      error: 'Ya tienes una solicitud de cambios en revisión. Espera a que el equipo Bocara la revise antes de enviar otra.',
-      solicitud_id: pendiente.id,
-    });
+  // Frontend envía { cambios: { campo: valor, ... } }
+  const bodyChanges = req.body.cambios;
+  if (!bodyChanges || typeof bodyChanges !== 'object' || Array.isArray(bodyChanges)) {
+    return res.status(400).json({ error: 'Se esperaba { cambios: { ... } } en el body' });
   }
 
   const campos_permitidos = ['nombre','descripcion','direccion','zona','ciudad','telefono',
     'categoria','latitud','longitud','punto_referencia','google_maps_url','waze_url'];
-  const datos_propuestos = {};
+  const cambios = {};
   for (const k of campos_permitidos) {
-    if (req.body[k] !== undefined) datos_propuestos[k] = req.body[k];
+    if (bodyChanges[k] !== undefined) cambios[k] = bodyChanges[k];
   }
+  console.log('[CAMBIOS PERFIL] cambios:', cambios);
 
-  if (Object.keys(datos_propuestos).length === 0)
+  if (Object.keys(cambios).length === 0)
     return res.status(400).json({ error: 'No se enviaron campos para cambiar' });
 
-  const { data, error } = await supabase
+  // Si ya hay solicitud pendiente → actualizar en lugar de rechazar con 409
+  const { data: pendiente } = await supabase
     .from('negocio_cambios_pendientes')
-    .insert([{ negocio_id: negocio.id, datos_propuestos, estado: 'pendiente' }])
-    .select()
-    .single();
+    .select('id')
+    .eq('negocio_id', negocio.id)
+    .eq('estado', 'pendiente')
+    .maybeSingle();
+
+  let data, error;
+
+  if (pendiente) {
+    ({ data, error } = await supabase
+      .from('negocio_cambios_pendientes')
+      .update({ cambios, updated_at: new Date().toISOString() })
+      .eq('id', pendiente.id)
+      .select()
+      .single());
+  } else {
+    ({ data, error } = await supabase
+      .from('negocio_cambios_pendientes')
+      .insert([{ negocio_id: negocio.id, usuario_id: req.usuario.id, cambios, estado: 'pendiente' }])
+      .select()
+      .single());
+  }
 
   if (error) {
-    // La tabla puede no existir aún — guardar en un campo temporal del negocio
-    console.warn('[solicitar-cambios] tabla no existe, usando fallback:', error.message);
-    return res.status(202).json({
-      ok: true,
-      pendiente_migracion: true,
-      mensaje: 'Solicitud recibida. El equipo Bocara la revisará pronto.',
+    console.error('[CAMBIOS PERFIL] error Supabase:', error.message, error.code, error.details);
+    return res.status(400).json({
+      error: 'No se pudo guardar la solicitud: ' + error.message,
+      code: error.code,
+      details: error.details,
     });
   }
 
-  res.status(201).json({ ok: true, solicitud: data });
+  console.log('[CAMBIOS PERFIL] solicitud creada/actualizada:', data.id);
+  res.status(pendiente ? 200 : 201).json({ ok: true, solicitud: data, actualizado: !!pendiente });
 });
 
 // GET /api/negocios/mi-negocio/cambios-pendientes

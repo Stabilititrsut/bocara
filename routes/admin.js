@@ -754,10 +754,10 @@ router.put('/cambios-perfil/:id/aprobar', authMiddleware, adminOnly, async (req,
   if (fetchErr || !solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
   if (solicitud.estado !== 'pendiente') return res.status(400).json({ error: 'La solicitud ya fue procesada' });
 
-  // Aplicar los cambios propuestos al negocio
+  // Aplicar los cambios al negocio
   const { error: updErr } = await supabase
     .from('negocios')
-    .update(solicitud.datos_propuestos)
+    .update(solicitud.cambios)
     .eq('id', solicitud.negocio_id);
   if (updErr) return res.status(400).json({ error: updErr.message });
 

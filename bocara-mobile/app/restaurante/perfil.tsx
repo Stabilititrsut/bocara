@@ -178,14 +178,15 @@ export default function PerfilRestauranteScreen() {
     setSaving(true);
     setToast(null);
     try {
-      const payload: any = { ...form };
       const lat = parseFloat(form.latitud);
       const lng = parseFloat(form.longitud);
-      payload.latitud  = isNaN(lat) ? null : lat;
-      payload.longitud = isNaN(lng) ? null : lng;
 
       if (negocio?.estado_verificacion === 'rechazado') {
         // Si fue rechazado: actualizar directamente + reenviar a revisión
+        const payload: any = {};
+        camposPendientes.forEach(k => { payload[k] = form[k]; });
+        if (camposPendientes.has('latitud')) payload.latitud = isNaN(lat) ? null : lat;
+        if (camposPendientes.has('longitud')) payload.longitud = isNaN(lng) ? null : lng;
         payload.estado_verificacion = 'pendiente';
         await negociosAPI.actualizar(negocio.id, payload);
         setCamposPendientes(new Set());
@@ -194,24 +195,29 @@ export default function PerfilRestauranteScreen() {
         setRechazoInfo(null);
         showToast('✅ Solicitud re-enviada. El equipo de Bocara la revisará en 24-48h.');
       } else {
-        // Negocio aprobado: crear solicitud de cambio para revisión
-        await negociosAPI.solicitarCambios(payload);
+        // Negocio aprobado: crear solicitud de cambio con solo los campos modificados
+        const cambios: any = {};
+        camposPendientes.forEach(k => { cambios[k] = form[k]; });
+        if (camposPendientes.has('latitud')) cambios.latitud = isNaN(lat) ? null : lat;
+        if (camposPendientes.has('longitud')) cambios.longitud = isNaN(lng) ? null : lng;
+
+        console.log('[PERFIL CAMBIOS] click enviar', { camposPendientes: [...camposPendientes], cambios });
+
+        await negociosAPI.solicitarCambios({ cambios });
         setCamposPendientes(new Set());
-        // Recargar solicitudes
         const res = await negociosAPI.cambiosPendientes();
         const lista = res.data || [];
         setSolicitudPendiente(lista.length > 0 ? lista[0] : null);
         showToast('✅ Cambios enviados. El equipo Bocara los revisará pronto.');
       }
     } catch (e: any) {
-      const msg = (e.message || '');
-      if (msg.includes('solicitud de cambios en revisión') || msg.includes('409')) {
-        showToast('Ya tienes cambios pendientes de revisión. Espera a que se aprueben.', false);
-      } else {
-        showToast(msg || 'Error al guardar', false);
-      }
+      const serverMsg = e.response?.data?.error;
+      const msg = serverMsg || e.message || 'Error al guardar';
+      console.error('[PERFIL CAMBIOS] error:', msg, e.response?.data);
+      showToast(msg, false);
+    } finally {
+      setSaving(false);
     }
-    finally { setSaving(false); }
   }
 
   async function geocodificarAhora() {
