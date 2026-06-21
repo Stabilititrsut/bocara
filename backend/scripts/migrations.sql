@@ -188,3 +188,17 @@ GROUP BY negocio_id, lower(trim(nombre)), tipo
 HAVING COUNT(*) > 1
 ORDER BY cantidad DESC;
 */
+
+-- 17. Tabla de reseñas de negocios
+--     Una reseña por pedido. Solo usuarios que recogieron pueden reseñar (validado en backend).
+CREATE TABLE IF NOT EXISTS resenas (
+  id           UUID    DEFAULT gen_random_uuid() PRIMARY KEY,
+  pedido_id    UUID    REFERENCES pedidos(id) ON DELETE SET NULL,
+  usuario_id   UUID    NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  negocio_id   UUID    NOT NULL REFERENCES negocios(id) ON DELETE CASCADE,
+  calificacion INTEGER NOT NULL CHECK (calificacion BETWEEN 1 AND 5),
+  comentario   TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(pedido_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resenas_negocio ON resenas(negocio_id);

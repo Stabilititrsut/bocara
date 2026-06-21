@@ -8,7 +8,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { negociosAPI, pedidosAPI, favoritosAPI } from '@/src/services/api';
+import { negociosAPI, pedidosAPI, favoritosAPI, resenasAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 
@@ -91,6 +91,7 @@ export default function NegocioDetailScreen() {
   const [favorito,       setFavorito]       = useState(false);
   const [toggling,       setToggling]       = useState(false);
   const [favBolsaIds,    setFavBolsaIds]    = useState<Set<string>>(new Set());
+  const [resenas,        setResenas]        = useState<any[]>([]);
   const [loading,        setLoading]        = useState(true);
 
   // Carga inicial
@@ -101,7 +102,8 @@ export default function NegocioDetailScreen() {
       pedidosAPI.previosEnNegocio(id).catch(() => ({ data: [] })),
       favoritosAPI.check(id).catch(() => ({ data: { es_favorito: false } })),
       favoritosAPI.listarBolsas().catch(() => ({ data: [] })),
-    ]).then(([negRes, prevRes, favRes, favBolsasRes]) => {
+      resenasAPI.listarPorNegocio(id).catch(() => ({ data: [] })),
+    ]).then(([negRes, prevRes, favRes, favBolsasRes, resenasRes]) => {
       const { negocio: neg, bolsas } = negRes.data;
       setNegocio(neg);
       setTiempoLimitado(bolsas?.tiempo_limitado || []);
@@ -109,6 +111,7 @@ export default function NegocioDetailScreen() {
       setPrevios(prevRes.data || []);
       setFavorito(favRes.data?.esFavorito ?? false);
       setFavBolsaIds(new Set((favBolsasRes.data || []).map((b: any) => b.id)));
+      setResenas(resenasRes.data || []);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
 
@@ -391,6 +394,26 @@ export default function NegocioDetailScreen() {
               )}
             </>
           )}
+
+          {/* Reseñas */}
+          {resenas.length > 0 && (
+            <View style={[s.section, { marginTop: 8 }]}>
+              <Text style={s.sectionTitle}>
+                ⭐ Opiniones
+                {negocio?.calificacion_promedio > 0 ? ` · ${negocio.calificacion_promedio.toFixed(1)}` : ''}
+              </Text>
+              {resenas.slice(0, 5).map((r: any) => (
+                <View key={r.id} style={sr.card}>
+                  <View style={sr.top}>
+                    <Text style={sr.nombre}>{r.usuarios?.nombre || 'Cliente'}</Text>
+                    <Text style={sr.estrellas}>{'★'.repeat(r.calificacion)}{'☆'.repeat(5 - r.calificacion)}</Text>
+                  </View>
+                  {!!r.comentario && <Text style={sr.comentario}>{r.comentario}</Text>}
+                  <Text style={sr.fecha}>{new Date(r.created_at).toLocaleDateString('es-GT', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
 
@@ -418,6 +441,19 @@ export default function NegocioDetailScreen() {
     </View>
   );
 }
+
+// ─── Reseña card styles ───────────────────────────────────────────────────────
+const sr = StyleSheet.create({
+  card: {
+    backgroundColor: '#FAFAFA', borderRadius: 16, padding: 14,
+    marginBottom: 10, borderWidth: 1, borderColor: '#F0F0F0',
+  },
+  top: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  nombre: { fontSize: 13, fontWeight: '800', color: DARK },
+  estrellas: { fontSize: 12, color: '#FF9800', letterSpacing: 1 },
+  comentario: { fontSize: 13, color: '#444', lineHeight: 20, marginBottom: 4 },
+  fecha: { fontSize: 11, color: GRAY },
+});
 
 // ─── PrevioCard styles ────────────────────────────────────────────────────────
 const pv = StyleSheet.create({
