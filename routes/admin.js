@@ -731,6 +731,38 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
   res.json(data);
 });
 
+// PUT /api/admin/bolsas/:id/pedir-cambios — solicitar correcciones al restaurante
+router.put('/bolsas/:id/pedir-cambios', authMiddleware, adminOnly, async (req, res) => {
+  const { motivo } = req.body;
+
+  const { data: bolsa, error: fetchErr } = await supabase
+    .from('bolsas')
+    .select('*, negocios(id,nombre,propietario_id)')
+    .eq('id', req.params.id)
+    .single();
+  if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+
+  // Mantener en pendiente con el motivo guardado para que el restaurante sepa qué corregir
+  await supabase.from('bolsas')
+    .update({ estado_aprobacion: 'pendiente', motivo_rechazo: motivo || null })
+    .eq('id', req.params.id);
+
+  const propietarioId = bolsa.negocios?.propietario_id;
+  if (propietarioId) {
+    const motivoTexto = motivo ? `: ${motivo}` : '. Por favor revisa y reenvía la publicación.';
+    await notificarPropietario(
+      propietarioId,
+      bolsa.nombre,
+      'bolsa_cambios_solicitados',
+      '⚠️ Se solicitan cambios en tu publicación',
+      `El administrador te pide corregir "${bolsa.nombre}"${motivoTexto}`,
+      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
+    );
+  }
+
+  res.json({ ok: true });
+});
+
 // GET /api/admin/cambios-perfil — solicitudes de cambio de perfil de restaurantes
 router.get('/cambios-perfil', authMiddleware, adminOnly, async (req, res) => {
   let { data, error } = await supabase

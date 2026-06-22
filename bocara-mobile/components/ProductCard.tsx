@@ -60,7 +60,7 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
           <Image
             source={{ uri: bolsa.imagen_url }}
             style={StyleSheet.absoluteFill}
-            contentFit="cover"
+            contentFit="contain"
             transition={180}
             onError={() => {}}
           />

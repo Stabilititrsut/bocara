@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -12,6 +12,12 @@ import * as SplashScreen from 'expo-splash-screen';
 
 // Mantener el splash nativo visible hasta que la app esté lista
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+// Vincula el carrito al userId del token activo para evitar que se comparta entre cuentas
+function CartProviderWithUser({ children }: { children: React.ReactNode }) {
+  const { usuario } = useAuth();
+  return <CartProvider userId={usuario?.id ?? null}>{children}</CartProvider>;
+}
 
 // Expo Notifications — solo nativo
 let Notifications: any = null;
@@ -218,9 +224,9 @@ export default function RootLayout() {
   return (
     <AuthProvider>
       <LocationProvider>
-        <CartProvider>
+        <CartProviderWithUser>
           <AuthGuard />
-        </CartProvider>
+        </CartProviderWithUser>
       </LocationProvider>
     </AuthProvider>
   );

@@ -167,6 +167,8 @@ export const adminAPI = {
   aprobarBolsa: (id: string) => api.put(`/admin/bolsas/${id}/aprobar`),
   rechazarBolsa: (id: string, motivo?: string) =>
     api.put(`/admin/bolsas/${id}/rechazar`, { motivo }),
+  pedirCambiosBolsa: (id: string, motivo?: string) =>
+    api.put(`/admin/bolsas/${id}/pedir-cambios`, { motivo }),
   cambiosPerfil: () => api.get('/admin/cambios-perfil'),
   aprobarCambioPerfil: (id: string) => api.put(`/admin/cambios-perfil/${id}/aprobar`),
   rechazarCambioPerfil: (id: string, motivo?: string) =>

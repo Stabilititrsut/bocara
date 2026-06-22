@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Bolsa, CartItem } from '../types';
 
-const CART_KEY = 'bocara_cart_v2';
+const CART_KEY_PREFIX = 'carrito_';
 
 interface CartContextType {
   items: CartItem[];
@@ -16,25 +16,36 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType>({} as CartContextType);
 
-export function CartProvider({ children }: { children: React.ReactNode }) {
+interface CartProviderProps {
+  children: React.ReactNode;
+  userId?: string | null;
+}
+
+export function CartProvider({ children, userId }: CartProviderProps) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // Cargar carrito guardado al iniciar
+  const cartKey = userId ? `${CART_KEY_PREFIX}${userId}` : 'carrito_anonimo';
+
+  // Recargar carrito cuando cambia el userId (cambio de cuenta)
   useEffect(() => {
-    AsyncStorage.getItem(CART_KEY).then((stored) => {
+    setLoaded(false);
+    setItems([]);
+    AsyncStorage.getItem(cartKey).then((stored) => {
       if (stored) {
         try { setItems(JSON.parse(stored)); } catch { }
       }
       setLoaded(true);
     });
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
-  // Persistir carrito cuando cambia
+  // Persistir carrito cuando cambia (solo después de cargar)
   useEffect(() => {
     if (loaded) {
-      AsyncStorage.setItem(CART_KEY, JSON.stringify(items));
+      AsyncStorage.setItem(cartKey, JSON.stringify(items));
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, loaded]);
 
   const total = items.reduce((sum, i) => sum + i.bolsa.precio_descuento * i.cantidad, 0);

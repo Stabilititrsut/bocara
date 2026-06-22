@@ -47,7 +47,8 @@ export default function AdminFinancieroScreen() {
         adminAPI.pedidosTodos({ limite: 200 }),
       ]);
       setDatos(finRes.data);
-      setPedidos(pedRes.data || []);
+      // Solo pedidos realmente completados (recogidos por el cliente)
+      setPedidos((pedRes.data || []).filter((p: any) => p.estado === 'recogido'));
     } catch {} finally { setLoading(false); setRefreshing(false); }
   }, [periodo]);
 
@@ -91,7 +92,7 @@ export default function AdminFinancieroScreen() {
 
       const hoja3: any[][] = [
         ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión (Q)', 'Estado'],
-        ...pedidos.slice(0, 500).map((p: any) => [
+        ...pedidos.slice(0, 500).map((p: any) => [ // pedidos ya filtrados por estado=recogido
           p.codigo_recogida || '—',
           p.negocios?.nombre || '—',
           p.usuarios?.nombre || '—',
@@ -238,6 +239,13 @@ export default function AdminFinancieroScreen() {
           </TouchableOpacity>
         </View>
 
+        {mostrarPedidos && pedidos.length === 0 && (
+          <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+            <Ionicons name="receipt-outline" size={36} color={BORDER} />
+            <Text style={{ color: TEXT2, fontSize: 14, marginTop: 10 }}>Sin ventas registradas aún</Text>
+            <Text style={{ color: TEXT2, fontSize: 12, marginTop: 4 }}>Total: Q0.00</Text>
+          </View>
+        )}
         {mostrarPedidos && pedidos.slice(0, 50).map((p: any) => (
           <View key={p.id} style={[card(), s.txRow]}>
             <View style={{ flex: 1 }}>
@@ -248,8 +256,8 @@ export default function AdminFinancieroScreen() {
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={s.txTotal}>Q{(p.total || 0).toFixed(2)}</Text>
               <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>-Q{((p.total || 0) * 0.25).toFixed(2)}</Text>
-              <View style={[s.txEstado, { backgroundColor: p.estado === 'recogido' ? '#F0FDF4' : '#FFFBEB', borderColor: p.estado === 'recogido' ? '#BBF7D0' : '#FDE68A' }]}>
-                <Text style={[s.txEstadoText, { color: p.estado === 'recogido' ? '#166534' : '#92400E' }]}>{p.estado}</Text>
+              <View style={[s.txEstado, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
+                <Text style={[s.txEstadoText, { color: '#166534' }]}>recogido</Text>
               </View>
             </View>
           </View>
