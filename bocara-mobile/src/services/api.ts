@@ -72,6 +72,7 @@ export const negociosAPI = {
   ganancias: (periodo?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo } }),
   solicitarCambios: (data: any) => api.post('/negocios/mi-negocio/solicitar-cambios', data),
   cambiosPendientes: () => api.get('/negocios/mi-negocio/cambios-pendientes'),
+  impacto: (id: string) => api.get(`/negocios/${id}/impacto`),
 };
 
 export const bolsasAPI = {

@@ -92,6 +92,7 @@ export default function NegocioDetailScreen() {
   const [toggling,       setToggling]       = useState(false);
   const [favBolsaIds,    setFavBolsaIds]    = useState<Set<string>>(new Set());
   const [resenas,        setResenas]        = useState<any[]>([]);
+  const [impacto,        setImpacto]        = useState<{ kg_rescatados: number; co2_evitado: number } | null>(null);
   const [loading,        setLoading]        = useState(true);
 
   // Carga inicial
@@ -103,7 +104,8 @@ export default function NegocioDetailScreen() {
       favoritosAPI.check(id).catch(() => ({ data: { es_favorito: false } })),
       favoritosAPI.listarBolsas().catch(() => ({ data: [] })),
       resenasAPI.listarPorNegocio(id).catch(() => ({ data: [] })),
-    ]).then(([negRes, prevRes, favRes, favBolsasRes, resenasRes]) => {
+      negociosAPI.impacto(id).catch(() => ({ data: null })),
+    ]).then(([negRes, prevRes, favRes, favBolsasRes, resenasRes, impactoRes]) => {
       const { negocio: neg, bolsas } = negRes.data;
       setNegocio(neg);
       setTiempoLimitado(bolsas?.tiempo_limitado || []);
@@ -112,6 +114,7 @@ export default function NegocioDetailScreen() {
       setFavorito(favRes.data?.esFavorito ?? false);
       setFavBolsaIds(new Set((favBolsasRes.data || []).map((b: any) => b.id)));
       setResenas(resenasRes.data || []);
+      setImpacto(impactoRes.data);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
 
@@ -305,6 +308,20 @@ export default function NegocioDetailScreen() {
                 <Text style={[s.pillText, s.pillTextDark]}>Solo recogida en local</Text>
               </View>
             </ScrollView>
+          {/* Impacto acumulado del negocio */}
+          {impacto && impacto.kg_rescatados > 0 && (
+            <View style={s.impactoWrap}>
+              <View style={s.impactoItem}>
+                <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)}</Text>
+                <Text style={s.impactoLbl}>🍽️ kg rescatados</Text>
+              </View>
+              <View style={s.impactoDivider} />
+              <View style={s.impactoItem}>
+                <Text style={s.impactoNum}>{impacto.co2_evitado.toFixed(1)}</Text>
+                <Text style={s.impactoLbl}>🌱 kg CO₂ evitado</Text>
+              </View>
+            </View>
+          )}
           </View>
         </View>
 
@@ -536,6 +553,16 @@ const s = StyleSheet.create({
   pillEmoji: { fontSize: 15 },
   pillText: { fontSize: 13, fontWeight: '700', color: DARK },
   pillTextDark: { color: '#fff' },
+
+  // Impact row
+  impactoWrap: {
+    flexDirection: 'row', backgroundColor: '#F0FFF4', borderRadius: 12,
+    padding: 12, marginTop: 10, alignItems: 'center',
+  },
+  impactoItem:    { flex: 1, alignItems: 'center' },
+  impactoDivider: { width: 1, height: 36, backgroundColor: '#A5D6A7' },
+  impactoNum:     { fontSize: 20, fontWeight: '900', color: '#2E7D32', marginBottom: 2 },
+  impactoLbl:     { fontSize: 11, color: '#4CAF50', textAlign: 'center' },
 
   // Chips (sticky)
   chipsWrap: {

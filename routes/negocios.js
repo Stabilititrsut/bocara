@@ -285,6 +285,28 @@ router.put('/:id', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// GET /api/negocios/:id/impacto — kg rescatados y CO2 evitado acumulado del negocio
+router.get('/:id/impacto', async (req, res) => {
+  try {
+    const { data: pedidos, error } = await supabase
+      .from('pedidos')
+      .select('bolsa_id, bolsas!bolsa_id(peso_kg)')
+      .eq('negocio_id', req.params.id)
+      .eq('estado', 'recogido');
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const kg_rescatados = Math.round(
+      (pedidos || []).reduce((sum, p) => sum + (parseFloat(p.bolsas?.peso_kg) || 0), 0) * 10
+    ) / 10;
+    const co2_evitado = Math.round(kg_rescatados * 2.5 * 10) / 10;
+
+    res.json({ kg_rescatados, co2_evitado });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/negocios/:id/estadisticas
 router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
   let { data: pedidos } = await supabase

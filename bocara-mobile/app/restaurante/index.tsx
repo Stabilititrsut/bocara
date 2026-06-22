@@ -37,6 +37,7 @@ export default function DashboardRestauranteScreen() {
   const [negocio, setNegocio] = useState<any>(null);
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
+  const [impacto, setImpacto] = useState<{ kg_rescatados: number; co2_evitado: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -50,6 +51,10 @@ export default function DashboardRestauranteScreen() {
 
       const neg = negRes.status === 'fulfilled' ? negRes.value.data : null;
       setNegocio(neg);
+
+      if (neg?.id) {
+        negociosAPI.impacto(neg.id).then(r => setImpacto(r.data)).catch(() => {});
+      }
 
       const allPedidos = pedRes.status === 'fulfilled' ? (pedRes.value.data || []) : [];
       const today = allPedidos.filter((p: any) => {
@@ -217,6 +222,28 @@ export default function DashboardRestauranteScreen() {
           <MetricCard emoji="⏱️" label="Activas"  value={loading ? '—' : (stats?.activas || 0)}                      accent='#60A5FA' />
         </View>
 
+        {/* Impacto acumulado */}
+        {impacto && (
+          <View style={s.impactoCard}>
+            <Text style={s.impactoTitle}>🌍 Tu impacto acumulado</Text>
+            {impacto.kg_rescatados === 0 ? (
+              <Text style={s.impactoEmpty}>Aún no tienes ventas registradas. ¡Tu impacto empieza con la primera venta!</Text>
+            ) : (
+              <View style={s.impactoRow}>
+                <View style={s.impactoItem}>
+                  <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)}</Text>
+                  <Text style={s.impactoLbl}>🍽️ kg comida{'\n'}rescatada</Text>
+                </View>
+                <View style={s.impactoDivider} />
+                <View style={s.impactoItem}>
+                  <Text style={s.impactoNum}>{impacto.co2_evitado.toFixed(1)}</Text>
+                  <Text style={s.impactoLbl}>🌱 kg CO₂{'\n'}evitado est.</Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Últimos pedidos */}
         <Text style={s.sectionTitle}>Últimos pedidos</Text>
         {ultimos5.length === 0 ? (
@@ -331,4 +358,13 @@ const s = StyleSheet.create({
 
   dpiBanner: { backgroundColor: '#FEF3C7', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1.5, borderColor: '#FDE68A' },
   dpiBannerText: { fontSize: 13, color: '#92400E', fontWeight: '700', lineHeight: 19 },
+
+  impactoCard:    { backgroundColor: '#F0FFF4', borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1.5, borderColor: '#A5D6A7' },
+  impactoTitle:   { fontSize: 14, fontWeight: '800', color: '#2E7D32', marginBottom: 10 },
+  impactoEmpty:   { fontSize: 13, color: '#4CAF50', lineHeight: 20 },
+  impactoRow:     { flexDirection: 'row', alignItems: 'center' },
+  impactoItem:    { flex: 1, alignItems: 'center' },
+  impactoDivider: { width: 1, height: 44, backgroundColor: '#A5D6A7' },
+  impactoNum:     { fontSize: 24, fontWeight: '900', color: '#2E7D32', marginBottom: 4 },
+  impactoLbl:     { fontSize: 11, color: '#4CAF50', textAlign: 'center', lineHeight: 16 },
 });
