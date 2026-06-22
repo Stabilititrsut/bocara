@@ -255,6 +255,7 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_fin: hora_recogida_fin || '20:00',
         permite_envio: permite_envio || false,
         imagen_url: imagen_url || null,
+        estado_aprobacion: estadoAprobacion,
       }])
       .select()
       .single();
@@ -273,14 +274,23 @@ router.post('/', authMiddleware, async (req, res) => {
 
 // PUT /api/bolsas/:id — actualizar bolsa
 router.put('/:id', authMiddleware, async (req, res) => {
-  const { data: bolsa } = await supabase
+  const { data: bolsa, error: bolsaErr } = await supabase
     .from('bolsas')
-    .select('negocio_id, estado_aprobacion, peso_kg, categoria_alimento, negocios(propietario_id)')
+    .select('negocio_id, estado_aprobacion, peso_kg, categoria_alimento')
     .eq('id', req.params.id)
     .single();
-  if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-  if (bolsa.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
-    return res.status(403).json({ error: 'No autorizado' });
+  console.log('[PUT /bolsas/:id] id=%s usuario=%s error=%s', req.params.id, req.usuario?.id, bolsaErr?.message);
+  if (!bolsa) return res.status(404).json({ error: bolsaErr?.message || 'Bolsa no encontrada' });
+
+  if (req.usuario.rol !== 'admin') {
+    const { data: negocio } = await supabase
+      .from('negocios')
+      .select('id')
+      .eq('id', bolsa.negocio_id)
+      .eq('propietario_id', req.usuario.id)
+      .single();
+    if (!negocio) return res.status(403).json({ error: 'No autorizado' });
+  }
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
