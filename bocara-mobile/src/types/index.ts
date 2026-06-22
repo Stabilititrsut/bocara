@@ -53,7 +53,8 @@ export interface Bolsa {
   hora_recogida_fin: string;
   fecha_disponible?: string;
   permite_envio: boolean;
-  co2_salvado_kg: number;
+  co2_salvado_kg: number | null;
+  categoria_alimento?: string | null;
   activo: boolean;
   negocios?: Negocio;
   distancia_km?: number | null;

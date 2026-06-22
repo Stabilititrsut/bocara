@@ -9,6 +9,22 @@ import { pickImage } from '@/src/utils/pickImage';
 
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
 
+const CATEGORIAS_ALIMENTO = [
+  { value: 'cereales',          label: 'Cereales y panadería', emoji: '🌾' },
+  { value: 'frutas',            label: 'Frutas',               emoji: '🍎' },
+  { value: 'verduras',          label: 'Verduras',             emoji: '🥦' },
+  { value: 'raices_tuberculos', label: 'Raíces y tubérculos',  emoji: '🥔' },
+  { value: 'legumbres',         label: 'Legumbres',            emoji: '🫘' },
+  { value: 'lacteos',           label: 'Lácteos',              emoji: '🥛' },
+  { value: 'huevos',            label: 'Huevos',               emoji: '🥚' },
+  { value: 'pollo',             label: 'Pollo',                emoji: '🍗' },
+  { value: 'cerdo',             label: 'Cerdo',                emoji: '🥩' },
+  { value: 'carne_bovina',      label: 'Carne bovina',         emoji: '🐄' },
+  { value: 'pescado_mariscos',  label: 'Pescado y mariscos',   emoji: '🐟' },
+  { value: 'comida_mixta',      label: 'Comida mixta',         emoji: '🍱' },
+  { value: 'otro',              label: 'Otro',                 emoji: '🍽️' },
+];
+
 const MENU_CLASIFS = [
   { key: 'es_tiempo_limitado', label: 'Tiempo Limitado', emoji: '⏱️' },
   { key: 'es_promocion',       label: 'Promoción',       emoji: '🏷️' },
@@ -27,6 +43,7 @@ const FORM_INIT = {
   peso_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
   fecha_caducidad: '',
+  categoria_alimento: '',
   // Clasificación en el menú
   categoria_menu: '',
   es_tiempo_limitado: true,
@@ -125,6 +142,7 @@ export default function BolsasRestauranteScreen() {
         imagen_url: b.imagen_url || '',
         activo: b.activo,
         categoria: b.categoria || 'Porcentaje',
+        categoria_alimento: b.categoria_alimento || '',
         fecha_caducidad: b.fecha_caducidad
           ? (() => { const d = new Date(b.fecha_caducidad + 'T12:00:00'); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; })()
           : '',
@@ -154,7 +172,12 @@ export default function BolsasRestauranteScreen() {
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
       return alertar('El código de la promoción es requerido');
 
-    // BUG 1: Validar fecha de caducidad para bolsas de tiempo limitado
+    // categoria_alimento obligatoria para todas las publicaciones nuevas
+    if (!editId && !form.categoria_alimento) {
+      return alertar('Selecciona la categoría del alimento. Es necesaria para estimar el impacto ambiental.');
+    }
+
+    // Validar fecha de caducidad para bolsas de tiempo limitado
     if (form.tipo_form === 'bolsa') {
       const fc = form.fecha_caducidad?.trim();
       if (!fc) return alertar('La fecha de caducidad es obligatoria');
@@ -191,10 +214,12 @@ export default function BolsasRestauranteScreen() {
       es_mas_vendido: form.es_mas_vendido,
       es_precio_bajo: form.es_precio_bajo,
     };
-    // El backend calcula co2_salvado_kg automáticamente a partir del peso
+    // categoria_alimento aplica a todos los tipos de publicación
+    payload.categoria_alimento = form.categoria_alimento || null;
+    // peso y fecha de caducidad solo para bolsas
+    // co2_salvado_kg (impacto estimado por unidad) es calculado por el backend
     if (form.tipo_form === 'bolsa') {
       payload.peso_kg = parseFloat(form.peso_kg) || 0.5;
-      // BUG 1: Enviar fecha_caducidad en formato YYYY-MM-DD
       const [d, m, y] = form.fecha_caducidad.split('/');
       if (d && m && y) payload.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
     }
@@ -209,7 +234,7 @@ export default function BolsasRestauranteScreen() {
       // Mostrar CO₂ calculado por el servidor (nunca calculado en frontend)
       const co2 = res?.data?.co2_salvado_kg;
       if (co2 != null && co2 > 0) {
-        setCo2Toast(`🌱 Impacto estimado: ${co2} kg CO₂e potencialmente evitados`);
+        setCo2Toast(`🌱 Impacto estimado por unidad: ${co2} kg CO₂e potenciales`);
         setTimeout(() => setCo2Toast(null), 5000);
       }
     } catch (e: any) {
@@ -499,9 +524,30 @@ export default function BolsasRestauranteScreen() {
               </View>
             </View>
 
+            {/* Categoría del alimento — aplica a toda publicación alimentaria */}
+            <Text style={s.sectionLabel}>🌿 Categoría del alimento{!editId ? ' *' : ''}</Text>
+            <Text style={s.catAlimentoHint}>
+              Selecciona el tipo principal de alimento de este producto.{'\n'}
+              Se usa para estimar el impacto potencial por unidad y no corresponde a la categoría de tu negocio.
+            </Text>
+            <View style={s.catAlimentoGrid}>
+              {CATEGORIAS_ALIMENTO.map(({ value, label, emoji }) => (
+                <TouchableOpacity
+                  key={value}
+                  style={[s.catChip, form.categoria_alimento === value && s.catChipActive]}
+                  onPress={() => set('categoria_alimento')(value)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={s.catChipEmoji}>{emoji}</Text>
+                  <Text style={[s.catChipText, form.categoria_alimento === value && s.catChipTextActive]}>
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             {form.tipo_form === 'bolsa' && (
               <>
-                {/* BUG 1: Fecha de caducidad obligatoria */}
                 <Field
                   label="Fecha de caducidad * (DD/MM/YYYY)"
                   value={form.fecha_caducidad}
@@ -510,16 +556,15 @@ export default function BolsasRestauranteScreen() {
                   keyboard="numeric"
                 />
                 <Field
-                  label="Peso aproximado del producto (kg)"
+                  label="Peso aproximado por unidad (kg)"
                   value={form.peso_kg}
                   onChange={set('peso_kg')}
                   placeholder="0.5"
                   keyboard="numeric"
                 />
-                {/* CO₂: calculado exclusivamente en backend según categoría del negocio */}
                 <View style={s.co2Info}>
                   <Text style={s.co2InfoText}>
-                    🌱 Bocara calculará automáticamente el impacto estimado según el peso y la categoría del alimento. El valor se mostrará al guardar.
+                    🌱 Bocara calculará el impacto estimado por unidad cuando haya un factor verificado para la categoría seleccionada. Si no está disponible, el producto se publicará igualmente.
                   </Text>
                 </View>
               </>
@@ -681,6 +726,17 @@ const s = StyleSheet.create({
   clasifChipEmoji: { fontSize: 14 },
   clasifChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   clasifChipTextActive: { color: '#fff', fontWeight: '700' },
+  catAlimentoHint: { fontSize: 12, color: Colors.textSecondary, lineHeight: 18, marginBottom: 10, marginTop: -6 },
+  catAlimentoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginBottom: 16 },
+  catChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20,
+    paddingHorizontal: 10, paddingVertical: 7, backgroundColor: Colors.white,
+  },
+  catChipActive: { backgroundColor: '#14532D', borderColor: '#14532D' },
+  catChipEmoji: { fontSize: 13 },
+  catChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  catChipTextActive: { color: '#fff', fontWeight: '700' },
   co2Info: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BBF7D0' },
   co2InfoText: { fontSize: 12, color: '#166534', lineHeight: 18 },
   co2ToastBanner: { backgroundColor: '#D1FAE5', padding: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#6EE7B7' },

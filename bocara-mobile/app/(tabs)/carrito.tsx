@@ -28,7 +28,7 @@ export default function CarritoScreen() {
     );
   }
 
-  const co2Total = items.reduce((sum, i) => sum + i.bolsa.co2_salvado_kg * i.cantidad, 0);
+  const co2Total = items.reduce((sum, i) => sum + (i.bolsa.co2_salvado_kg ?? 0) * i.cantidad, 0);
   const ahorrado = items.reduce((sum, i) => sum + (i.bolsa.precio_original - i.bolsa.precio_descuento) * i.cantidad, 0);
 
   return (
@@ -84,7 +84,7 @@ export default function CarritoScreen() {
             <View style={s.impactDivider} />
             <View style={s.impactItem}>
               <Text style={s.impactNum}>{co2Total > 0 ? co2Total.toFixed(1) : 'N/D'}</Text>
-              <Text style={s.impactLabel}>kg CO₂{co2Total > 0 ? ' evitado' : ' (sin datos)'}</Text>
+              <Text style={s.impactLabel}>kg CO₂e{co2Total > 0 ? ' estimado' : ' (sin datos)'}</Text>
             </View>
             <View style={s.impactDivider} />
             <View style={s.impactItem}>

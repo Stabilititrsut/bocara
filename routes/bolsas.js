@@ -177,12 +177,14 @@ router.post('/', authMiddleware, async (req, res) => {
   if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'Solo los restaurantes pueden crear bolsas' });
 
-  // BUG 1: SQL para agregar columna si no existe aún
-  console.log('[BOLSAS] SQL necesario si la columna no existe:\nALTER TABLE bolsas ADD COLUMN IF NOT EXISTS fecha_caducidad date;');
+  // SQL para agregar columnas si no existen aún (idempotente)
+  console.log('[BOLSAS] SQL necesario si las columnas no existen:\n' +
+    'ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS fecha_caducidad date;\n' +
+    'ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS categoria_alimento text;');
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, imagen_url, peso_kg, fecha_caducidad,
+    permite_envio, imagen_url, peso_kg, fecha_caducidad, categoria_alimento,
     categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
     es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
@@ -212,12 +214,14 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
   const pesoKg = parseFloat(peso_kg) || 0.5;
-  // CO₂ calculado automáticamente — no se acepta del cliente
-  const categoriaParaCO2 = categoria || negocio?.categoria || '';
-  const impacto = await calcularImpactoProducto(supabase, pesoKg, categoriaParaCO2);
-  const co2Calculado = impacto.co2e_kg;
+  // co2_salvado_kg = co2_estimado_por_unidad = peso_kg × factor(categoria_alimento)
+  // Se usa categoria_alimento (tipo de alimento), NO la categoria del negocio.
+  // Cuando sin_datos=true: co2_salvado_kg=null (sin información, distinto de 0).
+  const catAlimentoPOST = categoria_alimento || '';
+  const impacto = await calcularImpactoProducto(supabase, pesoKg, catAlimentoPOST);
+  const co2Calculado = impacto.sin_datos ? null : impacto.co2e_kg;
   if (impacto.sin_datos) {
-    console.warn(`[BOLSAS] Sin factor CO₂ para categoría "${categoriaParaCO2}" — co2_salvado_kg quedará en 0`);
+    console.warn(`[BOLSAS] Sin factor verificado para categoria_alimento="${catAlimentoPOST}" — co2_salvado_kg=null`);
   }
 
   let { data, error } = await supabase
@@ -233,6 +237,7 @@ router.post('/', authMiddleware, async (req, res) => {
       permite_envio: permite_envio || false,
       peso_kg: pesoKg,
       co2_salvado_kg: co2Calculado,
+      categoria_alimento: categoria_alimento || null,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
       fecha_caducidad: fecha_caducidad || null,
@@ -282,7 +287,7 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa } = await supabase
     .from('bolsas')
-    .select('negocio_id, estado_aprobacion, negocios(propietario_id)')
+    .select('negocio_id, estado_aprobacion, peso_kg, categoria_alimento, negocios(propietario_id)')
     .eq('id', req.params.id)
     .single();
   if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
@@ -291,7 +296,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','activo','imagen_url','fecha_caducidad',
+    'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
     'es_destacado','es_mas_vendido','es_precio_bajo'];
   const updates = {};
@@ -309,16 +314,20 @@ router.put('/:id', authMiddleware, async (req, res) => {
     updates.estado_aprobacion = req.body.estado_aprobacion;
   }
 
-  // Recalcular CO₂ si se envía peso_kg
-  if (req.body.peso_kg !== undefined) {
-    const pesoKg = parseFloat(req.body.peso_kg) || 0.5;
-    updates.peso_kg = pesoKg;
-    const { data: neg } = await supabase.from('negocios').select('categoria').eq('id', bolsa.negocio_id).single();
-    const categoriaParaCO2 = updates.categoria || neg?.categoria || '';
-    const impactoEdit = await calcularImpactoProducto(supabase, pesoKg, categoriaParaCO2);
-    updates.co2_salvado_kg = impactoEdit.co2e_kg;
+  // Recalcular co2_estimado_por_unidad cuando cambia peso_kg o categoria_alimento.
+  // Se usa la categoria_alimento del body (si viene) o la existente en la bolsa.
+  // Nunca se usa la categoria del negocio para el cálculo de CO₂.
+  if (req.body.peso_kg !== undefined || req.body.categoria_alimento !== undefined) {
+    const pesoKg = parseFloat(req.body.peso_kg ?? bolsa.peso_kg) || 0.5;
+    if (req.body.peso_kg !== undefined) updates.peso_kg = pesoKg;
+    // updates.categoria_alimento ya fue seteado por el loop de campos si venía en el body
+    const catAlimentoPUT = updates.categoria_alimento !== undefined
+      ? (updates.categoria_alimento || null)
+      : (bolsa.categoria_alimento || null);
+    const impactoEdit = await calcularImpactoProducto(supabase, pesoKg, catAlimentoPUT || '');
+    updates.co2_salvado_kg = impactoEdit.sin_datos ? null : impactoEdit.co2e_kg;
     if (impactoEdit.sin_datos) {
-      console.warn(`[BOLSAS] Sin factor CO₂ al editar para categoría "${categoriaParaCO2}"`);
+      console.warn(`[BOLSAS] Sin factor verificado al editar para categoria_alimento="${catAlimentoPUT || '(sin categoría)'}" — co2_salvado_kg=null`);
     }
   }
 

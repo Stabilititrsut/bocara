@@ -202,3 +202,180 @@ CREATE TABLE IF NOT EXISTS resenas (
   UNIQUE(pedido_id)
 );
 CREATE INDEX IF NOT EXISTS idx_resenas_negocio ON resenas(negocio_id);
+
+-- 18. CO₂: separación categoria_negocio / categoria_alimento + trazabilidad
+--     2026-06-22
+--
+--     Motivo: los 7 factores originales en factores_co2_alimentos mapean categorías
+--     de negocio (Restaurante, Cafetería, etc.) a valores de CO₂. Eso es incorrecto
+--     metodológicamente: la categoría del negocio no determina la composición del
+--     alimento rescatado. Además, los valores no son trazables a filas/páginas
+--     específicas de FAO 2013.
+--
+--     Consecuencia: co2_salvado_kg = NULL en todos los productos hasta que un
+--     administrador verifique y active factores por categoría alimentaria real.
+--     Esto no bloquea la publicación, venta ni recogida de productos.
+
+-- 18a. Columnas de trazabilidad en factores_co2_alimentos
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS documento    TEXT;
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS pagina_tabla TEXT;
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS anio         INTEGER;
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS region       TEXT;
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS alcance      TEXT;
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS unidad       TEXT DEFAULT 'kgCO2e/kg';
+ALTER TABLE factores_co2_alimentos ADD COLUMN IF NOT EXISTS verificado   BOOLEAN DEFAULT false;
+
+-- 18b. Desactivar todos los factores de categorías de negocio
+--      No se eliminan: quedan como registro histórico con activo=false, verificado=false.
+UPDATE factores_co2_alimentos
+SET
+  activo     = false,
+  verificado = false,
+  notas      = COALESCE(notas, '') ||
+    ' | DESACTIVADO 2026-06-22: mapeaba categoría de negocio, no categoría alimentaria.'
+    ' Sin trazabilidad exacta a página/tabla/fila/región de fuente primaria. Ver migration 18.'
+WHERE categoria IN (
+  'Panadería','Cafetería','Supermercado','Sushi','Pizza','Restaurante','Comida Típica'
+);
+
+-- 18c. Limpiar valores históricos de CO₂ en bolsas
+--      Los valores existentes fueron calculados con factores no verificables.
+--      NULL = sin información suficiente (distinto de 0 = impacto calculado igual a cero).
+--      Se elimina primero la restricción NOT NULL si existe, para poder asignar NULL.
+ALTER TABLE bolsas ALTER COLUMN co2_salvado_kg DROP NOT NULL;
+UPDATE bolsas
+SET co2_salvado_kg = NULL
+WHERE co2_salvado_kg IS NOT NULL;
+
+-- 18d. Campo categoria_alimento en bolsas (separado de la categoría del negocio)
+--      El restaurante seleccionará el tipo de alimento al crear/editar el producto.
+--      El backend usa este campo (no la categoría del negocio) para buscar el factor CO₂.
+ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS categoria_alimento TEXT;
+
+-- 18e. Nuevos factores por categoría alimentaria real
+--      TODOS inactivos (activo=false, verificado=false) hasta verificación exacta.
+--
+--      Para activar un factor:
+--        1. Abrir el documento citado en la columna "documento".
+--        2. Localizar la tabla/página indicada en "pagina_tabla".
+--        3. Leer el valor de la fila correspondiente.
+--        4. Verificar la metodología: factor = GHG_total_grupo (Mt CO₂e) / desperdicio_total_grupo (Mt).
+--        5. Si el valor coincide, actualizar: SET verificado=true, activo=true, fuente='FAO 2013 ...',
+--           anio=2013, region='...', alcance='...'.
+--        6. Si difiere, corregir factor_kg_co2e_por_kg antes de activar.
+--
+--      fuente = 'Pendiente de verificación documental' indica que el valor es una
+--      propuesta bibliográfica, NO un dato confirmado como fuente.
+INSERT INTO factores_co2_alimentos
+  (categoria, factor_kg_co2e_por_kg, fuente, version_fuente,
+   documento, pagina_tabla, anio, region, alcance, unidad, notas, activo, verificado)
+VALUES
+  ('cereales',
+   1.0, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Cereals", valor global sin LUC',
+   2013, 'Global', 'Producción agrícola, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Activar tras confirmar: GHG_cereales (Mt CO₂e) ÷ desperdicio_cereales (Mt) = 1.0.',
+   false, false),
+
+  ('frutas',
+   0.4, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Fruits & Vegetables"; confirmar si FAO 2013 agrupa frutas con verduras',
+   2013, 'Global', 'Producción agrícola, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Confirmar si el documento desagrega frutas de verduras o las presenta en una sola fila.',
+   false, false),
+
+  ('verduras',
+   0.4, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Fruits & Vegetables"; confirmar si FAO 2013 agrupa verduras con frutas',
+   2013, 'Global', 'Producción agrícola, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Confirmar agrupación frutas/verduras antes de activar.',
+   false, false),
+
+  ('raices_tuberculos',
+   0.3, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Roots & Tubers", valor global sin LUC',
+   2013, 'Global', 'Producción agrícola, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1.',
+   false, false),
+
+  ('legumbres',
+   0.9, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Oilseeds & Pulses"; FAO 2013 puede agrupar oleaginosas y legumbres',
+   2013, 'Global', 'Producción agrícola, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Verificar si el documento desagrega legumbres de oleaginosas.',
+   false, false),
+
+  ('lacteos',
+   1.3, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Milk & Dairy", valor global sin LUC',
+   2013, 'Global', 'Producción, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1.',
+   false, false),
+
+  ('huevos',
+   1.6, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Eggs", valor global sin LUC',
+   2013, 'Global', 'Producción, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1.',
+   false, false),
+
+  ('pollo',
+   3.7, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Meat — Poultry", valor global sin LUC',
+   2013, 'Global', 'Producción, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1.',
+   false, false),
+
+  ('cerdo',
+   2.8, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar denominación exacta de fila (Pig / Swine / Pork) en el documento',
+   2013, 'Global', 'Producción, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Confirmar nombre de la fila en el documento.',
+   false, false),
+
+  ('carne_bovina',
+   9.5, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Meat — Bovine", valor global SIN LUC (con LUC puede ser 15-27 kgCO₂e/kg)',
+   2013, 'Global', 'Producción, sin LUC', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Al activar: documentar explícitamente que se excluye LUC y mostrarlo al usuario final.',
+   false, false),
+
+  ('pescado_mariscos',
+   2.9, 'Pendiente de verificación documental', NULL,
+   'Food Wastage Footprint: Impacts on Natural Resources. FAO, 2013. ISBN 978-92-5-107752-8 (i3347e.pdf)',
+   'Annex 1, Table A1 — verificar fila "Fish & Seafood"; el valor varía por especie y método (pesca/acuicultura)',
+   2013, 'Global', 'Captura/producción, sin procesamiento', 'kgCO2e/kg',
+   'Valor propuesto (NO VERIFICADO). Fuente propuesta: FAO 2013 Annex 1. '
+   'Varía significativamente entre pesca de captura y acuicultura. Verificar antes de activar.',
+   false, false),
+
+  ('comida_mixta',
+   0, 'Sin factor asignable', NULL,
+   NULL, NULL, NULL, NULL, NULL, 'kgCO2e/kg',
+   'Sin metodología documentada para composición ponderada de ingredientes mixtos. '
+   'Impacto siempre no disponible. activo=false permanente hasta definir metodología.',
+   false, false),
+
+  ('otro',
+   0, 'Sin clasificación', NULL,
+   NULL, NULL, NULL, NULL, NULL, 'kgCO2e/kg',
+   'Categoría de último recurso. Impacto no disponible. activo=false permanente.',
+   false, false)
+
+ON CONFLICT (categoria) DO NOTHING;
