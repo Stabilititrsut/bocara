@@ -92,7 +92,7 @@ export default function NegocioDetailScreen() {
   const [toggling,       setToggling]       = useState(false);
   const [favBolsaIds,    setFavBolsaIds]    = useState<Set<string>>(new Set());
   const [resenas,        setResenas]        = useState<any[]>([]);
-  const [impacto,        setImpacto]        = useState<{ kg_rescatados: number; co2_evitado: number } | null>(null);
+  const [impacto,        setImpacto]        = useState<{ kg_rescatados: number; unidades_rescatadas: number; pedidos_completados: number; ventas_recuperadas: number } | null>(null);
   const [loading,        setLoading]        = useState(true);
 
   // Carga inicial
@@ -308,18 +308,22 @@ export default function NegocioDetailScreen() {
                 <Text style={[s.pillText, s.pillTextDark]}>Solo recogida en local</Text>
               </View>
             </ScrollView>
-          {/* Impacto acumulado del negocio */}
-          {impacto && impacto.kg_rescatados > 0 && (
+          {/* Contribución al aprovechamiento */}
+          {impacto && impacto.pedidos_completados > 0 && (
             <View style={s.impactoWrap}>
-              <View style={s.impactoItem}>
-                <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)}</Text>
-                <Text style={s.impactoLbl}>🍽️ kg rescatados</Text>
+              <Text style={s.impactoHeading}>Contribución al aprovechamiento</Text>
+              <View style={s.impactoRow}>
+                <View style={s.impactoItem}>
+                  <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)} kg</Text>
+                  <Text style={s.impactoLbl}>🍽️ aprox. aprovechados</Text>
+                </View>
+                <View style={s.impactoDivider} />
+                <View style={s.impactoItem}>
+                  <Text style={s.impactoNum}>{impacto.unidades_rescatadas}</Text>
+                  <Text style={s.impactoLbl}>🛍️ rescatados</Text>
+                </View>
               </View>
-              <View style={s.impactoDivider} />
-              <View style={s.impactoItem}>
-                <Text style={s.impactoNum}>{impacto.co2_evitado.toFixed(1)}</Text>
-                <Text style={s.impactoLbl}>🌱 kg CO₂ evitado</Text>
-              </View>
+              <Text style={s.impactoFooter}>Basado en pedidos efectivamente recogidos.</Text>
             </View>
           )}
           </View>
@@ -554,15 +558,15 @@ const s = StyleSheet.create({
   pillText: { fontSize: 13, fontWeight: '700', color: DARK },
   pillTextDark: { color: '#fff' },
 
-  // Impact row
-  impactoWrap: {
-    flexDirection: 'row', backgroundColor: '#F0FFF4', borderRadius: 12,
-    padding: 12, marginTop: 10, alignItems: 'center',
-  },
+  // Contribución al aprovechamiento
+  impactoWrap:    { backgroundColor: '#F0FFF4', borderRadius: 12, padding: 12, marginTop: 10 },
+  impactoHeading: { fontSize: 11, fontWeight: '700', color: '#2E7D32', marginBottom: 8, textAlign: 'center' },
+  impactoRow:     { flexDirection: 'row', alignItems: 'center' },
   impactoItem:    { flex: 1, alignItems: 'center' },
   impactoDivider: { width: 1, height: 36, backgroundColor: '#A5D6A7' },
-  impactoNum:     { fontSize: 20, fontWeight: '900', color: '#2E7D32', marginBottom: 2 },
+  impactoNum:     { fontSize: 18, fontWeight: '900', color: '#2E7D32', marginBottom: 2 },
   impactoLbl:     { fontSize: 11, color: '#4CAF50', textAlign: 'center' },
+  impactoFooter:  { fontSize: 10, color: '#6B9D6B', marginTop: 8, textAlign: 'center' },
 
   // Chips (sticky)
   chipsWrap: {

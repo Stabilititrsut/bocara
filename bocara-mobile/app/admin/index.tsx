@@ -282,9 +282,8 @@ export default function AdminDashboard() {
           {skelStats ? [1,2,3].map(k => (
             <View key={k} style={[card(), s.statMini]}><Sk h={20} w={50} r={4} /></View>
           )) : [
-            { label: 'Usuarios',     val: stats?.total_usuarios || 0,                         color: BLUE  },
-            { label: 'Sin verificar', val: stats?.negocios_sin_verificar || 0,                color: '#F59E0B' },
-            { label: 'CO₂ ahorrado', val: `${(stats?.co2_total || 0).toFixed(1)} kg`,         color: GREEN },
+            { label: 'Usuarios',     val: stats?.total_usuarios || 0,       color: BLUE      },
+            { label: 'Sin verificar', val: stats?.negocios_sin_verificar || 0, color: '#F59E0B' },
           ].map(({ label, val, color }) => (
             <View key={label} style={[card(), s.statMini]}>
               <Text style={[s.statVal, { color }]}>{val}</Text>

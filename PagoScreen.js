@@ -123,13 +123,6 @@ export default function PagoScreen({ route, navigation }) {
           </View>
         )}
 
-        <View style={s.impactoBox}>
-          <Text style={{ fontSize: 16, marginRight: 8 }}>🌱</Text>
-          <Text style={{ color: "#166534", fontSize: 13 }}>
-            ¡Salvaste <Text style={{ fontWeight: "800" }}>{bolsa.co2_salvado_kg} kg CO₂</Text>!
-          </Text>
-        </View>
-
         <TouchableOpacity style={s.btnPrimario} onPress={() => navigation.navigate("Pedidos")}>
           <Text style={s.btnPrimarioText}>Ver mis pedidos</Text>
         </TouchableOpacity>
@@ -264,7 +257,6 @@ const s = StyleSheet.create({
   successSub: { fontSize: 14, color: "#64748b", marginBottom: 24 },
   codigoBox: { backgroundColor: "#f8fafc", borderRadius: 16, padding: 24, alignItems: "center", width: "100%", marginBottom: 16 },
   codigo: { fontFamily: "monospace", fontSize: 32, fontWeight: "900", color: "#16a34a", letterSpacing: 4 },
-  impactoBox: { flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", borderRadius: 12, padding: 14, width: "100%", marginBottom: 24 },
   btnPrimario: { backgroundColor: "#1a1a2e", borderRadius: 14, padding: 16, alignItems: "center", width: "100%", marginBottom: 10 },
   btnPrimarioText: { color: "#4ade80", fontWeight: "800", fontSize: 16 },
   btnSecundario: { borderRadius: 14, padding: 16, alignItems: "center", width: "100%" },

@@ -5,7 +5,6 @@ const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
 const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
 const { getReservadoPendiente, getReservasMap } = require('../services/stock');
-const { calcularImpactoProducto } = require('../services/impactoAmbiental');
 const router = express.Router();
 
 async function getNegocioIdParaUsuario(usuarioId) {
@@ -214,15 +213,6 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
   const pesoKg = parseFloat(peso_kg) || 0.5;
-  // co2_salvado_kg = co2_estimado_por_unidad = peso_kg × factor(categoria_alimento)
-  // Se usa categoria_alimento (tipo de alimento), NO la categoria del negocio.
-  // Cuando sin_datos=true: co2_salvado_kg=null (sin información, distinto de 0).
-  const catAlimentoPOST = categoria_alimento || '';
-  const impacto = await calcularImpactoProducto(supabase, pesoKg, catAlimentoPOST);
-  const co2Calculado = impacto.sin_datos ? null : impacto.co2e_kg;
-  if (impacto.sin_datos) {
-    console.warn(`[BOLSAS] Sin factor verificado para categoria_alimento="${catAlimentoPOST}" — co2_salvado_kg=null`);
-  }
 
   let { data, error } = await supabase
     .from('bolsas')
@@ -236,7 +226,6 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
       peso_kg: pesoKg,
-      co2_salvado_kg: co2Calculado,
       categoria_alimento: categoria_alimento || null,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
@@ -265,7 +254,6 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_inicio: hora_recogida_inicio || '18:00',
         hora_recogida_fin: hora_recogida_fin || '20:00',
         permite_envio: permite_envio || false,
-        co2_salvado_kg: co2Calculado,
         imagen_url: imagen_url || null,
       }])
       .select()
@@ -298,7 +286,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
     'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
-    'es_destacado','es_mas_vendido','es_precio_bajo'];
+    'es_destacado','es_mas_vendido','es_precio_bajo','peso_kg'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
@@ -312,23 +300,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
   } else if (req.body.estado_aprobacion !== undefined) {
     updates.estado_aprobacion = req.body.estado_aprobacion;
-  }
-
-  // Recalcular co2_estimado_por_unidad cuando cambia peso_kg o categoria_alimento.
-  // Se usa la categoria_alimento del body (si viene) o la existente en la bolsa.
-  // Nunca se usa la categoria del negocio para el cálculo de CO₂.
-  if (req.body.peso_kg !== undefined || req.body.categoria_alimento !== undefined) {
-    const pesoKg = parseFloat(req.body.peso_kg ?? bolsa.peso_kg) || 0.5;
-    if (req.body.peso_kg !== undefined) updates.peso_kg = pesoKg;
-    // updates.categoria_alimento ya fue seteado por el loop de campos si venía en el body
-    const catAlimentoPUT = updates.categoria_alimento !== undefined
-      ? (updates.categoria_alimento || null)
-      : (bolsa.categoria_alimento || null);
-    const impactoEdit = await calcularImpactoProducto(supabase, pesoKg, catAlimentoPUT || '');
-    updates.co2_salvado_kg = impactoEdit.sin_datos ? null : impactoEdit.co2e_kg;
-    if (impactoEdit.sin_datos) {
-      console.warn(`[BOLSAS] Sin factor verificado al editar para categoria_alimento="${catAlimentoPUT || '(sin categoría)'}" — co2_salvado_kg=null`);
-    }
   }
 
   let { data, error } = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();

@@ -66,7 +66,6 @@ export default function BolsasRestauranteScreen() {
   const [uploadFotoError, setUploadFotoError] = useState('');
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
   const [saving, setSaving] = useState(false);
-  const [co2Toast, setCo2Toast] = useState<string | null>(null);
   const fileInputRef = useRef<any>(null);
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -174,7 +173,7 @@ export default function BolsasRestauranteScreen() {
 
     // categoria_alimento obligatoria para todas las publicaciones nuevas
     if (!editId && !form.categoria_alimento) {
-      return alertar('Selecciona la categoría del alimento. Es necesaria para estimar el impacto ambiental.');
+      return alertar('Selecciona la categoría del alimento antes de publicar.');
     }
 
     // Validar fecha de caducidad para bolsas de tiempo limitado
@@ -217,7 +216,6 @@ export default function BolsasRestauranteScreen() {
     // categoria_alimento aplica a todos los tipos de publicación
     payload.categoria_alimento = form.categoria_alimento || null;
     // peso y fecha de caducidad solo para bolsas
-    // co2_salvado_kg (impacto estimado por unidad) es calculado por el backend
     if (form.tipo_form === 'bolsa') {
       payload.peso_kg = parseFloat(form.peso_kg) || 0.5;
       const [d, m, y] = form.fecha_caducidad.split('/');
@@ -231,12 +229,6 @@ export default function BolsasRestauranteScreen() {
         : await bolsasAPI.crear(payload);
       setModal(false);
       cargar();
-      // Mostrar CO₂ calculado por el servidor (nunca calculado en frontend)
-      const co2 = res?.data?.co2_salvado_kg;
-      if (co2 != null && co2 > 0) {
-        setCo2Toast(`🌱 Impacto estimado por unidad: ${co2} kg CO₂e potenciales`);
-        setTimeout(() => setCo2Toast(null), 5000);
-      }
     } catch (e: any) {
       alertar(e.message || 'Error al guardar');
     } finally {
@@ -284,11 +276,6 @@ export default function BolsasRestauranteScreen() {
         ))}
       </View>
 
-      {co2Toast && (
-        <View style={s.co2ToastBanner}>
-          <Text style={s.co2ToastBannerText}>{co2Toast}</Text>
-        </View>
-      )}
 
       {items.some(b => b.estado_aprobacion === 'pendiente') && (
         <View style={s.infoBanner}>
@@ -527,8 +514,7 @@ export default function BolsasRestauranteScreen() {
             {/* Categoría del alimento — aplica a toda publicación alimentaria */}
             <Text style={s.sectionLabel}>🌿 Categoría del alimento{!editId ? ' *' : ''}</Text>
             <Text style={s.catAlimentoHint}>
-              Selecciona el tipo principal de alimento de este producto.{'\n'}
-              Se usa para estimar el impacto potencial por unidad y no corresponde a la categoría de tu negocio.
+              Selecciona el tipo principal de alimento y su peso aproximado por unidad.
             </Text>
             <View style={s.catAlimentoGrid}>
               {CATEGORIAS_ALIMENTO.map(({ value, label, emoji }) => (
@@ -562,11 +548,6 @@ export default function BolsasRestauranteScreen() {
                   placeholder="0.5"
                   keyboard="numeric"
                 />
-                <View style={s.co2Info}>
-                  <Text style={s.co2InfoText}>
-                    🌱 Bocara calculará el impacto estimado por unidad cuando haya un factor verificado para la categoría seleccionada. Si no está disponible, el producto se publicará igualmente.
-                  </Text>
-                </View>
               </>
             )}
 
@@ -737,8 +718,4 @@ const s = StyleSheet.create({
   catChipEmoji: { fontSize: 13 },
   catChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   catChipTextActive: { color: '#fff', fontWeight: '700' },
-  co2Info: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BBF7D0' },
-  co2InfoText: { fontSize: 12, color: '#166534', lineHeight: 18 },
-  co2ToastBanner: { backgroundColor: '#D1FAE5', padding: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#6EE7B7' },
-  co2ToastBannerText: { fontSize: 13, color: '#065F46', fontWeight: '700' },
 });

@@ -359,7 +359,7 @@ router.post('/verify-phone-otp', async (req, res) => {
       { expiresIn: '30d' }
     );
     const { password_hash, ...u } = usuario;
-    res.json({ token, usuario: { puntos: 0, total_co2_salvado_kg: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, ...u } });
+    res.json({ token, usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, ...u } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -414,7 +414,7 @@ router.post('/oauth-complete', async (req, res) => {
     const { password_hash, ...u } = usuario;
     res.json({
       token,
-      usuario: { puntos: 0, total_co2_salvado_kg: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, ...u },
+      usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, ...u },
       esNuevo,
     });
   } catch (err) {
@@ -457,7 +457,7 @@ router.post('/login', async (req, res) => {
       { expiresIn: '30d' }
     );
     const { password_hash, ...u } = usuario;
-    res.json({ token, usuario: { puntos: 0, total_co2_salvado_kg: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, rol, ...u } });
+    res.json({ token, usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, rol, ...u } });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -473,16 +473,15 @@ router.get('/perfil', authMiddleware, async (req, res) => {
       .single();
     if (error || !usuario) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    let { total_bolsas_salvadas, total_co2_salvado_kg, total_ahorrado } = usuario;
-    if (!total_bolsas_salvadas && !total_co2_salvado_kg) {
+    let { total_bolsas_salvadas, total_ahorrado } = usuario;
+    if (!total_bolsas_salvadas && !total_ahorrado) {
       const { data: pedidos } = await supabase
         .from('pedidos')
-        .select('bolsas(precio_original,precio_descuento,co2_salvado_kg)')
+        .select('bolsas(precio_original,precio_descuento)')
         .eq('usuario_id', req.usuario.id)
         .eq('estado', 'recogido');
       if (pedidos?.length) {
         total_bolsas_salvadas = pedidos.length;
-        total_co2_salvado_kg = pedidos.reduce((s, p) => s + (p.bolsas?.co2_salvado_kg || 0), 0);
         total_ahorrado = pedidos.reduce((s, p) => s + ((p.bolsas?.precio_original || 0) - (p.bolsas?.precio_descuento || 0)), 0);
       }
     }
@@ -490,13 +489,11 @@ router.get('/perfil', authMiddleware, async (req, res) => {
     const { password_hash, ...u } = usuario;
     res.json({
       puntos: 0,
-      total_co2_salvado_kg: 0,
       total_bolsas_salvadas: 0,
       total_ahorrado: 0,
       rol: req.usuario.rol || 'cliente',
       ...u,
       total_bolsas_salvadas: total_bolsas_salvadas || 0,
-      total_co2_salvado_kg: parseFloat((total_co2_salvado_kg || 0).toFixed(2)),
       total_ahorrado: parseFloat((total_ahorrado || 0).toFixed(2)),
     });
   } catch (err) {
@@ -517,7 +514,7 @@ router.put('/perfil', authMiddleware, async (req, res) => {
     .from('usuarios')
     .update(updates)
     .eq('id', req.usuario.id)
-    .select('id,email,nombre,apellido,rol,telefono,puntos,total_bolsas_salvadas,total_co2_salvado_kg,total_ahorrado,avatar_url')
+    .select('id,email,nombre,apellido,rol,telefono,puntos,total_bolsas_salvadas,total_ahorrado,avatar_url')
     .single();
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);

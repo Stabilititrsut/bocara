@@ -151,6 +151,34 @@ const SQL_STATEMENTS = [
   "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS estado_aprobacion TEXT DEFAULT 'aprobado'",
   "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT",
   "UPDATE bolsas SET estado_aprobacion = 'aprobado' WHERE estado_aprobacion IS NULL",
+  // bolsas — peso para cálculo automático de CO₂
+  "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS peso_kg NUMERIC(10,3) DEFAULT 0.5",
+  // notificaciones — campo data para metadata extra
+  "ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS data JSONB",
+  // pedidos — estado en_preparacion
+  "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS comision_pasarela NUMERIC(10,2) DEFAULT 0",
+  // solicitudes de cambio de perfil de restaurante
+  `CREATE TABLE IF NOT EXISTS negocio_cambios_pendientes (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    negocio_id UUID REFERENCES negocios(id) ON DELETE CASCADE,
+    datos_propuestos JSONB NOT NULL,
+    estado TEXT DEFAULT 'pendiente',
+    motivo_rechazo TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW()),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc', NOW())
+  )`,
+  // factores de emisión CO₂ por defecto en configuracion
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_defecto','3.5') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_panaderia','1.0') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_restaurante','5.0') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_cafeteria','3.0') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_supermercado','3.5') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_sushi','5.5') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_pizza','2.5') ON CONFLICT(clave) DO NOTHING",
+  "INSERT INTO configuracion(clave,valor) VALUES('co2_factor_comida_tipica','5.0') ON CONFLICT(clave) DO NOTHING",
+  // Migración 19: marcar columnas CO₂ como obsoletas (no se actualizan desde 2026-06-22)
+  "COMMENT ON COLUMN bolsas.co2_salvado_kg IS 'OBSOLETO 2026-06-22: no actualizado por código productivo. Seguro eliminar tras backup.'",
+  "COMMENT ON COLUMN usuarios.total_co2_salvado_kg IS 'OBSOLETO 2026-06-22: no actualizado. Seguro eliminar tras backup.'",
 ];
 
 async function runSQLMigrations() {

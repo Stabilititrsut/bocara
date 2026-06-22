@@ -172,19 +172,12 @@ export default function AdminContenidoScreen() {
                   <Text style={s.descripcion} numberOfLines={2}>{item.descripcion}</Text>
                 )}
 
-                {/* Horario y CO₂ */}
+                {/* Horario */}
                 <View style={s.metaRow}>
                   {(item.hora_recogida_inicio || item.hora_recogida_fin) && (
                     <View style={s.metaChip}>
                       <Text style={s.metaChipText}>
                         ⏰ {item.hora_recogida_inicio ?? '—'} – {item.hora_recogida_fin ?? '—'}
-                      </Text>
-                    </View>
-                  )}
-                  {item.co2_salvado_kg != null && (
-                    <View style={[s.metaChip, s.co2Chip]}>
-                      <Text style={[s.metaChipText, s.co2Text]}>
-                        🌱 {item.co2_salvado_kg} kg CO₂
                       </Text>
                     </View>
                   )}
@@ -327,8 +320,6 @@ const s = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 4,
   },
   metaChipText: { fontSize: 11, color: '#94A3B8', fontWeight: '600' },
-  co2Chip: { backgroundColor: '#14532D' },
-  co2Text: { color: '#86EFAC' },
   clasifRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginBottom: 10 },
   clasifLabel: { fontSize: 10, color: '#64748B', fontWeight: '700' },
   clasifBadge: { backgroundColor: '#1A2744', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },

@@ -379,12 +379,6 @@ export default function ProductoScreen() {
                   <Text style={s.pillText}>A {distanciaTexto}</Text>
                 </View>
               )}
-              {bolsa.co2_salvado_kg != null && bolsa.co2_salvado_kg > 0 && (
-                <View style={s.pill}>
-                  <Ionicons name="leaf-outline" size={14} color={Colors.accent} />
-                  <Text style={s.pillText}>{bolsa.co2_salvado_kg} kg CO₂</Text>
-                </View>
-              )}
             </ScrollView>
 
             {/* Product name */}
@@ -451,18 +445,16 @@ export default function ProductoScreen() {
               />
             </View>
 
-            {/* Impact */}
-            <View style={s.impactCard}>
-              <Text style={s.impactEmoji}>🌱</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={s.impactTitle}>Impacto estimado</Text>
-                <Text style={s.impactText}>
-                  {bolsa.co2_salvado_kg != null && bolsa.co2_salvado_kg > 0
-                    ? `Este producto representa aproximadamente ${bolsa.co2_salvado_kg} kg CO₂e de impacto potencial por unidad. Estimación basada en el peso y la categoría alimentaria.`
-                    : 'Impacto no disponible para esta categoría. De todas formas estás rescatando comida de buena calidad.'}
-                </Text>
+            {/* Peso aproximado por unidad */}
+            {(bolsa as any).peso_kg > 0 && (
+              <View style={s.impactCard}>
+                <Text style={s.impactEmoji}>🍽️</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.impactTitle}>Peso aproximado por unidad</Text>
+                  <Text style={s.impactText}>{(bolsa as any).peso_kg} kg de alimentos</Text>
+                </View>
               </View>
-            </View>
+            )}
 
             {/* Share */}
             <TouchableOpacity style={s.whatsappBtn} onPress={compartirWhatsApp}>

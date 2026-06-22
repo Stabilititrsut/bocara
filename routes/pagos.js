@@ -212,7 +212,7 @@ router.post('/webhook', async (req, res) => {
         .from('pedidos')
         .update({ estado_pago: 'pagado', estado: 'confirmado' })
         .eq('id', pedidoId)
-        .select('*, usuarios(id,nombre,expo_push_token), negocios(id,propietario_id), bolsas(nombre,co2_salvado_kg)')
+        .select('*, usuarios(id,nombre,expo_push_token), negocios(id,propietario_id), bolsas(nombre)')
         .single();
 
       if (pedido) {

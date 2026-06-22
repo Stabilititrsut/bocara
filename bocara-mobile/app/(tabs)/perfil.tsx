@@ -92,12 +92,11 @@ export default function PerfilScreen() {
           </Text>
         </View>
 
-        {/* Stats de impacto */}
-        <Text style={s.sectionTitle}>Mi impacto ambiental</Text>
+        {/* Stats */}
+        <Text style={s.sectionTitle}>Mi actividad</Text>
         <View style={s.statsRow}>
           {[
             { icon: 'bag-outline', val: usuario.total_bolsas_salvadas || 0, label: 'Bolsas\nrescatadas', color: Colors.primary },
-            { icon: 'leaf-outline', val: `${(usuario.total_co2_salvado_kg || 0).toFixed(1)}kg`, label: 'CO₂e\nestimado', color: Colors.accent },
             { icon: 'wallet-outline', val: `Q${(usuario.total_ahorrado || 0).toFixed(0)}`, label: 'Total\nahorrado', color: Colors.textSecondary },
           ].map((stat) => (
             <View key={stat.label} style={s.statCard}>
@@ -108,24 +107,6 @@ export default function PerfilScreen() {
           ))}
         </View>
 
-        {/* Equivalencias CO2 */}
-        {(usuario.total_co2_salvado_kg || 0) > 0 && (
-          <View style={s.equivCard}>
-            <Text style={s.equivTitle}>¿Qué significa tu impacto?</Text>
-            <View style={s.equivItem}>
-              <Ionicons name="car-outline" size={16} color={Colors.primary} />
-              <Text style={s.equivText}>{((usuario.total_co2_salvado_kg || 0) / 0.21).toFixed(0)} km no recorridos en auto</Text>
-            </View>
-            <View style={s.equivItem}>
-              <Ionicons name="leaf-outline" size={16} color={Colors.primary} />
-              <Text style={s.equivText}>Como plantar {Math.max(1, Math.ceil((usuario.total_co2_salvado_kg || 0) / 22))} árbol{Math.ceil((usuario.total_co2_salvado_kg || 0) / 22) !== 1 ? 'es' : ''}</Text>
-            </View>
-            <View style={s.equivItem}>
-              <Ionicons name="restaurant-outline" size={16} color={Colors.primary} />
-              <Text style={s.equivText}>{usuario.total_bolsas_salvadas || 0} comidas que no se desperdiciaron</Text>
-            </View>
-          </View>
-        )}
 
         {/* Menú */}
         <View style={s.menuCard}>
@@ -182,10 +163,7 @@ const s = StyleSheet.create({
   statVal: { fontSize: 20, fontWeight: '900' },
   statLabel: { fontSize: 10, color: Colors.textSecondary, textAlign: 'center', lineHeight: 14 },
 
-  equivCard: { backgroundColor: Colors.white, borderRadius: 22, padding: 18, marginBottom: 24, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8 },
-  equivTitle: { fontSize: 15, fontWeight: '800', color: Colors.textPrimary, marginBottom: 14 },
-  equivItem: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
-  equivText: { fontSize: 13, color: Colors.textSecondary, flex: 1, lineHeight: 19 },
+
 
   menuCard: { backgroundColor: Colors.white, borderRadius: 24, overflow: 'hidden', marginBottom: 16, elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
   menuItem: { flexDirection: 'row', alignItems: 'center', padding: 18, gap: 14 },

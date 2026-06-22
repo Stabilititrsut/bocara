@@ -13,11 +13,10 @@ function adminOnly(req, res, next) {
 
 // GET /api/admin/stats
 router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
-  const [usersRes, negociosRes, pedidosRes, bolsasRes] = await Promise.all([
+  const [usersRes, negociosRes, pedidosRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
     supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
     supabase.from('pedidos').select('total,estado,estado_pago'),
-    supabase.from('bolsas').select('co2_salvado_kg'),
   ]);
   const pedidos = pedidosRes.data || [];
   const pagados = pedidos.filter(p => p.estado_pago === 'pagado');
@@ -37,7 +36,6 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
     pedidos_completados: pedidos.filter(p => p.estado === 'recogido').length,
     ingresos_totales: ingresos,
     comision_generada: comision,
-    co2_total: (bolsasRes.data || []).reduce((s, b) => s + (b.co2_salvado_kg || 0), 0),
   });
 });
 

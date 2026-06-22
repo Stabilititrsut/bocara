@@ -10,7 +10,6 @@ export interface Usuario {
   avatar_url?: string;
   puntos: number;
   total_bolsas_salvadas: number;
-  total_co2_salvado_kg: number;
   total_ahorrado: number;
   created_at: string;
 }
@@ -53,7 +52,7 @@ export interface Bolsa {
   hora_recogida_fin: string;
   fecha_disponible?: string;
   permite_envio: boolean;
-  co2_salvado_kg: number | null;
+  peso_kg?: number;
   categoria_alimento?: string | null;
   activo: boolean;
   negocios?: Negocio;

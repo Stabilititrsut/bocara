@@ -37,7 +37,7 @@ export default function DashboardRestauranteScreen() {
   const [negocio, setNegocio] = useState<any>(null);
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
-  const [impacto, setImpacto] = useState<{ kg_rescatados: number; co2_evitado: number } | null>(null);
+  const [impacto, setImpacto] = useState<{ kg_rescatados: number; unidades_rescatadas: number; pedidos_completados: number; ventas_recuperadas: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -222,24 +222,38 @@ export default function DashboardRestauranteScreen() {
           <MetricCard emoji="⏱️" label="Activas"  value={loading ? '—' : (stats?.activas || 0)}                      accent='#60A5FA' />
         </View>
 
-        {/* Impacto acumulado */}
+        {/* Contribución al aprovechamiento */}
         {impacto && (
           <View style={s.impactoCard}>
-            <Text style={s.impactoTitle}>🌍 Tu impacto acumulado</Text>
-            {impacto.kg_rescatados === 0 ? (
-              <Text style={s.impactoEmpty}>Aún no tienes ventas registradas. ¡Tu impacto empieza con la primera venta!</Text>
+            <Text style={s.impactoTitle}>🍽️ Tu contribución</Text>
+            {impacto.pedidos_completados === 0 ? (
+              <Text style={s.impactoEmpty}>Aún no tienes ventas registradas. ¡Tu contribución empieza con la primera venta!</Text>
             ) : (
-              <View style={s.impactoRow}>
-                <View style={s.impactoItem}>
-                  <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)}</Text>
-                  <Text style={s.impactoLbl}>🍽️ kg comida{'\n'}rescatada</Text>
+              <>
+                <View style={s.impactoRow}>
+                  <View style={s.impactoItem}>
+                    <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)}</Text>
+                    <Text style={s.impactoLbl}>kg aprox.{'\n'}aprovechados</Text>
+                  </View>
+                  <View style={s.impactoDivider} />
+                  <View style={s.impactoItem}>
+                    <Text style={s.impactoNum}>{impacto.unidades_rescatadas}</Text>
+                    <Text style={s.impactoLbl}>unidades{'\n'}rescatadas</Text>
+                  </View>
                 </View>
-                <View style={s.impactoDivider} />
-                <View style={s.impactoItem}>
-                  <Text style={s.impactoNum}>{impacto.co2_evitado.toFixed(1)}</Text>
-                  <Text style={s.impactoLbl}>🌱 kg CO₂{'\n'}evitado est.</Text>
+                <View style={[s.impactoRow, { marginTop: 10 }]}>
+                  <View style={s.impactoItem}>
+                    <Text style={s.impactoNum}>{impacto.pedidos_completados}</Text>
+                    <Text style={s.impactoLbl}>pedidos{'\n'}completados</Text>
+                  </View>
+                  <View style={s.impactoDivider} />
+                  <View style={s.impactoItem}>
+                    <Text style={s.impactoNum}>Q{impacto.ventas_recuperadas.toFixed(2)}</Text>
+                    <Text style={s.impactoLbl}>ventas{'\n'}recuperadas</Text>
+                  </View>
                 </View>
-              </View>
+                <Text style={s.impactoFooter}>Calculado a partir de pedidos efectivamente recogidos mediante Bocara.</Text>
+              </>
             )}
           </View>
         )}
@@ -367,4 +381,5 @@ const s = StyleSheet.create({
   impactoDivider: { width: 1, height: 44, backgroundColor: '#A5D6A7' },
   impactoNum:     { fontSize: 24, fontWeight: '900', color: '#2E7D32', marginBottom: 4 },
   impactoLbl:     { fontSize: 11, color: '#4CAF50', textAlign: 'center', lineHeight: 16 },
+  impactoFooter:  { fontSize: 10, color: '#6B9D6B', marginTop: 10, textAlign: 'center', lineHeight: 14 },
 });
