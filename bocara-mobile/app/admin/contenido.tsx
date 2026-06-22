@@ -217,7 +217,7 @@ export default function AdminContenidoScreen() {
                   </View>
                 )}
 
-                {/* Stock, fecha caducidad, peso, CO₂ */}
+                {/* Stock, fecha caducidad, peso, fecha creado */}
                 <View style={s.metaRow}>
                   {item.cantidad_disponible != null && (
                     <View style={s.metaChip}>
@@ -231,9 +231,7 @@ export default function AdminContenidoScreen() {
                   )}
                   {item.peso_kg != null && (
                     <View style={s.metaChip}>
-                      <Text style={s.metaChipText}>
-                        ⚖️ {item.peso_kg}kg · 🌱 {(parseFloat(item.peso_kg) * 2.5).toFixed(2)} kg CO₂
-                      </Text>
+                      <Text style={s.metaChipText}>⚖️ Peso aprox.: {item.peso_kg} kg</Text>
                     </View>
                   )}
                   {item.created_at && (
