@@ -49,6 +49,7 @@ export default function BolsasRestauranteScreen() {
   const [uploadFotoError, setUploadFotoError] = useState('');
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
   const [saving, setSaving] = useState(false);
+  const [co2Toast, setCo2Toast] = useState<string | null>(null);
   const fileInputRef = useRef<any>(null);
   const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
 
@@ -200,10 +201,17 @@ export default function BolsasRestauranteScreen() {
     if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
 
     try {
-      if (editId) await bolsasAPI.actualizar(editId, payload);
-      else await bolsasAPI.crear(payload);
+      const res = editId
+        ? await bolsasAPI.actualizar(editId, payload)
+        : await bolsasAPI.crear(payload);
       setModal(false);
       cargar();
+      // Mostrar CO₂ calculado por el servidor (nunca calculado en frontend)
+      const co2 = res?.data?.co2_salvado_kg;
+      if (co2 != null && co2 > 0) {
+        setCo2Toast(`🌱 Impacto estimado: ${co2} kg CO₂e potencialmente evitados`);
+        setTimeout(() => setCo2Toast(null), 5000);
+      }
     } catch (e: any) {
       alertar(e.message || 'Error al guardar');
     } finally {
@@ -250,6 +258,12 @@ export default function BolsasRestauranteScreen() {
           </TouchableOpacity>
         ))}
       </View>
+
+      {co2Toast && (
+        <View style={s.co2ToastBanner}>
+          <Text style={s.co2ToastBannerText}>{co2Toast}</Text>
+        </View>
+      )}
 
       {items.some(b => b.estado_aprobacion === 'pendiente') && (
         <View style={s.infoBanner}>
@@ -502,15 +516,11 @@ export default function BolsasRestauranteScreen() {
                   placeholder="0.5"
                   keyboard="numeric"
                 />
-                {/* BUG 3: CO₂ calculado automáticamente — campo bloqueado */}
-                <View style={{ marginBottom: 4 }}>
-                  <Text style={sf.label}>🔒 CO₂ estimado evitado (kg) — calculado automáticamente</Text>
-                  <View style={s.co2ReadOnly}>
-                    <Text style={s.co2ReadOnlyText}>
-                      🌱 {((parseFloat(form.peso_kg) || 0.5) * 2.5).toFixed(2)} kg CO₂
-                    </Text>
-                    <Text style={s.co2ReadOnlyHint}>Basado en {form.peso_kg || '0.5'} kg × 2.5</Text>
-                  </View>
+                {/* CO₂: calculado exclusivamente en backend según categoría del negocio */}
+                <View style={s.co2Info}>
+                  <Text style={s.co2InfoText}>
+                    🌱 Bocara calculará automáticamente el impacto estimado según el peso y la categoría del alimento. El valor se mostrará al guardar.
+                  </Text>
                 </View>
               </>
             )}
@@ -673,7 +683,6 @@ const s = StyleSheet.create({
   clasifChipTextActive: { color: '#fff', fontWeight: '700' },
   co2Info: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BBF7D0' },
   co2InfoText: { fontSize: 12, color: '#166534', lineHeight: 18 },
-  co2ReadOnly: { backgroundColor: '#F0FDF4', borderWidth: 1.5, borderColor: '#BBF7D0', borderRadius: 12, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  co2ReadOnlyText: { fontSize: 15, fontWeight: '800', color: '#166534' },
-  co2ReadOnlyHint: { fontSize: 11, color: '#4ADE80' },
+  co2ToastBanner: { backgroundColor: '#D1FAE5', padding: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#6EE7B7' },
+  co2ToastBannerText: { fontSize: 13, color: '#065F46', fontWeight: '700' },
 });

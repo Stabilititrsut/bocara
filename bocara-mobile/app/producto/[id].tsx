@@ -379,10 +379,12 @@ export default function ProductoScreen() {
                   <Text style={s.pillText}>A {distanciaTexto}</Text>
                 </View>
               )}
-              <View style={s.pill}>
-                <Ionicons name="leaf-outline" size={14} color={Colors.accent} />
-                <Text style={s.pillText}>{bolsa.co2_salvado_kg} kg CO₂</Text>
-              </View>
+              {bolsa.co2_salvado_kg > 0 && (
+                <View style={s.pill}>
+                  <Ionicons name="leaf-outline" size={14} color={Colors.accent} />
+                  <Text style={s.pillText}>{bolsa.co2_salvado_kg} kg CO₂</Text>
+                </View>
+              )}
             </ScrollView>
 
             {/* Product name */}
@@ -455,7 +457,9 @@ export default function ProductoScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={s.impactTitle}>Tu impacto ambiental</Text>
                 <Text style={s.impactText}>
-                  Al rescatar esta bolsa evitas {bolsa.co2_salvado_kg} kg de CO₂ y salvas comida de buena calidad.
+                  {bolsa.co2_salvado_kg > 0
+                    ? `Al rescatar este producto evitas ~${bolsa.co2_salvado_kg} kg de CO₂e potencialmente y salvas comida de buena calidad.`
+                    : 'Impacto no disponible para esta categoría. De todas formas estás rescatando comida de buena calidad.'}
                 </Text>
               </View>
             </View>

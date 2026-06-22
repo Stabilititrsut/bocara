@@ -83,8 +83,8 @@ export default function CarritoScreen() {
             </View>
             <View style={s.impactDivider} />
             <View style={s.impactItem}>
-              <Text style={s.impactNum}>{co2Total.toFixed(1)}</Text>
-              <Text style={s.impactLabel}>kg CO₂ evitado</Text>
+              <Text style={s.impactNum}>{co2Total > 0 ? co2Total.toFixed(1) : 'N/D'}</Text>
+              <Text style={s.impactLabel}>kg CO₂{co2Total > 0 ? ' evitado' : ' (sin datos)'}</Text>
             </View>
             <View style={s.impactDivider} />
             <View style={s.impactItem}>
