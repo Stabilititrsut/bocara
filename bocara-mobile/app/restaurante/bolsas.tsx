@@ -26,6 +26,7 @@ const FORM_INIT = {
   hora_recogida_inicio: '18:00', hora_recogida_fin: '20:00',
   peso_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
+  fecha_caducidad: '',
   // Clasificación en el menú
   categoria_menu: '',
   es_tiempo_limitado: true,
@@ -123,6 +124,9 @@ export default function BolsasRestauranteScreen() {
         imagen_url: b.imagen_url || '',
         activo: b.activo,
         categoria: b.categoria || 'Porcentaje',
+        fecha_caducidad: b.fecha_caducidad
+          ? (() => { const d = new Date(b.fecha_caducidad + 'T12:00:00'); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; })()
+          : '',
         categoria_menu: b.categoria_menu || '',
         es_tiempo_limitado: b.es_tiempo_limitado ?? (b.tipo !== 'cupon'),
         es_promocion: b.es_promocion ?? (b.tipo === 'cupon'),
@@ -148,6 +152,18 @@ export default function BolsasRestauranteScreen() {
       return alertar('Nombre, precio original y precio Bocara son requeridos');
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
       return alertar('El código de la promoción es requerido');
+
+    // BUG 1: Validar fecha de caducidad para bolsas de tiempo limitado
+    if (form.tipo_form === 'bolsa') {
+      const fc = form.fecha_caducidad?.trim();
+      if (!fc) return alertar('La fecha de caducidad es obligatoria');
+      const parts = fc.split('/');
+      if (parts.length !== 3 || parts.some((p: string) => !p)) return alertar('Formato de fecha inválido. Usa DD/MM/YYYY');
+      const fechaCad = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+      const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+      if (isNaN(fechaCad.getTime())) return alertar('Fecha de caducidad inválida');
+      if (fechaCad < hoy) return alertar('La fecha de caducidad no puede ser anterior a hoy');
+    }
 
     setSaving(true);
     const precOrig = parseFloat(form.precio_original) || 0;
@@ -175,7 +191,12 @@ export default function BolsasRestauranteScreen() {
       es_precio_bajo: form.es_precio_bajo,
     };
     // El backend calcula co2_salvado_kg automáticamente a partir del peso
-    if (form.tipo_form === 'bolsa') payload.peso_kg = parseFloat(form.peso_kg) || 0.5;
+    if (form.tipo_form === 'bolsa') {
+      payload.peso_kg = parseFloat(form.peso_kg) || 0.5;
+      // BUG 1: Enviar fecha_caducidad en formato YYYY-MM-DD
+      const [d, m, y] = form.fecha_caducidad.split('/');
+      if (d && m && y) payload.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
     if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
 
     try {
@@ -268,7 +289,7 @@ export default function BolsasRestauranteScreen() {
                   <View style={s.descBadge}><Text style={s.descBadgeText}>-{desc(b)}%</Text></View>
                   {!b.activo && <View style={s.inactivaBadge}><Text style={s.inactivaText}>Inactiva</Text></View>}
                   {b.estado_aprobacion === 'pendiente' && (
-                    <View style={s.pendienteBadge}><Text style={s.pendienteText}>⏳ Pendiente</Text></View>
+                    <View style={s.enRevisionBadge}><Text style={s.enRevisionText}>En revisión</Text></View>
                   )}
                   {b.estado_aprobacion === 'rechazado' && (
                     <View style={s.rechazadaBadge}><Text style={s.rechazadaText}>✕ Rechazada</Text></View>
@@ -284,6 +305,9 @@ export default function BolsasRestauranteScreen() {
                   <Text style={s.cardSub} numberOfLines={1}>{b.descripcion}</Text>
                 )}
                 <Text style={s.cardHora}>⏰ {b.hora_recogida_inicio?.slice(0, 5)} – {b.hora_recogida_fin?.slice(0, 5)}</Text>
+                {b.estado_aprobacion === 'pendiente' && (
+                  <Text style={s.revisionMsg}>Esta publicación está siendo revisada por el administrador</Text>
+                )}
                 {b.estado_aprobacion === 'rechazado' && b.motivo_rechazo && (
                   <View style={s.motivoBox}><Text style={s.motivoText}>Motivo: {b.motivo_rechazo}</Text></View>
                 )}
@@ -463,6 +487,14 @@ export default function BolsasRestauranteScreen() {
 
             {form.tipo_form === 'bolsa' && (
               <>
+                {/* BUG 1: Fecha de caducidad obligatoria */}
+                <Field
+                  label="Fecha de caducidad * (DD/MM/YYYY)"
+                  value={form.fecha_caducidad}
+                  onChange={set('fecha_caducidad')}
+                  placeholder="31/12/2025"
+                  keyboard="numeric"
+                />
                 <Field
                   label="Peso aproximado del producto (kg)"
                   value={form.peso_kg}
@@ -470,11 +502,15 @@ export default function BolsasRestauranteScreen() {
                   placeholder="0.5"
                   keyboard="numeric"
                 />
-                <View style={s.co2Info}>
-                  <Text style={s.co2InfoText}>
-                    🌱 Impacto estimado calculado automáticamente en el servidor según la categoría del negocio y el peso ingresado.
-                    El valor se actualiza al guardar. Se muestra como "estimado" basado en factores FAO 2013.
-                  </Text>
+                {/* BUG 3: CO₂ calculado automáticamente — campo bloqueado */}
+                <View style={{ marginBottom: 4 }}>
+                  <Text style={sf.label}>🔒 CO₂ estimado evitado (kg) — calculado automáticamente</Text>
+                  <View style={s.co2ReadOnly}>
+                    <Text style={s.co2ReadOnlyText}>
+                      🌱 {((parseFloat(form.peso_kg) || 0.5) * 2.5).toFixed(2)} kg CO₂
+                    </Text>
+                    <Text style={s.co2ReadOnlyHint}>Basado en {form.peso_kg || '0.5'} kg × 2.5</Text>
+                  </View>
                 </View>
               </>
             )}
@@ -582,8 +618,9 @@ const s = StyleSheet.create({
   deleteBtn: { borderWidth: 1.5, borderColor: Colors.error, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
   deleteBtnText: { color: Colors.error, fontSize: 13, fontWeight: '700' },
 
-  pendienteBadge: { backgroundColor: '#451A03', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
-  pendienteText: { fontSize: 10, color: '#F59E0B', fontWeight: '700' },
+  enRevisionBadge: { backgroundColor: '#FEF3C7', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  enRevisionText: { fontSize: 10, color: '#92400E', fontWeight: '700' },
+  revisionMsg: { fontSize: 11, color: '#92400E', marginTop: 4, fontStyle: 'italic', lineHeight: 16 },
   rechazadaBadge: { backgroundColor: '#FEE2E2', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   rechazadaText: { fontSize: 10, color: '#DC2626', fontWeight: '700' },
   aprobadaBadge: { backgroundColor: '#DCFCE7', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
@@ -636,4 +673,7 @@ const s = StyleSheet.create({
   clasifChipTextActive: { color: '#fff', fontWeight: '700' },
   co2Info: { backgroundColor: '#F0FDF4', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#BBF7D0' },
   co2InfoText: { fontSize: 12, color: '#166534', lineHeight: 18 },
+  co2ReadOnly: { backgroundColor: '#F0FDF4', borderWidth: 1.5, borderColor: '#BBF7D0', borderRadius: 12, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  co2ReadOnlyText: { fontSize: 15, fontWeight: '800', color: '#166534' },
+  co2ReadOnlyHint: { fontSize: 11, color: '#4ADE80' },
 });

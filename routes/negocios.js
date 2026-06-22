@@ -334,11 +334,14 @@ router.get('/:id/bolsas', async (req, res) => {
 // POST /api/negocios/mi-negocio/solicitar-cambios
 // El restaurante envía { cambios: { campo: valor } } para revisión del admin
 router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) => {
-  console.log('[CAMBIOS PERFIL] usuario:', req.usuario.id);
+  console.log('[CAMBIOS PERFIL] usuario_id:', req.usuario.id, 'rol:', req.usuario.rol);
 
+  // BUG 6: buscar el negocio por propietario_id (NO por usuario.id directamente)
   const { data: negocio, error: negocioErr } = await supabase
     .from('negocios').select('id,propietario_id').eq('propietario_id', req.usuario.id).maybeSingle();
-  if (!negocio || negocioErr) return res.status(404).json({ error: 'Negocio no encontrado' });
+  console.log('[CAMBIOS PERFIL] negocio encontrado:', negocio, 'error:', negocioErr?.message);
+  if (negocioErr) return res.status(500).json({ error: 'Error al buscar el negocio: ' + negocioErr.message });
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado. Verifica que tu cuenta esté asociada a un negocio registrado.' });
   console.log('[CAMBIOS PERFIL] negocio:', negocio.id);
 
   // Frontend envía { cambios: { campo: valor, ... } }

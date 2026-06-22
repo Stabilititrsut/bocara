@@ -177,9 +177,12 @@ router.post('/', authMiddleware, async (req, res) => {
   if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'Solo los restaurantes pueden crear bolsas' });
 
+  // BUG 1: SQL para agregar columna si no existe aún
+  console.log('[BOLSAS] SQL necesario si la columna no existe:\nALTER TABLE bolsas ADD COLUMN IF NOT EXISTS fecha_caducidad date;');
+
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, imagen_url, peso_kg,
+    permite_envio, imagen_url, peso_kg, fecha_caducidad,
     categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
     es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
@@ -232,6 +235,7 @@ router.post('/', authMiddleware, async (req, res) => {
       co2_salvado_kg: co2Calculado,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
+      fecha_caducidad: fecha_caducidad || null,
       categoria_menu: categoria_menu || null,
       es_tiempo_limitado: es_tiempo_limitado ?? false,
       es_promocion: es_promocion ?? false,
@@ -287,11 +291,23 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','activo','estado_aprobacion','imagen_url',
+    'permite_envio','activo','imagen_url','fecha_caducidad',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
     'es_destacado','es_mas_vendido','es_precio_bajo'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
+
+  // BUG 2: Restaurantes nunca pueden aprobar directamente — strip any estado_aprobacion del body
+  if (req.usuario.rol !== 'admin') {
+    delete updates.estado_aprobacion;
+    // Si editó una bolsa aprobada o rechazada, vuelve a revisión del admin
+    if (bolsa.estado_aprobacion === 'aprobado' || bolsa.estado_aprobacion === 'rechazado') {
+      updates.estado_aprobacion = 'pendiente';
+      updates.motivo_rechazo = null;
+    }
+  } else if (req.body.estado_aprobacion !== undefined) {
+    updates.estado_aprobacion = req.body.estado_aprobacion;
+  }
 
   // Recalcular CO₂ si se envía peso_kg
   if (req.body.peso_kg !== undefined) {
@@ -304,12 +320,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (impactoEdit.sin_datos) {
       console.warn(`[BOLSAS] Sin factor CO₂ al editar para categoría "${categoriaParaCO2}"`);
     }
-  }
-
-  // Si un restaurante (no admin) edita una bolsa rechazada, reenviarla a revisión
-  if (req.usuario.rol !== 'admin' && bolsa.estado_aprobacion === 'rechazado') {
-    updates.estado_aprobacion = 'pendiente';
-    updates.motivo_rechazo = null;
   }
 
   let { data, error } = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();

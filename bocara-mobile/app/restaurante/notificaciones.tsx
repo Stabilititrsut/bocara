@@ -28,10 +28,14 @@ export default function RestauranteNotificacionesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const pollingRef = useRef<any>(null);
 
+  const TIPOS_RESTAURANTE = new Set(Object.keys(TIPO_CONFIG).filter(k => k !== 'default'));
+
   const cargar = useCallback(async () => {
     try {
       const res = await notificacionesAPI.listar();
-      setNotifs(res.data || []);
+      // BUG 4: Mostrar solo notificaciones relevantes para restaurantes
+      const todas: any[] = res.data || [];
+      setNotifs(todas.filter(n => !n.tipo || TIPOS_RESTAURANTE.has(n.tipo)));
     } catch { setNotifs([]); } finally { setLoading(false); setRefreshing(false); }
   }, []);
 

@@ -425,13 +425,13 @@ export default function ProductoScreen() {
             {/* Description */}
             {bolsa.descripcion && (
               <View style={s.textSection}>
-                <Text style={s.textSectionTitle}>Sobre esta bolsa</Text>
+                <Text style={s.textSectionTitle}>Descripción del producto</Text>
                 <Text style={s.textSectionBody}>{bolsa.descripcion}</Text>
               </View>
             )}
             {bolsa.contenido && (
               <View style={s.textSection}>
-                <Text style={s.textSectionTitle}>¿Qué puede contener?</Text>
+                <Text style={s.textSectionTitle}>Contenido</Text>
                 <Text style={s.textSectionBody}>{bolsa.contenido}</Text>
               </View>
             )}

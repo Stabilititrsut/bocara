@@ -175,6 +175,11 @@ export default function PerfilRestauranteScreen() {
 
   async function guardar() {
     if (camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
+    // BUG 5: DPI obligatorio
+    if (!dpiUrl) {
+      showToast('La foto del DPI es obligatoria para verificar tu cuenta', false);
+      return;
+    }
     setSaving(true);
     setToast(null);
     try {

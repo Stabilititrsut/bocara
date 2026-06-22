@@ -3,16 +3,29 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const router = express.Router();
 
+const TIPOS_RESTAURANTE = [
+  'negocio_aprobado','negocio_rechazado','negocio_suspendido',
+  'bolsa_aprobada','bolsa_rechazada','nuevo_pedido','pedido_en_preparacion',
+  'pedido_listo','liquidacion','liquidacion_pagada','perfil_aprobado','perfil_rechazado',
+];
+
 // GET /api/notificaciones
 router.get('/', authMiddleware, async (req, res) => {
-  let { data, error } = await supabase
+  let query = supabase
     .from('notificaciones')
     .select('*')
     .eq('usuario_id', req.usuario.id)
     .order('created_at', { ascending: false })
     .limit(50);
+
+  // BUG 4: Filtrar por tipos relevantes según rol
+  if (req.usuario.rol === 'restaurante') {
+    query = query.in('tipo', TIPOS_RESTAURANTE);
+  }
+
+  let { data, error } = await query;
   if (error) {
-    // Fallback sin order (por si la columna no existe)
+    // Fallback sin filtros adicionales
     const r = await supabase.from('notificaciones').select('*').eq('usuario_id', req.usuario.id).limit(50);
     data = r.data;
   }

@@ -175,6 +175,7 @@ export default function DashboardRestauranteScreen() {
 
   // ─── Dashboard normal ────────────────────────────────────────────────────────
   const ultimos5 = pedidos.slice(0, 5);
+  const faltaDpi = negocio && !negocio.dpi_foto_url && !negocio.datos_bancarios?.dpi_foto_url;
 
   return (
     <SafeAreaView style={s.root}>
@@ -183,6 +184,13 @@ export default function DashboardRestauranteScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={GOLD} />}
         showsVerticalScrollIndicator={false}
       >
+        {/* BUG 5: Advertencia DPI faltante */}
+        {faltaDpi && (
+          <TouchableOpacity style={s.dpiBanner} onPress={() => router.push('/restaurante/perfil' as any)} activeOpacity={0.85}>
+            <Text style={s.dpiBannerText}>⚠️ Completa tu perfil: falta subir la foto del DPI para activar tu cuenta →</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Header */}
         <View style={s.header}>
           <View style={s.headerTop}>
@@ -320,4 +328,7 @@ const s = StyleSheet.create({
 
   verTodosBtn:  { backgroundColor: WHITE, borderRadius: 12, padding: 14, alignItems: 'center', borderWidth: 1.5, borderColor: GOLD, marginTop: 4 },
   verTodosBtnText: { color: GOLD, fontWeight: '800', fontSize: 14 },
+
+  dpiBanner: { backgroundColor: '#FEF3C7', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1.5, borderColor: '#FDE68A' },
+  dpiBannerText: { fontSize: 13, color: '#92400E', fontWeight: '700', lineHeight: 19 },
 });
