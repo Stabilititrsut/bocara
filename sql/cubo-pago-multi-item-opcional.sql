@@ -1,23 +1,35 @@
 -- ╔══════════════════════════════════════════════════════════════════════════╗
--- ║  ADVERTENCIA: ARCHIVO OPCIONAL — NO EJECUTAR PARA EL MODELO ACTUAL     ║
+-- ║  ARCHIVO OBSOLETO — NO EJECUTAR                                        ║
 -- ║                                                                        ║
--- ║  El modelo vigente de Bocara es: 1 pedido → 1 bolsa (pedidos.bolsa_id) ║
--- ║  Este archivo agrega soporte para carrito multi-ítem.                  ║
+-- ║  Este archivo fue creado bajo el supuesto de que pedido_items no       ║
+-- ║  existía aún en producción. La introspección real (jun 2026) confirmó  ║
+-- ║  que pedido_items YA EXISTE con 36 filas y pedidos.cantidad YA EXISTE. ║
 -- ║                                                                        ║
--- ║  NO EJECUTAR hasta confirmar que:                                      ║
--- ║  1. El flujo de creación de pedidos Cubo usa pedido_items activamente  ║
--- ║  2. cubo-pago-schema.sql ya fue ejecutado exitosamente                 ║
--- ║  3. Se verificó con introspect-schema.sql que no hay conflictos        ║
+-- ║  La lógica multi-ítem (incluyendo confirmar_pago_cubo_multi_item)      ║
+-- ║  fue reemplazada e integrada directamente en cubo-pago-schema.sql v5   ║
+-- ║  como confirmar_pago_cubo (mismo nombre, lógica híbrida).              ║
+-- ║                                                                        ║
+-- ║  NO ejecutar este archivo. Ejecutar solo cubo-pago-schema.sql.        ║
 -- ╚══════════════════════════════════════════════════════════════════════════╝
 --
--- Evidencia de uso futuro:
---   · bocara-mobile/app/pago.tsx línea 166: envía items[] al llamar cubopago()
---   · routes/pagos.js línea 401-413: inserta en pedido_items con fallback explícito
---   · services/stock.js línea 10-28: lee de pedido_items con fallback a []
+-- Estado actual (verificado por introspección jun 2026):
+--   · pedido_items: EXISTE, 36 filas, columnas: id, pedido_id, bolsa_id, cantidad, precio_unitario
+--   · pedidos.cantidad: EXISTE (cantidad del primer ítem del carrito)
+--   · 8 pedidos con múltiples bolsas en pedido_items
+--   · 15 pedidos sin pedido_items (legacy: efectivo/PayU, no Cubo)
+--   · services/stock.js ya implementa el modelo híbrido correctamente
 --
--- Cuando el flujo Cubo esté activo y los datos anteriores ya existan en pedido_items,
--- ejecutar este archivo y luego reemplazar confirmar_pago_cubo por
--- confirmar_pago_cubo_multi_item (ver instrucciones al final).
+-- ¿Por qué este archivo era incorrecto?
+--   La premisa "ejecutar solo si pedido_items ya existe" era circular:
+--   la tabla ya existía, y el archivo que "la crea" no se debía ejecutar,
+--   pero la RPC principal asumía que NO existía. cubo-pago-schema.sql v5
+--   resuelve la contradicción: la RPC correcta es parte de la migración
+--   principal y pedido_items es un precheck (debe existir antes).
+--
+-- ¿Qué hay aquí que ya no es relevante?
+--   · CREATE TABLE pedido_items → no crear (ya existe)
+--   · ALTER TABLE pedidos ADD COLUMN cantidad → no crear (ya existe)
+--   · confirmar_pago_cubo_multi_item → reemplazado por confirmar_pago_cubo v5
 
 
 -- ════════════════════════════════════════════════════════════════════════════

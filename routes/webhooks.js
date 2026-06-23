@@ -250,6 +250,10 @@ async function procesarWebhookCubo(body) {
       case 'pedido_no_encontrado':
         return { statusCode: 200, warning: 'Pedido no encontrado (RPC)' };
 
+      case 'items_ausentes':
+        console.error('[CUBO WEBHOOK] Pedido sin items en pedido_items:', pedido.id, '—', rpcResult.detalle);
+        return { statusCode: 422, error: 'Pedido sin items — no puede procesarse como pago Cubo (pedido legacy o sin pedido_items)', detalle: rpcResult };
+
       case 'procesado': {
         const codigoRecogida = rpcResult.codigo_recogida || pedido.codigo_recogida;
         procesarEventosPedido(pedido.id).catch(err =>

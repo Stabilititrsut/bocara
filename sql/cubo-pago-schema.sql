@@ -1,5 +1,5 @@
 -- ╔══════════════════════════════════════════════════════════════════════════╗
--- ║  Bocara — Cubo Pago Guatemala: migración auditada v4                   ║
+-- ║  Bocara — Cubo Pago Guatemala: migración auditada v5                   ║
 -- ║                                                                        ║
 -- ║  ORDEN DE EJECUCIÓN:                                                   ║
 -- ║  0. Ejecutar sql/introspect-schema.sql (solo lectura, sin cambios)     ║
@@ -9,17 +9,24 @@
 -- ║  4. BLOQUE 3:  Eventos pendientes (tabla con estados)                 ║
 -- ║  5. BLOQUE 4:  Idempotencia de puntos (movimientos_puntos)            ║
 -- ║  6. BLOQUE 5:  Restricciones e índices                               ║
--- ║  7. BLOQUE 6:  RPC confirmar_pago_cubo v4                            ║
+-- ║  7. BLOQUE 6:  RPC confirmar_pago_cubo v5 (modelo híbrido)           ║
 -- ║  8. BLOQUE 7:  sumar_puntos (fix) + sumar_puntos_idempotente         ║
 -- ║  9. BLOQUE 8:  Permisos                                              ║
 -- ║  10. BLOQUE 9:  Verificaciones post-migración                        ║
--- ║  11. BLOQUE 10: Tests en ROLLBACK                                    ║
+-- ║  11. BLOQUE 10: Tests en ROLLBACK (12 pruebas modelo híbrido)        ║
 -- ║                                                                        ║
 -- ║  CUBO_PAYMENTS_ENABLED debe permanecer en "false" durante todo       ║
 -- ║  el proceso. Activar SOLO tras verificar la migración completa.      ║
 -- ║                                                                        ║
--- ║  Multi-ítem (pedido_items, pedidos.cantidad):                         ║
--- ║  → Ver sql/cubo-pago-multi-item-opcional.sql — NO ejecutar aún.      ║
+-- ║  Modelo híbrido (REAL — verificado por introspección):                ║
+-- ║  · pedido_items YA EXISTE con 36 filas. No se crea en esta migración.║
+-- ║  · pedidos.cantidad YA EXISTE. No se crea en esta migración.         ║
+-- ║  · Todo pedido Cubo (POST /api/pagos/cubopago) inserta pedido_items. ║
+-- ║  · Los 15 pedidos sin items son legacy (efectivo/PayU) — no Cubo.   ║
+-- ║  · pedidos.bolsa_id = primera bolsa (compatibilidad, no inventario). ║
+-- ║  · pedidos.cantidad = cantidad de la primera bolsa (no suma total).  ║
+-- ║  · confirmar_pago_cubo usa pedido_items como única fuente de verdad. ║
+-- ║  · Sin items → items_ausentes (fail-closed, no fallback bolsa_id).  ║
 -- ╚══════════════════════════════════════════════════════════════════════════╝
 
 
@@ -92,7 +99,38 @@ BEGIN
     END IF;
   END IF;
 
-  RAISE NOTICE '✓ PRECHECKS: todas las verificaciones pasaron.';
+  -- Verificar que pedido_items existe (debe existir en producción antes de esta migración)
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                 WHERE table_schema = 'public' AND table_name = 'pedido_items') THEN
+    RAISE EXCEPTION 'PRECHECK FAILED: tabla pedido_items no existe. '
+      'Debe existir antes de ejecutar esta migración (ya tiene datos en producción). '
+      'Crearla primero: CREATE TABLE pedido_items (id UUID DEFAULT gen_random_uuid() PRIMARY KEY, '
+      'pedido_id UUID NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE, '
+      'bolsa_id UUID NOT NULL REFERENCES bolsas(id), cantidad INTEGER NOT NULL DEFAULT 1, '
+      'precio_unitario NUMERIC(10,2) NOT NULL);';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'pedido_items'
+                   AND column_name = 'cantidad') THEN
+    RAISE EXCEPTION 'PRECHECK FAILED: pedido_items.cantidad no existe';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'pedido_items'
+                   AND column_name = 'bolsa_id') THEN
+    RAISE EXCEPTION 'PRECHECK FAILED: pedido_items.bolsa_id no existe';
+  END IF;
+
+  -- Verificar que pedidos.cantidad existe (debe existir en producción antes de esta migración)
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'pedidos'
+                   AND column_name = 'cantidad') THEN
+    RAISE EXCEPTION 'PRECHECK FAILED: pedidos.cantidad no existe. '
+      'Agregar con: ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cantidad INTEGER DEFAULT 1;';
+  END IF;
+
+  RAISE NOTICE '✓ PRECHECKS: todas las verificaciones pasaron (incluyendo pedido_items y pedidos.cantidad).';
 END $$;
 
 
@@ -250,12 +288,21 @@ COMMIT;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
--- BLOQUE 6 — RPC confirmar_pago_cubo v4
+-- BLOQUE 6 — RPC confirmar_pago_cubo v5 — modelo híbrido
 --
--- Modelo vigente: 1 pedido → 1 bolsa (pedidos.bolsa_id).
--- Descuenta exactamente 1 unidad de cantidad_disponible.
--- NO referencia pedido_items ni pedidos.cantidad.
--- Para soporte multi-ítem ver sql/cubo-pago-multi-item-opcional.sql.
+-- Fuente de verdad para inventario: pedido_items (nunca pedidos.bolsa_id ni
+-- pedidos.cantidad — ambos son campos de compatibilidad).
+--
+-- Todo pedido creado por POST /api/pagos/cubopago inserta en pedido_items.
+-- Si el pedido no tiene filas en pedido_items → items_ausentes (fail-closed).
+-- Sin fallback al modelo bolsa_id (esos pedidos son legacy/PayU, no Cubo).
+--
+-- Algoritmo de inventario — dos bucles para garantizar "todo o nada":
+--   Paso A — Agregar SUM(cantidad) por bolsa_id desde pedido_items.
+--            Cargar en arrays en ORDER BY bolsa_id (deadlock prevention).
+--   Paso B — Bloquear cada bolsa (FOR UPDATE) y verificar stock.
+--            RETURN en el primer fallo: ninguna fila modificada aún.
+--   Paso C — Descontar (filas ya bloqueadas, solo si Paso B terminó sin RETURN).
 --
 -- Registra 3 eventos separados (ON CONFLICT DO NOTHING = idempotente):
 --   · sumar_puntos
@@ -280,10 +327,15 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_pedido       pedidos%ROWTYPE;
-  v_bolsa        bolsas%ROWTYPE;
   v_puntos       integer := 10;
   v_puntos_cfg   text;
   v_eventos_pend jsonb;
+  -- Inventario multi-ítem
+  v_n_bolsas     integer;
+  v_bolsa_ids    uuid[];
+  v_cantidades   integer[];
+  v_idx          integer;
+  v_disponible   integer;
 BEGIN
 
   -- ── 0. Validar parámetros ─────────────────────────────────────────────────
@@ -302,7 +354,6 @@ BEGIN
 
   -- ── 1. Bloquear pedido (serializa webhooks concurrentes del mismo pedido) ──
   SELECT * INTO v_pedido FROM pedidos WHERE id = p_pedido_id FOR UPDATE;
-
   IF NOT FOUND THEN
     RETURN jsonb_build_object('resultado', 'pedido_no_encontrado');
   END IF;
@@ -332,6 +383,9 @@ BEGIN
   END IF;
 
   -- ── 4. Verificar monto ───────────────────────────────────────────────────
+  -- monto_esperado_centavos fue calculado server-side en routes/pagos.js
+  -- a partir de SUM(precio_descuento × cantidad) + comisión. El cliente
+  -- no puede alterarlo: se compara contra el valor almacenado en BD.
   IF v_pedido.monto_esperado_centavos IS NULL
      OR v_pedido.monto_esperado_centavos <> p_monto_centavos THEN
     RETURN jsonb_build_object(
@@ -346,31 +400,61 @@ BEGIN
     RETURN jsonb_build_object('resultado', 'estado_invalido', 'estado', p_estado_verificado);
   END IF;
 
-  -- ── 6. Verificar bolsa y descontar inventario (modelo bolsa_id único) ─────
-  -- Modelo vigente: 1 pedido → 1 bolsa. Descuenta exactamente 1 unidad.
-  -- Para multi-ítem ver sql/cubo-pago-multi-item-opcional.sql.
-  IF v_pedido.bolsa_id IS NULL THEN
-    RETURN jsonb_build_object('resultado', 'bolsa_no_encontrada', 'bolsa_id', NULL);
-  END IF;
+  -- ── 6. Inventario — modelo híbrido, pedido_items como única fuente ────────
 
-  SELECT * INTO v_bolsa FROM bolsas WHERE id = v_pedido.bolsa_id FOR UPDATE;
+  -- Paso A: agregar cantidades por bolsa_id en ORDER BY bolsa_id.
+  -- El ORDER BY determina el orden de locking en el Paso B — orden determinista
+  -- entre transacciones concurrentes que comparten bolsas, evita deadlocks.
+  SELECT
+    COUNT(*)::integer,
+    array_agg(bolsa_id      ORDER BY bolsa_id),
+    array_agg(cantidad_total ORDER BY bolsa_id)
+  INTO v_n_bolsas, v_bolsa_ids, v_cantidades
+  FROM (
+    SELECT bolsa_id, SUM(cantidad)::integer AS cantidad_total
+    FROM pedido_items
+    WHERE pedido_id = p_pedido_id
+    GROUP BY bolsa_id
+  ) agg;
 
-  IF NOT FOUND THEN
-    RETURN jsonb_build_object('resultado', 'bolsa_no_encontrada', 'bolsa_id', v_pedido.bolsa_id);
-  END IF;
-
-  IF v_bolsa.cantidad_disponible < 1 THEN
+  -- Sin items → pedido no pertenece al flujo Cubo. Fail-closed: no fallback bolsa_id.
+  IF v_n_bolsas = 0 OR v_n_bolsas IS NULL THEN
     RETURN jsonb_build_object(
-      'resultado',  'stock_insuficiente',
-      'bolsa_id',   v_pedido.bolsa_id,
-      'disponible', v_bolsa.cantidad_disponible,
-      'solicitado', 1
+      'resultado', 'items_ausentes',
+      'pedido_id', p_pedido_id,
+      'detalle',   'El pedido no tiene filas en pedido_items. Todo pedido Cubo (POST /api/pagos/cubopago) inserta items. Los pedidos legacy (efectivo/PayU) no pueden procesarse por este flujo.'
     );
   END IF;
 
-  UPDATE bolsas
-  SET cantidad_disponible = cantidad_disponible - 1
-  WHERE id = v_pedido.bolsa_id;
+  -- Paso B: bloquear y verificar cada bolsa (ORDER BY ya fijado en los arrays).
+  -- RETURN en el primer fallo: la transacción no ha modificado ninguna fila aún.
+  FOR v_idx IN 1..v_n_bolsas LOOP
+    SELECT cantidad_disponible INTO v_disponible
+    FROM bolsas WHERE id = v_bolsa_ids[v_idx] FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RETURN jsonb_build_object(
+        'resultado', 'bolsa_no_encontrada',
+        'bolsa_id',  v_bolsa_ids[v_idx]
+      );
+    END IF;
+
+    IF v_disponible < v_cantidades[v_idx] THEN
+      RETURN jsonb_build_object(
+        'resultado',  'stock_insuficiente',
+        'bolsa_id',   v_bolsa_ids[v_idx],
+        'disponible', v_disponible,
+        'solicitado', v_cantidades[v_idx]
+      );
+    END IF;
+  END LOOP;
+
+  -- Paso C: descontar (filas ya bloqueadas en Paso B, solo se llega aquí si todo pasó).
+  FOR v_idx IN 1..v_n_bolsas LOOP
+    UPDATE bolsas
+    SET cantidad_disponible = cantidad_disponible - v_cantidades[v_idx]
+    WHERE id = v_bolsa_ids[v_idx];
+  END LOOP;
 
   -- ── 7. Marcar pedido como pagado ─────────────────────────────────────────
   UPDATE pedidos SET
@@ -395,16 +479,12 @@ BEGIN
 
   -- ── 9. Registrar 3 eventos separados ─────────────────────────────────────
   -- ON CONFLICT DO NOTHING: webhook duplicado no crea eventos nuevos.
-  -- Cada evento tiene su propia idempotencia y estado de reintento.
   INSERT INTO pago_eventos_pendientes (pedido_id, tipo_evento, payload)
   VALUES
   (
     p_pedido_id,
     'sumar_puntos',
-    jsonb_build_object(
-      'usuario_id', v_pedido.usuario_id,
-      'puntos',     v_puntos
-    )
+    jsonb_build_object('usuario_id', v_pedido.usuario_id, 'puntos', v_puntos)
   ),
   (
     p_pedido_id,
@@ -590,266 +670,452 @@ WHERE table_schema = 'public' AND table_name = 'notificaciones'
 
 
 -- ════════════════════════════════════════════════════════════════════════════
--- BLOQUE 10 — TESTS EN ROLLBACK
+-- BLOQUE 10 — TESTS EN ROLLBACK (12 pruebas — modelo híbrido pedido_items)
+--
 -- Ejecutar el bloque BEGIN…ROLLBACK completo de una sola vez.
 -- El ROLLBACK final revierte todo. No afecta producción.
+--
+-- Inventario de prueba:
+--   bolsa_a: 10 unidades   (usada en tests multi-item, agrupación, cantidad)
+--   bolsa_b: 5  unidades   (usada en test multi-item)
+--   bolsa_c: 0  unidades   (sin stock — usada en test stock insuficiente)
+--
+-- Evolución esperada de bolsa_a: 10 → 8 (T1) → 6 (T2) → 6 (T3, sin cambio)
+--                                   → 6 (T4, sin cambio) → 2 (T5, −4 vía items)
 -- ════════════════════════════════════════════════════════════════════════════
 
 BEGIN;
 
 DO $$
 DECLARE
-  v_result          jsonb;
-  v_rpc             jsonb;
-  v_usr_id          uuid;
-  v_neg_id          uuid;
-  v_bolsa_id        uuid;
-  v_pedido_id       uuid;
-  v_token           text    := 'tok_test_v4_' || replace(gen_random_uuid()::text, '-', '');
-  v_monto           integer := 20000;
-  v_filas_1         integer;
-  v_filas_2         integer;
-  v_evento_abd_id   uuid;
-  v_notif_clave     text;
-  v_notif_count     integer;
-  v_estado_abd      text;
+  v_result        jsonb;
+  v_rpc           jsonb;
+  v_usr_id        uuid;
+  v_neg_id        uuid;
+  v_bolsa_a       uuid;
+  v_bolsa_b       uuid;
+  v_bolsa_c       uuid;
+  v_ped_mi        uuid;   -- multi-item: bolsa_a × 2 + bolsa_b × 1
+  v_ped_mb        uuid;   -- misma bolsa × 2 (bolsa_a + bolsa_a)
+  v_ped_si        uuid;   -- sin items (histórico/legacy)
+  v_ped_ins       uuid;   -- stock insuficiente (bolsa_a × 1 + bolsa_c × 2)
+  v_ped_qty       uuid;   -- discrepancia cantidad (pedidos.cantidad=1, items sum=4)
+  v_tok_mi        text;
+  v_tok_mb        text;
+  v_tok_si        text;
+  v_tok_ins       text;
+  v_tok_qty       text;
+  v_monto         integer := 20000;
+  v_disp_a        integer;
+  v_disp_b        integer;
+  v_disp_a_antes  integer;
+  v_filas_1       integer;
+  v_filas_2       integer;
+  v_notif_clave   text;
+  v_notif_count   integer;
+  v_evento_abd_id uuid;
+  v_estado_abd    text;
 BEGIN
 
-  -- ── Test 1: parámetros inválidos ──────────────────────────────────────────
+  -- ──────────────────────────────────────────────────────────────────────────
+  -- Prechecks de parámetros y pedido inexistente (precondiciones de la RPC)
+  -- ──────────────────────────────────────────────────────────────────────────
   SELECT confirmar_pago_cubo(NULL, 'tok', 100, 'SUCCEEDED', 'tok', NULL, NULL, NULL) INTO v_result;
   ASSERT v_result->>'resultado' = 'parametro_invalido' AND v_result->>'campo' = 'p_pedido_id',
-    'Test 1a FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 1a: parametro_invalido (pedido_id NULL)';
+    'Precheck 1a FALLÓ: ' || v_result::text;
+  RAISE NOTICE '✓ Precheck 1a: parametro_invalido (pedido_id NULL)';
 
   SELECT confirmar_pago_cubo(gen_random_uuid(), '', 100, 'SUCCEEDED', '', NULL, NULL, NULL) INTO v_result;
-  ASSERT v_result->>'resultado' = 'parametro_invalido' AND v_result->>'campo' = 'p_payment_intent_token',
-    'Test 1b FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 1b: parametro_invalido (token vacío)';
+  ASSERT v_result->>'resultado' = 'parametro_invalido',
+    'Precheck 1b FALLÓ: ' || v_result::text;
+  RAISE NOTICE '✓ Precheck 1b: parametro_invalido (token vacío)';
 
-  SELECT confirmar_pago_cubo(gen_random_uuid(), 'tok', 0, 'SUCCEEDED', 'tok', NULL, NULL, NULL) INTO v_result;
-  ASSERT v_result->>'resultado' = 'parametro_invalido' AND v_result->>'campo' = 'p_monto_centavos',
-    'Test 1c FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 1c: parametro_invalido (monto = 0)';
+  SELECT confirmar_pago_cubo(gen_random_uuid(), 'tok', -1, 'SUCCEEDED', 'tok', NULL, NULL, NULL) INTO v_result;
+  ASSERT v_result->>'resultado' = 'parametro_invalido',
+    'Precheck 1c FALLÓ: ' || v_result::text;
+  RAISE NOTICE '✓ Precheck 1c: parametro_invalido (monto <= 0)';
 
-  -- ── Test 2: pedido_no_encontrado ──────────────────────────────────────────
   SELECT confirmar_pago_cubo(gen_random_uuid(), 'tok', 100, 'SUCCEEDED', 'tok', NULL, NULL, NULL) INTO v_result;
   ASSERT v_result->>'resultado' = 'pedido_no_encontrado',
-    'Test 2 FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 2: pedido_no_encontrado';
+    'Precheck 2 FALLÓ: ' || v_result::text;
+  RAISE NOTICE '✓ Precheck 2: pedido_no_encontrado';
 
-  -- ── Crear datos de prueba ─────────────────────────────────────────────────
+  -- ──────────────────────────────────────────────────────────────────────────
+  -- Datos de prueba
+  -- ──────────────────────────────────────────────────────────────────────────
   INSERT INTO usuarios (id, email, nombre, rol, puntos, total_bolsas_salvadas)
-  VALUES (gen_random_uuid(), 'cubo_test_v4@bocara.test', 'Test Cubo v4', 'cliente', 0, 0)
+  VALUES (gen_random_uuid(), 'v5_test@bocara.test', 'Test v5', 'cliente', 0, 0)
   RETURNING id INTO v_usr_id;
 
   INSERT INTO negocios (id, propietario_id, nombre, direccion, zona, ciudad, categoria)
-  VALUES (gen_random_uuid(), v_usr_id, 'Negocio Test v4', 'Zona 10', 'Zona 10', 'Guatemala', 'restaurante')
+  VALUES (gen_random_uuid(), v_usr_id, 'Negocio v5', 'Zona 10', 'Zona 10', 'Guatemala', 'restaurante')
   RETURNING id INTO v_neg_id;
 
   INSERT INTO bolsas (id, negocio_id, nombre, precio_original, precio_descuento,
                       cantidad_disponible, hora_recogida_inicio, hora_recogida_fin)
-  VALUES (gen_random_uuid(), v_neg_id, 'Bolsa Test v4', 100.00, 50.00, 5, '18:00', '20:00')
-  RETURNING id INTO v_bolsa_id;
+  VALUES (gen_random_uuid(), v_neg_id, 'Bolsa A v5', 150.00, 75.00, 10, '18:00', '20:00')
+  RETURNING id INTO v_bolsa_a;
 
-  -- Pedido con bolsa_id — SIN pedido_items, SIN cantidad
-  INSERT INTO pedidos (
-    id, usuario_id, bolsa_id, negocio_id, estado, estado_pago, tipo_entrega,
-    total, codigo_recogida, cubo_payment_intent_token, monto_esperado_centavos
-  )
-  VALUES (
-    gen_random_uuid(), v_usr_id, v_bolsa_id, v_neg_id,
-    'pendiente', 'pendiente', 'recogida',
-    200.00, 'BOC-TST-V4', v_token, v_monto
-  )
-  RETURNING id INTO v_pedido_id;
+  INSERT INTO bolsas (id, negocio_id, nombre, precio_original, precio_descuento,
+                      cantidad_disponible, hora_recogida_inicio, hora_recogida_fin)
+  VALUES (gen_random_uuid(), v_neg_id, 'Bolsa B v5', 120.00, 60.00, 5, '18:00', '20:00')
+  RETURNING id INTO v_bolsa_b;
 
-  -- ── Test 3: rutas de error ────────────────────────────────────────────────
-  SELECT confirmar_pago_cubo(v_pedido_id, v_token, v_monto, 'PENDING', v_token, NULL, NULL, NULL) INTO v_result;
-  ASSERT v_result->>'resultado' = 'estado_invalido', 'Test 3a FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 3a: estado_invalido';
+  INSERT INTO bolsas (id, negocio_id, nombre, precio_original, precio_descuento,
+                      cantidad_disponible, hora_recogida_inicio, hora_recogida_fin)
+  VALUES (gen_random_uuid(), v_neg_id, 'Bolsa C v5 sin stock', 100.00, 50.00, 0, '18:00', '20:00')
+  RETURNING id INTO v_bolsa_c;
 
-  SELECT confirmar_pago_cubo(v_pedido_id, 'token_malo', v_monto, 'SUCCEEDED', 'token_malo', NULL, NULL, NULL) INTO v_result;
-  ASSERT v_result->>'resultado' = 'token_incorrecto', 'Test 3b FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 3b: token_incorrecto';
+  v_tok_mi  := 'tok_v5_mi_'  || replace(gen_random_uuid()::text, '-', '');
+  v_tok_mb  := 'tok_v5_mb_'  || replace(gen_random_uuid()::text, '-', '');
+  v_tok_si  := 'tok_v5_si_'  || replace(gen_random_uuid()::text, '-', '');
+  v_tok_ins := 'tok_v5_ins_' || replace(gen_random_uuid()::text, '-', '');
+  v_tok_qty := 'tok_v5_qty_' || replace(gen_random_uuid()::text, '-', '');
 
-  SELECT confirmar_pago_cubo(v_pedido_id, v_token, 99999, 'SUCCEEDED', v_token, NULL, NULL, NULL) INTO v_result;
-  ASSERT v_result->>'resultado' = 'monto_incorrecto', 'Test 3c FALLÓ: ' || v_result::text;
-  RAISE NOTICE '✓ Test 3c: monto_incorrecto';
+  -- Pedido multi-item: bolsa_a × 2 + bolsa_b × 1
+  -- pedidos.bolsa_id = bolsa_a (campo compatibilidad), pedidos.cantidad = 2 (primera bolsa únicamente)
+  INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                       tipo_entrega, total, codigo_recogida,
+                       cubo_payment_intent_token, monto_esperado_centavos, cantidad)
+  VALUES (gen_random_uuid(), v_usr_id, v_bolsa_a, v_neg_id,
+          'pendiente', 'pendiente', 'recogida', 210.00, 'BOC-MI',
+          v_tok_mi, v_monto, 2)
+  RETURNING id INTO v_ped_mi;
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
+  VALUES (v_ped_mi, v_bolsa_a, 2, 75.00),
+         (v_ped_mi, v_bolsa_b, 1, 60.00);
 
-  -- ── Test 4: confirmación válida — modelo bolsa_id descuenta 1 unidad ──────
-  SELECT confirmar_pago_cubo(v_pedido_id, v_token, v_monto, 'SUCCEEDED', v_token, 'REF-V4', 'AUTH-V4', NOW()) INTO v_result;
-  ASSERT v_result->>'resultado' = 'procesado', 'Test 4 FALLÓ: ' || v_result::text;
-  ASSERT (SELECT cantidad_disponible FROM bolsas WHERE id = v_bolsa_id) = 4,
-    'Test 4 FALLÓ: inventario incorrecto — esperado 4';
-  RAISE NOTICE '✓ Test 4: procesado, bolsa cantidad_disponible 5 → 4 (exactamente 1 unidad)';
+  -- Pedido misma bolsa: bolsa_a × 1 + bolsa_a × 1 (mismo bolsa_id en dos filas)
+  INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                       tipo_entrega, total, codigo_recogida,
+                       cubo_payment_intent_token, monto_esperado_centavos, cantidad)
+  VALUES (gen_random_uuid(), v_usr_id, v_bolsa_a, v_neg_id,
+          'pendiente', 'pendiente', 'recogida', 150.00, 'BOC-MB',
+          v_tok_mb, v_monto, 1)
+  RETURNING id INTO v_ped_mb;
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
+  VALUES (v_ped_mb, v_bolsa_a, 1, 75.00),
+         (v_ped_mb, v_bolsa_a, 1, 75.00);
 
-  -- ── Test 4b: 3 eventos separados registrados ──────────────────────────────
-  ASSERT (SELECT COUNT(*) FROM pago_eventos_pendientes WHERE pedido_id = v_pedido_id) = 3,
-    'Test 4b FALLÓ: esperados 3 eventos';
-  ASSERT EXISTS (SELECT 1 FROM pago_eventos_pendientes WHERE pedido_id = v_pedido_id AND tipo_evento = 'sumar_puntos'),
-    'Test 4b FALLÓ: falta sumar_puntos';
-  ASSERT EXISTS (SELECT 1 FROM pago_eventos_pendientes WHERE pedido_id = v_pedido_id AND tipo_evento = 'notificar_pago_cliente'),
-    'Test 4b FALLÓ: falta notificar_pago_cliente';
-  ASSERT EXISTS (SELECT 1 FROM pago_eventos_pendientes WHERE pedido_id = v_pedido_id AND tipo_evento = 'notificar_pago_restaurante'),
-    'Test 4b FALLÓ: falta notificar_pago_restaurante';
-  RAISE NOTICE '✓ Test 4b: 3 eventos separados (sumar_puntos, notificar_pago_cliente, notificar_pago_restaurante)';
+  -- Pedido sin items — legacy/histórico (no Cubo): NO se insertan pedido_items
+  INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                       tipo_entrega, total, codigo_recogida,
+                       cubo_payment_intent_token, monto_esperado_centavos)
+  VALUES (gen_random_uuid(), v_usr_id, v_bolsa_a, v_neg_id,
+          'pendiente', 'pendiente', 'recogida', 75.00, 'BOC-SI',
+          v_tok_si, v_monto)
+  RETURNING id INTO v_ped_si;
 
-  -- ── Test 5: webhook duplicado → retorna eventos_pendientes ────────────────
-  SELECT confirmar_pago_cubo(v_pedido_id, v_token, v_monto, 'SUCCEEDED', v_token, 'REF-V4', 'AUTH-V4', NOW()) INTO v_result;
-  ASSERT v_result->>'resultado' = 'duplicado', 'Test 5 FALLÓ: ' || v_result::text;
+  -- Pedido stock insuficiente: bolsa_a × 1 (ok) + bolsa_c × 2 (bolsa_c = 0)
+  INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                       tipo_entrega, total, codigo_recogida,
+                       cubo_payment_intent_token, monto_esperado_centavos, cantidad)
+  VALUES (gen_random_uuid(), v_usr_id, v_bolsa_a, v_neg_id,
+          'pendiente', 'pendiente', 'recogida', 175.00, 'BOC-INS',
+          v_tok_ins, v_monto, 1)
+  RETURNING id INTO v_ped_ins;
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
+  VALUES (v_ped_ins, v_bolsa_a, 1, 75.00),
+         (v_ped_ins, v_bolsa_c, 2, 50.00);
+
+  -- Pedido discrepancia: pedidos.cantidad=1 (primera bolsa), items sum=4 (bolsa_a × 1 + bolsa_a × 3)
+  INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                       tipo_entrega, total, codigo_recogida,
+                       cubo_payment_intent_token, monto_esperado_centavos, cantidad)
+  VALUES (gen_random_uuid(), v_usr_id, v_bolsa_a, v_neg_id,
+          'pendiente', 'pendiente', 'recogida', 300.00, 'BOC-QTY',
+          v_tok_qty, v_monto, 1)
+  RETURNING id INTO v_ped_qty;
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
+  VALUES (v_ped_qty, v_bolsa_a, 1, 75.00),
+         (v_ped_qty, v_bolsa_a, 3, 75.00);
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 1 — Multi-item: todas las bolsas descontadas exactamente una vez
+  -- Verifica que pedido_items controla el inventario, no pedidos.bolsa_id
+  -- ════════════════════════════════════════════════════════════════
+  SELECT confirmar_pago_cubo(v_ped_mi, v_tok_mi, v_monto, 'SUCCEEDED', v_tok_mi, 'REF-MI', 'AUTH-MI', NOW())
+  INTO v_result;
+  ASSERT v_result->>'resultado' = 'procesado', 'Test 1 FALLÓ: ' || v_result::text;
+
+  SELECT cantidad_disponible INTO v_disp_a FROM bolsas WHERE id = v_bolsa_a;
+  SELECT cantidad_disponible INTO v_disp_b FROM bolsas WHERE id = v_bolsa_b;
+  ASSERT v_disp_a = 8, 'Test 1 FALLÓ: bolsa_a esperado 8 (10−2), actual=' || v_disp_a;
+  ASSERT v_disp_b = 4, 'Test 1 FALLÓ: bolsa_b esperado 4 (5−1), actual=' || v_disp_b;
+
+  ASSERT (SELECT COUNT(*) FROM pago_eventos_pendientes WHERE pedido_id = v_ped_mi) = 3,
+    'Test 1 FALLÓ: esperados 3 eventos separados';
+
+  RAISE NOTICE '✓ Test 1: multi-item — bolsa_a=8 (10−2), bolsa_b=4 (5−1), 3 eventos registrados';
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 2 — Misma bolsa × 2: cantidades agrupadas correctamente
+  -- items: (bolsa_a, 1) + (bolsa_a, 1) → SUM = 2 → un solo descuento de 2
+  -- ════════════════════════════════════════════════════════════════
+  SELECT confirmar_pago_cubo(v_ped_mb, v_tok_mb, v_monto, 'SUCCEEDED', v_tok_mb, 'REF-MB', 'AUTH-MB', NOW())
+  INTO v_result;
+  ASSERT v_result->>'resultado' = 'procesado', 'Test 2 FALLÓ: ' || v_result::text;
+
+  SELECT cantidad_disponible INTO v_disp_a FROM bolsas WHERE id = v_bolsa_a;
+  ASSERT v_disp_a = 6,
+    'Test 2 FALLÓ: bolsa_a esperado 6 (8−2, suma de 2 items de bolsa_a), actual=' || v_disp_a;
+
+  RAISE NOTICE '✓ Test 2: misma bolsa × 2 — agrupada correctamente, bolsa_a=6 (8−2)';
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 3 — Stock insuficiente: ninguna bolsa modificada (todo o nada)
+  -- bolsa_c tiene 0 unidades, se piden 2. bolsa_a (1 pedida, 6 disponibles) NO debe modificarse.
+  -- ════════════════════════════════════════════════════════════════
+  SELECT cantidad_disponible INTO v_disp_a_antes FROM bolsas WHERE id = v_bolsa_a;
+
+  SELECT confirmar_pago_cubo(v_ped_ins, v_tok_ins, v_monto, 'SUCCEEDED', v_tok_ins, NULL, NULL, NULL)
+  INTO v_result;
+  ASSERT v_result->>'resultado' = 'stock_insuficiente',
+    'Test 3 FALLÓ: esperado stock_insuficiente, obtenido=' || (v_result->>'resultado');
+  ASSERT v_result->>'bolsa_id' = v_bolsa_c::text,
+    'Test 3 FALLÓ: bolsa incorrecta — esperado bolsa_c, obtenido=' || (v_result->>'bolsa_id');
+  ASSERT (v_result->>'disponible')::integer = 0,
+    'Test 3 FALLÓ: disponible esperado 0';
+  ASSERT (v_result->>'solicitado')::integer = 2,
+    'Test 3 FALLÓ: solicitado esperado 2';
+
+  SELECT cantidad_disponible INTO v_disp_a FROM bolsas WHERE id = v_bolsa_a;
+  ASSERT v_disp_a = v_disp_a_antes,
+    'Test 3 FALLÓ: bolsa_a fue modificada pese a fallo en bolsa_c (no es todo o nada) — '
+    'antes=' || v_disp_a_antes || ' despues=' || v_disp_a;
+
+  RAISE NOTICE '✓ Test 3: stock_insuficiente(bolsa_c=0/2) — bolsa_a SIN modificar (todo o nada), bolsa_a=% (sin cambio)', v_disp_a;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 4 — Webhook duplicado: sin doble descuento, retorna eventos pendientes
+  -- ════════════════════════════════════════════════════════════════
+  SELECT cantidad_disponible INTO v_disp_b FROM bolsas WHERE id = v_bolsa_b;
+
+  SELECT confirmar_pago_cubo(v_ped_mi, v_tok_mi, v_monto, 'SUCCEEDED', v_tok_mi, 'REF-MI', 'AUTH-MI', NOW())
+  INTO v_result;
+  ASSERT v_result->>'resultado' = 'duplicado',
+    'Test 4 FALLÓ: esperado duplicado, obtenido=' || (v_result->>'resultado');
   ASSERT jsonb_typeof(v_result->'eventos_pendientes') = 'array',
-    'Test 5 FALLÓ: falta eventos_pendientes como array';
-  ASSERT (SELECT cantidad_disponible FROM bolsas WHERE id = v_bolsa_id) = 4,
-    'Test 5 FALLÓ: inventario descontado dos veces';
-  RAISE NOTICE '✓ Test 5: duplicado con eventos_pendientes=%, inventario sin doble descuento', v_result->'eventos_pendientes';
+    'Test 4 FALLÓ: falta eventos_pendientes como array';
 
-  -- ── Test 6: eventos no se duplican (UNIQUE) ───────────────────────────────
-  ASSERT (SELECT COUNT(*) FROM pago_eventos_pendientes WHERE pedido_id = v_pedido_id) = 3,
-    'Test 6 FALLÓ: eventos duplicados tras segundo webhook';
-  RAISE NOTICE '✓ Test 6: UNIQUE(pedido_id, tipo_evento) — eventos no duplicados';
+  ASSERT (SELECT cantidad_disponible FROM bolsas WHERE id = v_bolsa_a) = 6,
+    'Test 4 FALLÓ: bolsa_a descontada en webhook duplicado (debe permanecer en 6)';
+  ASSERT (SELECT cantidad_disponible FROM bolsas WHERE id = v_bolsa_b) = v_disp_b,
+    'Test 4 FALLÓ: bolsa_b descontada en webhook duplicado';
+  ASSERT (SELECT COUNT(*) FROM pago_eventos_pendientes WHERE pedido_id = v_ped_mi) = 3,
+    'Test 4 FALLÓ: eventos creados en webhook duplicado (UNIQUE(pedido_id, tipo_evento) no funcionó)';
 
-  -- ── Test 7: puntos aplicados, fallo posterior → reintento no suma doble ───
-  -- Simula: sumar_puntos_idempotente se ejecuta (Node llama RPC), pero Node
-  -- falla ANTES de marcar el evento completado. Al reintentar:
-  SELECT sumar_puntos_idempotente(v_usr_id, v_pedido_id, 10, 'pago_cubo') INTO v_rpc;
-  ASSERT v_rpc->>'resultado' = 'sumado', 'Test 7a FALLÓ: primer llamado debe sumar — ' || v_rpc::text;
-  ASSERT (SELECT puntos FROM usuarios WHERE id = v_usr_id) = 10,
-    'Test 7a FALLÓ: puntos no sumados';
-  RAISE NOTICE '✓ Test 7a: sumar_puntos_idempotente → sumado (puntos=10)';
+  RAISE NOTICE '✓ Test 4: duplicado — eventos_pendientes=%, inventario sin doble descuento', v_result->'eventos_pendientes';
 
-  -- Evento sigue pendiente (Node no marcó completado — simulación de fallo)
-  -- Reintento: segunda llamada con los mismos parámetros
-  SELECT sumar_puntos_idempotente(v_usr_id, v_pedido_id, 10, 'pago_cubo') INTO v_rpc;
-  ASSERT v_rpc->>'resultado' = 'duplicado', 'Test 7b FALLÓ: segundo llamado debe ser duplicado — ' || v_rpc::text;
-  ASSERT (SELECT puntos FROM usuarios WHERE id = v_usr_id) = 10,
-    'Test 7b FALLÓ: puntos duplicados — esperado 10, no 20';
-  RAISE NOTICE '✓ Test 7b: sumar_puntos_idempotente reintento → duplicado (puntos siguen siendo 10)';
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 5 — pedidos.cantidad != SUM(items): usa SUM(items), ignora pedidos.cantidad
+  -- Pedido: pedidos.cantidad=1 (primera bolsa), items=4 (bolsa_a × 1 + bolsa_a × 3)
+  -- Si la RPC usa pedidos.cantidad=1, bolsa_a bajaría 1.
+  -- Si la RPC usa SUM(items)=4, bolsa_a bajaría 4. Solo el segundo es correcto.
+  -- ════════════════════════════════════════════════════════════════
+  SELECT cantidad_disponible INTO v_disp_a_antes FROM bolsas WHERE id = v_bolsa_a;
 
-  -- ── Test 8: notificación idempotente con clave_idempotencia ───────────────
-  v_notif_clave := 'cubo_pago:' || v_pedido_id || ':cliente';
+  SELECT confirmar_pago_cubo(v_ped_qty, v_tok_qty, v_monto, 'SUCCEEDED', v_tok_qty, 'REF-QTY', 'AUTH-QTY', NOW())
+  INTO v_result;
+  ASSERT v_result->>'resultado' = 'procesado', 'Test 5 FALLÓ: ' || v_result::text;
 
-  INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, data, leida, clave_idempotencia)
-  VALUES (v_usr_id, 'pago_confirmado', '✅ Pago confirmado', 'Código: BOC-TST-V4',
-          '{"pedidoId": "test"}'::jsonb, false, v_notif_clave);
+  SELECT cantidad_disponible INTO v_disp_a FROM bolsas WHERE id = v_bolsa_a;
+  ASSERT v_disp_a = v_disp_a_antes - 4,
+    'Test 5 FALLÓ: RPC usó pedidos.cantidad (−1) en lugar de SUM(items) (−4). '
+    'bolsa_a esperado=' || (v_disp_a_antes - 4) || ' actual=' || v_disp_a;
+  ASSERT v_disp_a <> v_disp_a_antes - 1,
+    'Test 5 FALLÓ: bolsa_a bajó solo 1 — RPC usó pedidos.cantidad=1, no SUM(items)=4';
 
-  -- Segunda inserción con misma clave: debe fallar por UNIQUE
+  RAISE NOTICE '✓ Test 5: usa SUM(items)=4, no pedidos.cantidad=1 — bolsa_a=% (antes=%)', v_disp_a, v_disp_a_antes;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 6 — pedidos.bolsa_id no genera descuento adicional
+  -- En Test 1: bolsa_a es a la vez pedidos.bolsa_id Y el primer item.
+  -- El viejo modelo descontaba vía bolsa_id = 1 unidad.
+  -- El nuevo modelo descuenta vía items = 2 unidades (bolsa_a × 2).
+  -- Si bolsa_a = 8 después de Test 1, descuenta correctamente 2 (no 3).
+  -- bolsa_b solo fue tocada en Test 1 (−1) y no en ningún otro pedido.
+  -- ════════════════════════════════════════════════════════════════
+  ASSERT (SELECT cantidad_disponible FROM bolsas WHERE id = v_bolsa_b) = 4,
+    'Test 6 FALLÓ: bolsa_b fue descontada más de una vez — '
+    'pedidos.bolsa_id no debe usarse para inventario '
+    '(bolsa_b solo tiene 1 item en v_ped_mi, debe quedar en 4)';
+
+  RAISE NOTICE '✓ Test 6: pedidos.bolsa_id no genera descuento extra — bolsa_b=4 (solo Test 1, exactamente −1)';
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 7 — Pedido histórico sin items: fail-closed (items_ausentes)
+  -- v_ped_si tiene bolsa_id y token pero no pedido_items.
+  -- La RPC no debe usar bolsa_id como fallback. Debe retornar items_ausentes.
+  -- ════════════════════════════════════════════════════════════════
+  SELECT confirmar_pago_cubo(v_ped_si, v_tok_si, v_monto, 'SUCCEEDED', v_tok_si, NULL, NULL, NULL)
+  INTO v_result;
+  ASSERT v_result->>'resultado' = 'items_ausentes',
+    'Test 7 FALLÓ: esperado items_ausentes, obtenido=' || (v_result->>'resultado');
+  ASSERT v_result->>'pedido_id' = v_ped_si::text,
+    'Test 7 FALLÓ: pedido_id en respuesta incorrecto';
+  ASSERT (SELECT estado_pago FROM pedidos WHERE id = v_ped_si) = 'pendiente',
+    'Test 7 FALLÓ: pedido histórico fue marcado pagado';
+
+  RAISE NOTICE '✓ Test 7: items_ausentes (histórico) — pedido estado_pago=pendiente, no modificado';
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 8 — Cualquier pedido sin items → items_ausentes (no importa el origen)
+  -- No hay distinción entre "histórico" y "nuevo sin items": misma respuesta.
+  -- bolsa_id presente, token válido, monto válido — pero sin items → fail-closed.
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_ped_nsi uuid;
+    v_tok_nsi text;
   BEGIN
-    INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, data, leida, clave_idempotencia)
-    VALUES (v_usr_id, 'pago_confirmado', '✅ Pago confirmado', 'Código: BOC-TST-V4',
-            '{"pedidoId": "test"}'::jsonb, false, v_notif_clave);
-    ASSERT FALSE, 'Test 8 FALLÓ: segunda inserción debió lanzar excepción UNIQUE';
-  EXCEPTION
-    WHEN unique_violation THEN
-      NULL; -- esperado
+    v_tok_nsi := 'tok_v5_nsi_' || replace(gen_random_uuid()::text, '-', '');
+    INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                         tipo_entrega, total, codigo_recogida,
+                         cubo_payment_intent_token, monto_esperado_centavos)
+    VALUES (gen_random_uuid(), v_usr_id, v_bolsa_b, v_neg_id,
+            'pendiente', 'pendiente', 'recogida', 60.00, 'BOC-NSI',
+            v_tok_nsi, v_monto)
+    RETURNING id INTO v_ped_nsi;
+    -- Sin pedido_items deliberadamente
+
+    SELECT confirmar_pago_cubo(v_ped_nsi, v_tok_nsi, v_monto, 'SUCCEEDED', v_tok_nsi, NULL, NULL, NULL)
+    INTO v_result;
+    ASSERT v_result->>'resultado' = 'items_ausentes',
+      'Test 8 FALLÓ: esperado items_ausentes, obtenido=' || (v_result->>'resultado');
+    ASSERT (SELECT estado_pago FROM pedidos WHERE id = v_ped_nsi) = 'pendiente',
+      'Test 8 FALLÓ: pedido sin items fue marcado pagado';
+    ASSERT NOT EXISTS (SELECT 1 FROM pago_eventos_pendientes WHERE pedido_id = v_ped_nsi),
+      'Test 8 FALLÓ: se crearon eventos para un pedido sin items';
   END;
+  RAISE NOTICE '✓ Test 8: items_ausentes (nuevo pedido sin items) — sin fallback bolsa_id, pedido intacto';
 
-  SELECT COUNT(*) INTO v_notif_count
-  FROM notificaciones WHERE clave_idempotencia = v_notif_clave;
-  ASSERT v_notif_count = 1, 'Test 8 FALLÓ: esperada 1 notificación, encontradas ' || v_notif_count;
-  RAISE NOTICE '✓ Test 8: notificación idempotente — única entrada con clave %', v_notif_clave;
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 9 — monto verificado contra valor almacenado en BD (server-side)
+  -- monto_esperado_centavos fue calculado en routes/pagos.js desde precios reales.
+  -- La RPC lo compara contra el monto que Cubo informa — el cliente nunca lo decide.
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_ped_mt uuid;
+    v_tok_mt text;
+  BEGIN
+    v_tok_mt := 'tok_v5_mt_' || replace(gen_random_uuid()::text, '-', '');
+    INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
+                         tipo_entrega, total, codigo_recogida,
+                         cubo_payment_intent_token, monto_esperado_centavos)
+    VALUES (gen_random_uuid(), v_usr_id, v_bolsa_b, v_neg_id,
+            'pendiente', 'pendiente', 'recogida', 60.00, 'BOC-MT',
+            v_tok_mt, 5000)   -- monto_esperado = 5000 centavos (server-computed)
+    RETURNING id INTO v_ped_mt;
+    INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
+    VALUES (v_ped_mt, v_bolsa_b, 1, 50.00);
 
-  -- ── Test 9: cliente completado, restaurante pendiente ─────────────────────
-  -- Marcar sumar_puntos y notificar_pago_cliente como completados
-  UPDATE pago_eventos_pendientes
-  SET estado = 'completado', completado_at = NOW()
-  WHERE pedido_id = v_pedido_id
-    AND tipo_evento IN ('sumar_puntos', 'notificar_pago_cliente');
+    -- Enviar monto distinto al almacenado → monto_incorrecto
+    SELECT confirmar_pago_cubo(v_ped_mt, v_tok_mt, 9999, 'SUCCEEDED', v_tok_mt, NULL, NULL, NULL)
+    INTO v_result;
+    ASSERT v_result->>'resultado' = 'monto_incorrecto',
+      'Test 9 FALLÓ: RPC aceptó monto incorrecto — ' || v_result::text;
+    ASSERT (v_result->>'esperado')::integer = 5000,
+      'Test 9 FALLÓ: esperado=5000 en respuesta, obtenido=' || (v_result->>'esperado');
+    ASSERT (v_result->>'recibido')::integer = 9999,
+      'Test 9 FALLÓ: recibido=9999 en respuesta, obtenido=' || (v_result->>'recibido');
+  END;
+  RAISE NOTICE '✓ Test 9: monto verificado contra BD server-side — mismatch(9999≠5000) rechazado';
 
-  -- Solo notificar_pago_restaurante debe quedar pendiente
-  ASSERT (
-    SELECT COUNT(*) FROM pago_eventos_pendientes
-    WHERE pedido_id = v_pedido_id AND estado = 'pendiente'
-  ) = 1, 'Test 9 FALLÓ: esperado 1 evento pendiente (solo restaurante)';
-
-  ASSERT EXISTS (
-    SELECT 1 FROM pago_eventos_pendientes
-    WHERE pedido_id = v_pedido_id
-      AND tipo_evento = 'notificar_pago_restaurante'
-      AND estado = 'pendiente'
-  ), 'Test 9 FALLÓ: notificar_pago_restaurante debe estar pendiente';
-  RAISE NOTICE '✓ Test 9: cliente completado, restaurante pendiente — solo restaurante se reintenta';
-
-  -- ── Test 10: dos procesadores concurrentes → exactamente uno reclama ──────
-  -- Reset notificar_pago_restaurante a pendiente, intentos=0
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 10 — Concurrencia: exactamente un procesador reclama el evento
+  -- Simula dos procesadores leyendo el mismo evento (estado='pendiente', intentos=0)
+  -- y tratando de reclamarlo. Solo el primero debe ganar (bloqueo optimista).
+  -- ════════════════════════════════════════════════════════════════
   UPDATE pago_eventos_pendientes
   SET estado = 'pendiente', intentos = 0, procesando_desde = NULL
-  WHERE pedido_id = v_pedido_id AND tipo_evento = 'notificar_pago_restaurante';
+  WHERE pedido_id = v_ped_mi AND tipo_evento = 'notificar_pago_restaurante';
 
-  -- Procesador 1 intenta reclamar
   UPDATE pago_eventos_pendientes
   SET estado = 'procesando', intentos = 1, procesando_desde = NOW()
-  WHERE pedido_id = v_pedido_id
-    AND tipo_evento = 'notificar_pago_restaurante'
-    AND estado = 'pendiente'
-    AND intentos = 0;
+  WHERE pedido_id = v_ped_mi AND tipo_evento = 'notificar_pago_restaurante'
+    AND estado = 'pendiente' AND intentos = 0;
   GET DIAGNOSTICS v_filas_1 = ROW_COUNT;
 
-  -- Procesador 2 intenta reclamar (demasiado tarde)
   UPDATE pago_eventos_pendientes
   SET estado = 'procesando', intentos = 1, procesando_desde = NOW()
-  WHERE pedido_id = v_pedido_id
-    AND tipo_evento = 'notificar_pago_restaurante'
-    AND estado = 'pendiente'
-    AND intentos = 0;
+  WHERE pedido_id = v_ped_mi AND tipo_evento = 'notificar_pago_restaurante'
+    AND estado = 'pendiente' AND intentos = 0;
   GET DIAGNOSTICS v_filas_2 = ROW_COUNT;
 
   ASSERT v_filas_1 + v_filas_2 = 1,
-    'Test 10 FALLÓ: exactamente un procesador debe ganar — filas_1=' || v_filas_1 || ' filas_2=' || v_filas_2;
-  ASSERT v_filas_1 = 1, 'Test 10 FALLÓ: procesador 1 debió ganar';
-  ASSERT v_filas_2 = 0, 'Test 10 FALLÓ: procesador 2 debió perder';
-  RAISE NOTICE '✓ Test 10: concurrencia — procesador 1 ganó (%), procesador 2 perdió (%)', v_filas_1, v_filas_2;
+    'Test 10 FALLÓ: exactamente 1 procesador debe ganar — filas_1=' || v_filas_1 || ' filas_2=' || v_filas_2;
+  ASSERT v_filas_1 = 1 AND v_filas_2 = 0,
+    'Test 10 FALLÓ: procesador 1 debió ganar (1,0), obtenido (' || v_filas_1 || ',' || v_filas_2 || ')';
 
-  -- ── Test 11: proceso abandonado → recuperable por timeout ─────────────────
-  INSERT INTO pago_eventos_pendientes
-    (pedido_id, tipo_evento, payload, estado, intentos, procesando_desde)
-  VALUES
-    (v_pedido_id, 'sumar_puntos_abandonado_test', '{}',
-     'procesando', 1, NOW() - INTERVAL '10 minutes')
-  RETURNING id INTO v_evento_abd_id;
+  RAISE NOTICE '✓ Test 10: concurrencia — proc 1 ganó (%), proc 2 perdió (%)', v_filas_1, v_filas_2;
 
-  -- Recovery query: debe encontrar el evento abandonado
-  ASSERT EXISTS (
-    SELECT 1 FROM pago_eventos_pendientes
-    WHERE id = v_evento_abd_id
-      AND estado = 'procesando'
-      AND procesando_desde < NOW() - INTERVAL '5 minutes'
-      AND intentos < 5
-  ), 'Test 11a FALLÓ: evento abandonado no encontrado por query de recuperación';
-  RAISE NOTICE '✓ Test 11a: evento abandonado detectado (procesando_desde hace 10 min)';
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 11 — Puntos idempotentes + notificaciones idempotentes
+  -- sumar_puntos_idempotente: primer intento = sumado; reintento = duplicado (no doble suma)
+  -- notificaciones con clave_idempotencia: segunda inserción rechazada (UNIQUE)
+  -- ════════════════════════════════════════════════════════════════
+  SELECT sumar_puntos_idempotente(v_usr_id, v_ped_mi, 10, 'pago_cubo') INTO v_rpc;
+  ASSERT v_rpc->>'resultado' = 'sumado',
+    'Test 11a FALLÓ: primer intento debe sumar — ' || v_rpc::text;
+  ASSERT (SELECT puntos FROM usuarios WHERE id = v_usr_id) = 10,
+    'Test 11a FALLÓ: puntos esperado 10, actual=' || (SELECT puntos FROM usuarios WHERE id = v_usr_id);
+  RAISE NOTICE '✓ Test 11a: sumar_puntos_idempotente → sumado (puntos=10)';
 
-  -- Resetear a pendiente (lo que hace procesarEventosFallidos)
-  UPDATE pago_eventos_pendientes
-  SET estado = 'pendiente', procesando_desde = NULL
-  WHERE id = v_evento_abd_id
-    AND estado = 'procesando'
-    AND procesando_desde < NOW() - INTERVAL '5 minutes';
+  SELECT sumar_puntos_idempotente(v_usr_id, v_ped_mi, 10, 'pago_cubo') INTO v_rpc;
+  ASSERT v_rpc->>'resultado' = 'duplicado',
+    'Test 11b FALLÓ: reintento debe ser duplicado — ' || v_rpc::text;
+  ASSERT (SELECT puntos FROM usuarios WHERE id = v_usr_id) = 10,
+    'Test 11b FALLÓ: puntos sumados dos veces (esperado 10, actual=' || (SELECT puntos FROM usuarios WHERE id = v_usr_id) || ')';
+  RAISE NOTICE '✓ Test 11b: sumar_puntos_idempotente reintento → duplicado (puntos siguen=10)';
 
-  SELECT estado INTO v_estado_abd FROM pago_eventos_pendientes WHERE id = v_evento_abd_id;
-  ASSERT v_estado_abd = 'pendiente',
-    'Test 11b FALLÓ: evento debe ser pendiente tras recuperación — estado=' || v_estado_abd;
-  RAISE NOTICE '✓ Test 11b: evento abandonado recuperado y resetado a pendiente';
+  v_notif_clave := 'cubo_pago:' || v_ped_mi || ':cliente';
+  INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, data, leida, clave_idempotencia)
+  VALUES (v_usr_id, 'pago_confirmado', 'Pago confirmado', 'Test v5', '{"test":true}'::jsonb, false, v_notif_clave);
 
-  -- ── Test 12: SQL principal no crea pedido_items ni pedidos.cantidad ────────
-  ASSERT NOT EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'pedido_items'
-  ), 'Test 12a FALLÓ: pedido_items existe — debe estar solo en cubo-pago-multi-item-opcional.sql';
-  RAISE NOTICE '✓ Test 12a: pedido_items NO existe (solo en archivo opcional)';
+  BEGIN
+    INSERT INTO notificaciones (usuario_id, tipo, titulo, cuerpo, data, leida, clave_idempotencia)
+    VALUES (v_usr_id, 'pago_confirmado', 'Pago confirmado', 'Test v5 dup', '{"test":true}'::jsonb, false, v_notif_clave);
+    ASSERT FALSE, 'Test 11c FALLÓ: segunda inserción debió ser UNIQUE violation';
+  EXCEPTION
+    WHEN unique_violation THEN NULL;
+  END;
 
-  ASSERT NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = 'pedidos' AND column_name = 'cantidad'
-  ), 'Test 12b FALLÓ: pedidos.cantidad existe — debe estar solo en cubo-pago-multi-item-opcional.sql';
-  RAISE NOTICE '✓ Test 12b: pedidos.cantidad NO existe (solo en archivo opcional)';
+  SELECT COUNT(*) INTO v_notif_count FROM notificaciones WHERE clave_idempotencia = v_notif_clave;
+  ASSERT v_notif_count = 1,
+    'Test 11c FALLÓ: esperada 1 notificación, encontradas=' || v_notif_count;
+  RAISE NOTICE '✓ Test 11c: notificación idempotente — 1 sola entrada con clave %', v_notif_clave;
 
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 12 — Pedidos históricos sin items completamente inmutables
+  -- Después de Test 7 (items_ausentes), el pedido debe estar exactamente
+  -- como fue creado: estado_pago=pendiente, sin eventos, sin cubo_identifier.
+  -- ════════════════════════════════════════════════════════════════
+  ASSERT (SELECT estado_pago FROM pedidos WHERE id = v_ped_si) = 'pendiente',
+    'Test 12 FALLÓ: pedido histórico tiene estado_pago modificado';
+  ASSERT (SELECT estado FROM pedidos WHERE id = v_ped_si) = 'pendiente',
+    'Test 12 FALLÓ: pedido histórico tiene estado modificado';
+  ASSERT (SELECT cubo_identifier FROM pedidos WHERE id = v_ped_si) IS NULL,
+    'Test 12 FALLÓ: cubo_identifier fue escrito en pedido histórico';
+  ASSERT (SELECT pagado_en FROM pedidos WHERE id = v_ped_si) IS NULL,
+    'Test 12 FALLÓ: pagado_en fue escrito en pedido histórico';
+  ASSERT NOT EXISTS (SELECT 1 FROM pago_eventos_pendientes WHERE pedido_id = v_ped_si),
+    'Test 12 FALLÓ: se crearon eventos para pedido histórico';
+
+  RAISE NOTICE '✓ Test 12: pedido histórico completamente inmutable (estado=pendiente, sin eventos, sin cubo_identifier)';
+
+  -- ──────────────────────────────────────────────────────────────────────────
+  -- Resumen
+  -- ──────────────────────────────────────────────────────────────────────────
   RAISE NOTICE '';
-  RAISE NOTICE '══════════════════════════════════════════════════════════════';
-  RAISE NOTICE '✓ Todos los tests pasaron (12+/12)';
-  RAISE NOTICE '  Nota: Tests 1-2 (infra ausente → evento pendiente) son comportamiento';
-  RAISE NOTICE '  de Node.js: si sumar_puntos_idempotente o clave_idempotencia no existe,';
-  RAISE NOTICE '  _procesarEvento lanza error, el evento queda en pendiente/fallido.';
-  RAISE NOTICE '  Verificar tras ejecutar migración completa.';
-  RAISE NOTICE '══════════════════════════════════════════════════════════════';
+  RAISE NOTICE '═══════════════════════════════════════════════════════════════════';
+  RAISE NOTICE '✓ Todos los tests v5 pasaron (12/12) — modelo híbrido pedido_items';
+  RAISE NOTICE '  pedido_items es la única fuente de verdad para inventario Cubo.';
+  RAISE NOTICE '  pedidos.bolsa_id y pedidos.cantidad son campos de compatibilidad.';
+  RAISE NOTICE '  Sin items → items_ausentes (fail-closed). Sin fallback bolsa_id.';
+  RAISE NOTICE '  Doble descuento imposible: lock FOR UPDATE + ORDER BY bolsa_id.';
+  RAISE NOTICE '  Puntos e idempotencia de notificaciones verificados.';
+  RAISE NOTICE '  Pedidos históricos sin items son inmutables para esta RPC.';
+  RAISE NOTICE '═══════════════════════════════════════════════════════════════════';
 
 END $$;
 

@@ -104,22 +104,28 @@ WHERE table_schema = 'public' AND table_name = 'pedidos'
 ORDER BY column_name;
 -- 0 filas = migración pendiente. 6 filas = migración ejecutada.
 
--- ── 8. pedidos.cantidad (NO debe crearlo la migración principal) ─────────────
--- La columna cantidad pertenece al modelo multi-ítem (cubo-pago-multi-item-opcional.sql).
--- Si existe, es de una migración anterior; no bloquea la migración principal.
+-- ── 8. pedidos.cantidad ──────────────────────────────────────────────────────
+-- PRECHECK: debe existir antes de la migración (verificado: ya existe en producción).
+-- Significado real: cantidad del PRIMER ítem del carrito (no la suma total).
+-- Para pedidos multi-ítem, usar SUM(pedido_items.cantidad) en lugar de pedidos.cantidad.
 SELECT EXISTS(
   SELECT 1 FROM information_schema.columns
   WHERE table_schema = 'public' AND table_name = 'pedidos'
     AND column_name = 'cantidad'
 ) AS pedidos_tiene_cantidad;
--- Esperado para migración principal: false
+-- Esperado ANTES de migración: true (ya existe — precheck fallará si es false)
+-- Esperado DESPUÉS de migración: true (migración no la toca)
 
--- ── 9. pedido_items (NO debe crearlo la migración principal) ─────────────────
+-- ── 9. pedido_items ──────────────────────────────────────────────────────────
+-- PRECHECK: debe existir antes de la migración (verificado: ya existe con 36 filas).
+-- La migración principal NO la crea — es un precheck que la verifica.
+-- La RPC confirmar_pago_cubo v5 la usa como única fuente de inventario.
 SELECT EXISTS(
   SELECT 1 FROM information_schema.tables
   WHERE table_schema = 'public' AND table_name = 'pedido_items'
 ) AS pedido_items_existe;
--- Esperado para migración principal: false
+-- Esperado ANTES de migración: true (ya existe — precheck fallará si es false)
+-- Esperado DESPUÉS de migración: true (migración no la toca)
 
 
 -- ════════════════════════════════════════════════════════════════════════════
