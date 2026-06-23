@@ -6,9 +6,9 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-const PRIMARY = '#1A1A1A';
-const ACCENT = '#C8A97E';
-const SURFACE = '#F5F0EB';
+const PRIMARY = '#2C4A2E';
+const ACCENT = '#E8820C';
+const SURFACE = '#F8FAF8';
 const WHITE = '#FFFFFF';
 const SUBTLE = '#8A8A8A';
 

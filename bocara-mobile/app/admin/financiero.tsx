@@ -15,7 +15,7 @@ const CARD   = '#FFFFFF';
 const BORDER = '#E5E7EB';
 const TEXT   = '#111827';
 const TEXT2  = '#6B7280';
-const GOLD   = '#C8A97E';
+const GOLD   = '#E8820C';
 const GREEN  = '#16A34A';
 
 type Periodo = '7d' | '30d' | 'todo';

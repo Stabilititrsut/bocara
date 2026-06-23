@@ -2,10 +2,11 @@ import { Tabs } from 'expo-router';
 import { Platform, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-const GOLD     = '#C8A97E';
+const GOLD     = '#E8820C';
 const INACTIVE = '#9CA3AF';
 const WHITE    = '#FFFFFF';
 const BORDER   = '#E5E7EB';
+const DARK_GREEN = '#2C4A2E';
 
 const TABS = [
   { name: 'index',             label: 'Dashboard',  icon: 'stats-chart'       },
@@ -27,11 +28,11 @@ export default function AdminLayout() {
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: GOLD,
-        tabBarInactiveTintColor: INACTIVE,
+        tabBarActiveTintColor: isDesktop ? GOLD : DARK_GREEN,
+        tabBarInactiveTintColor: isDesktop ? 'rgba(255,255,255,0.5)' : INACTIVE,
         tabBarStyle: {
-          backgroundColor: WHITE,
-          borderTopColor: BORDER,
+          backgroundColor: isDesktop ? DARK_GREEN : WHITE,
+          borderTopColor: isDesktop ? 'transparent' : BORDER,
           borderTopWidth: 1,
           height: isDesktop ? '100%' : 64,
           paddingBottom: isDesktop ? 0 : 8,
@@ -39,8 +40,7 @@ export default function AdminLayout() {
           ...(isDesktop ? {
             width: 200,
             borderTopWidth: 0,
-            borderRightWidth: 1,
-            borderRightColor: BORDER,
+            borderRightWidth: 0,
           } : {}),
         },
         tabBarPosition: (isDesktop ? 'left' : 'bottom') as any,

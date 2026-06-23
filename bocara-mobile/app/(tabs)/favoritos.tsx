@@ -12,8 +12,8 @@ import { useAuth } from '@/src/context/AuthContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 import { Colors } from '@/constants/Colors';
 
-const GOLD = '#C8A97E';
-const DARK = '#1A1A1A';
+const GOLD = '#E8820C';
+const DARK = '#2C4A2E';
 const RED  = '#E53935';
 
 type TabKey = 'negocios' | 'bolsas';

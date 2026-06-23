@@ -104,10 +104,10 @@ function BocaraSplash({ fast, onDone }: { fast: boolean; onDone: () => void }) {
 }
 
 const ss = StyleSheet.create({
-  splash: { ...StyleSheet.absoluteFillObject, backgroundColor: '#1A1A1A', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
+  splash: { ...StyleSheet.absoluteFillObject, backgroundColor: '#2C4A2E', zIndex: 999, alignItems: 'center', justifyContent: 'center' },
   center: { alignItems: 'center' },
   title:  { fontSize: 42, fontWeight: 'bold', color: '#FFFFFF', letterSpacing: -1 },
-  sub:    { fontSize: 18, color: '#C8A97E', marginTop: 8, fontWeight: '600' },
+  sub:    { fontSize: 18, color: '#E8820C', marginTop: 8, fontWeight: '600' },
 });
 
 // ── Auth guard + routing ──────────────────────────────────────────────────────

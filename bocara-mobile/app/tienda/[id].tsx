@@ -11,9 +11,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, bolsasAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 
-const GOLD = '#C8A97E';
-const DARK = '#1A1A1A';
-const SURF = '#F5F0EB';
+const GOLD = '#E8820C';
+const DARK = '#2C4A2E';
+const SURF = '#FFF4E6';
 const GRAY = '#8A8A8A';
 
 const { width: SW } = Dimensions.get('window');

@@ -128,7 +128,7 @@ export default function LoginScreen() {
               <Image
                 source={require('@/assets/images/logo.png')}
                 style={s.logoImg}
-                contentFit="cover"
+                contentFit="contain"
               />
             </View>
             <Text style={s.tagline}>

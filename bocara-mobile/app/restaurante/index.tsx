@@ -8,11 +8,11 @@ import { negociosAPI, pedidosAPI, bolsasAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
 
-const PRIMARY = '#1A1A1A';
-const GOLD    = '#C8A97E';
-const GOLD_BG = '#F5F0EB';
+const PRIMARY = '#2C4A2E';
+const GOLD    = '#E8820C';
+const GOLD_BG = '#FFF4E6';
 const WHITE   = '#FFFFFF';
-const BORDER  = '#F0EBE5';
+const BORDER  = '#E8EDE8';
 
 const ESTADO_COLOR: Record<string, { bg: string; text: string }> = {
   confirmado: { bg: '#FEF3C7', text: '#92400E' },

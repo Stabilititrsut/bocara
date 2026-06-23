@@ -19,7 +19,7 @@ const CARD_H = 210;
 const CARD_IMG_H = 120;
 
 const CATEGORIAS = [
-  { label: 'Todos',          emoji: '✨', bg: '#F5F0EB' },
+  { label: 'Todos',          emoji: '✨', bg: '#F8FAF8' },
   { label: 'Panadería',     emoji: '🥐', bg: '#FFF3E0' },
   { label: 'Restaurante',   emoji: '🍽️', bg: '#FCE4EC' },
   { label: 'Cafetería',     emoji: '☕', bg: '#EDE7F6' },
@@ -33,7 +33,7 @@ const CATEGORIAS = [
 function NegocioCard({ negocio, onPress }: { negocio: any; onPress: () => void }) {
   const catEntry = CATEGORIAS.find(c => c.label === negocio.categoria);
   const catEmoji = catEntry?.emoji || '🏪';
-  const catBg = catEntry?.bg || '#F5F0EB';
+  const catBg = catEntry?.bg || '#F8FAF8';
 
   return (
     <TouchableOpacity style={[s.negocioCard, { width: CARD_W, height: CARD_H }]} onPress={onPress} activeOpacity={0.88}>
@@ -311,14 +311,14 @@ const s = StyleSheet.create({
     height: 190, overflow: 'hidden', flexDirection: 'row',
     alignItems: 'flex-end', justifyContent: 'space-between',
   },
-  heroDeco1: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(200,169,126,0.10)', top: -90, right: -60 },
-  heroDeco2: { position: 'absolute', width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(200,169,126,0.07)', bottom: -60, left: -30 },
+  heroDeco1: { position: 'absolute', width: 220, height: 220, borderRadius: 110, backgroundColor: 'rgba(232,130,12,0.12)', top: -90, right: -60 },
+  heroDeco2: { position: 'absolute', width: 150, height: 150, borderRadius: 75, backgroundColor: 'rgba(232,130,12,0.08)', bottom: -60, left: -30 },
   heroDeco3: { position: 'absolute', width: 70, height: 70, borderRadius: 35, backgroundColor: 'rgba(255,255,255,0.04)', top: 50, left: '45%' },
   heroContent: { padding: 22, flex: 1 },
   heroTag: { fontSize: 11, color: Colors.accent, fontWeight: '700', letterSpacing: 0.6, marginBottom: 8 },
   heroTitle: { fontSize: 26, fontWeight: '900', color: Colors.white, lineHeight: 30, letterSpacing: -0.5, marginBottom: 16 },
   heroCTA: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 9, alignSelf: 'flex-start' },
-  heroCTAText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
+  heroCTAText: { color: Colors.white, fontWeight: '800', fontSize: 13 },
   heroCounter: { alignItems: 'center', paddingRight: 22, paddingBottom: 22 },
   heroCounterNum: { fontSize: 36, fontWeight: '900', color: Colors.white },
   heroCounterLabel: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
@@ -355,7 +355,7 @@ const s = StyleSheet.create({
 
   negocioCard: { backgroundColor: Colors.white, borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
   negocioImgWrap: { backgroundColor: Colors.surface, justifyContent: 'center', alignItems: 'center' },
-  negocioDiscBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
+  negocioDiscBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: Colors.accent, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
   negocioDiscText: { color: Colors.white, fontSize: 10, fontWeight: '900' },
   negocioInfo: { padding: 12 },
   negocioNombre: { fontSize: 13, fontWeight: '900', color: Colors.textPrimary, marginBottom: 2 },

@@ -13,9 +13,9 @@ import { useCart } from '@/src/context/CartContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
-const GOLD  = '#C8A97E';
-const DARK  = '#1A1A1A';
-const SURF  = '#F5F0EB';
+const GOLD  = '#E8820C';
+const DARK  = '#2C4A2E';
+const SURF  = '#FFF4E6';
 const GRAY  = '#8A8A8A';
 
 const { width: SW } = Dimensions.get('window');
