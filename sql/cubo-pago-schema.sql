@@ -3,17 +3,18 @@
 -- ║                                                                        ║
 -- ║  ORDEN DE EJECUCIÓN:                                                   ║
 -- ║  0. Ejecutar sql/introspect-schema.sql (solo lectura, sin cambios)     ║
--- ║  1. BLOQUE 0:  Prechecks — terminar con NOTICE ✓ sin EXCEPTION        ║
--- ║  2. BLOQUE 1:  Columnas Cubo en pedidos                               ║
--- ║  3. BLOQUE 2:  Idempotencia de notificaciones (OBLIGATORIO)           ║
--- ║  4. BLOQUE 3:  Eventos pendientes (tabla con estados)                 ║
--- ║  5. BLOQUE 4:  Idempotencia de puntos (movimientos_puntos)            ║
--- ║  6. BLOQUE 5:  Restricciones e índices                               ║
--- ║  7. BLOQUE 6:  RPC confirmar_pago_cubo v5 (modelo híbrido)           ║
--- ║  8. BLOQUE 7:  sumar_puntos (fix) + sumar_puntos_idempotente         ║
--- ║  9. BLOQUE 8:  Permisos                                              ║
--- ║  10. BLOQUE 9:  Verificaciones post-migración                        ║
--- ║  11. BLOQUE 10: Tests en ROLLBACK (12 pruebas modelo híbrido)        ║
+-- ║  1. BLOQUE 0:    Prechecks — terminar con NOTICE ✓ sin EXCEPTION      ║
+-- ║  2. BLOQUEs 1-8: BEGIN atómico único — todo o nada                    ║
+-- ║     · BLOQUE 1: Columnas Cubo en pedidos                              ║
+-- ║     · BLOQUE 2: Idempotencia de notificaciones (OBLIGATORIO)          ║
+-- ║     · BLOQUE 3: Eventos pendientes (tabla con estados)                ║
+-- ║     · BLOQUE 4: Idempotencia de puntos (movimientos_puntos)           ║
+-- ║     · BLOQUE 5: Restricciones e índices                               ║
+-- ║     · BLOQUE 6: RPC confirmar_pago_cubo v5 (modelo híbrido)          ║
+-- ║     · BLOQUE 7: sumar_puntos (fix) + sumar_puntos_idempotente        ║
+-- ║     · BLOQUE 8: Permisos                                              ║
+-- ║  3. BLOQUE 9:    Verificaciones post-migración                        ║
+-- ║  4. BLOQUE 10:   Tests en ROLLBACK (12 pruebas modelo híbrido)        ║
 -- ║                                                                        ║
 -- ║  CUBO_PAYMENTS_ENABLED debe permanecer en "false" durante todo       ║
 -- ║  el proceso. Activar SOLO tras verificar la migración completa.      ║
@@ -122,6 +123,19 @@ BEGIN
     RAISE EXCEPTION 'PRECHECK FAILED: pedido_items.bolsa_id no existe';
   END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'pedido_items'
+                   AND column_name = 'precio_unitario') THEN
+    RAISE EXCEPTION 'PRECHECK FAILED: pedido_items.precio_unitario no existe';
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'pedido_items'
+                   AND column_name = 'subtotal') THEN
+    RAISE EXCEPTION 'PRECHECK FAILED: pedido_items.subtotal no existe — '
+      'Agregar con: ALTER TABLE pedido_items ADD COLUMN IF NOT EXISTS subtotal NUMERIC(10,2);';
+  END IF;
+
   -- Verificar que pedidos.cantidad existe (debe existir en producción antes de esta migración)
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                  WHERE table_schema = 'public' AND table_name = 'pedidos'
@@ -130,15 +144,21 @@ BEGIN
       'Agregar con: ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cantidad INTEGER DEFAULT 1;';
   END IF;
 
-  RAISE NOTICE '✓ PRECHECKS: todas las verificaciones pasaron (incluyendo pedido_items y pedidos.cantidad).';
+  RAISE NOTICE '✓ PRECHECKS: todas las verificaciones pasaron (incluyendo pedido_items, pedido_items.subtotal y pedidos.cantidad).';
 END $$;
+
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- BLOQUEs 1-8 — MIGRACIÓN ATÓMICA ÚNICA
+-- Todo o nada: si cualquier instrucción falla, ROLLBACK automático completo.
+-- ════════════════════════════════════════════════════════════════════════════
+
+BEGIN;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- BLOQUE 1 — OBLIGATORIO CUBO: columnas de verificación de pagos en pedidos
 -- ════════════════════════════════════════════════════════════════════════════
-
-BEGIN;
 
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_identifier           TEXT;
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_authorization_code   TEXT;
@@ -146,8 +166,6 @@ ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pagado_en                 TIMESTAMP
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_payment_intent_token TEXT;
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS monto_esperado_centavos   INTEGER;
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_reference_id         TEXT;
-
-COMMIT;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -159,8 +177,6 @@ COMMIT;
 -- NO está comentado ni es opcional: es parte del núcleo Cubo.
 -- ════════════════════════════════════════════════════════════════════════════
 
-BEGIN;
-
 ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS clave_idempotencia TEXT;
 
 -- Índice único parcial: solo se aplica a notificaciones con clave establecida.
@@ -169,8 +185,6 @@ ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS clave_idempotencia TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_clave_idempotencia
   ON notificaciones(clave_idempotencia)
   WHERE clave_idempotencia IS NOT NULL;
-
-COMMIT;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -183,8 +197,6 @@ COMMIT;
 -- Si existe la versión anterior (sin columna estado), se elimina y recrea.
 -- Es seguro porque CUBO_PAYMENTS_ENABLED=false — no hay datos en producción.
 -- ════════════════════════════════════════════════════════════════════════════
-
-BEGIN;
 
 DO $$
 BEGIN
@@ -227,8 +239,6 @@ CREATE INDEX IF NOT EXISTS idx_pago_eventos_procesando
   ON pago_eventos_pendientes(procesando_desde)
   WHERE estado = 'procesando';
 
-COMMIT;
-
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- BLOQUE 4 — IDEMPOTENCIA DE PUNTOS
@@ -236,8 +246,6 @@ COMMIT;
 -- UNIQUE(pedido_id, concepto) garantiza que sumar_puntos_idempotente no
 -- acumula puntos dos veces aunque el evento se reintente múltiples veces.
 -- ════════════════════════════════════════════════════════════════════════════
-
-BEGIN;
 
 CREATE TABLE IF NOT EXISTS movimientos_puntos (
   id         UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -252,14 +260,10 @@ CREATE TABLE IF NOT EXISTS movimientos_puntos (
 CREATE INDEX IF NOT EXISTS idx_movimientos_puntos_usuario
   ON movimientos_puntos(usuario_id);
 
-COMMIT;
-
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- BLOQUE 5 — RESTRICCIONES E ÍNDICES
 -- ════════════════════════════════════════════════════════════════════════════
-
-BEGIN;
 
 DO $$
 BEGIN
@@ -283,8 +287,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pedidos_cubo_token_unique
 INSERT INTO configuracion (clave, valor)
 VALUES ('puntos_por_pedido', '10')
 ON CONFLICT (clave) DO NOTHING;
-
-COMMIT;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -604,6 +606,8 @@ REVOKE EXECUTE ON FUNCTION sumar_puntos_idempotente(uuid, uuid, integer, text) F
 REVOKE EXECUTE ON FUNCTION sumar_puntos_idempotente(uuid, uuid, integer, text) FROM anon;
 REVOKE EXECUTE ON FUNCTION sumar_puntos_idempotente(uuid, uuid, integer, text) FROM authenticated;
 GRANT  EXECUTE ON FUNCTION sumar_puntos_idempotente(uuid, uuid, integer, text) TO service_role;
+
+COMMIT; -- fin migración atómica BLOQUEs 1-8
 
 
 -- ════════════════════════════════════════════════════════════════════════════

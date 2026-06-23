@@ -1,8 +1,8 @@
 -- ╔══════════════════════════════════════════════════════════════════════════╗
--- ║  Bocara — Introspección del esquema real (v4)                          ║
+-- ║  Bocara — Introspección del esquema real (v5)                          ║
 -- ║  Solo lectura. No modifica ningún dato.                                ║
 -- ║                                                                        ║
--- ║  Ejecutar en Supabase → SQL Editor ANTES de cubo-pago-schema.sql v4   ║
+-- ║  Ejecutar en Supabase → SQL Editor ANTES de cubo-pago-schema.sql v5   ║
 -- ║  para confirmar el estado real del esquema desplegado.                 ║
 -- ║                                                                        ║
 -- ║  Resultado esperado antes de ejecutar la migración:                   ║
