@@ -5,26 +5,34 @@
  */
 const axios = require('axios');
 
-async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedireccion, cliente, items }) {
-  const cuboApiUrl = process.env.CUBO_API_URL;
-  let cuboApiKey = process.env.CUBO_API_KEY;
-
-  // En desarrollo se acepta CUBOPAGO_API_KEY como fallback con advertencia explícita
-  if (!cuboApiKey && process.env.CUBO_ENVIRONMENT !== 'production') {
-    cuboApiKey = process.env.CUBOPAGO_API_KEY;
-    if (cuboApiKey) {
-      console.warn('[CUBO] Usando CUBOPAGO_API_KEY como fallback de desarrollo. Configure CUBO_API_KEY en producción.');
-    }
+function resolverCredenciales() {
+  const url = process.env.CUBO_API_URL;
+  let key = process.env.CUBO_API_KEY;
+  if (!key && process.env.CUBO_ENVIRONMENT !== 'production') {
+    key = process.env.CUBOPAGO_API_KEY;
+    if (key) console.warn('[CUBO] Usando CUBOPAGO_API_KEY como fallback de desarrollo. Configure CUBO_API_KEY en producción.');
   }
+  if (!url) throw new Error('CUBO_API_URL no configurada en el servidor');
+  if (!key) throw new Error('CUBO_API_KEY no configurada en el servidor');
+  return { url, key };
+}
 
-  if (!cuboApiUrl) throw new Error('CUBO_API_URL no configurada en el servidor');
-  if (!cuboApiKey) throw new Error('CUBO_API_KEY no configurada en el servidor');
+function manejarErrorAxios(err) {
+  if (!err.response) throw new Error(`Cubo Pago: error de red — ${err.message}`);
+  const status  = err.response.status;
+  const msg     = err.response.data?.message ?? err.message;
+  const detalle = Array.isArray(msg) ? msg.join(', ') : String(msg);
+  if (status === 401 || status === 403) throw new Error('Cubo Pago: API key inválida o sin permisos (401/403)');
+  if (status === 400) throw new Error(`Cubo Pago: solicitud inválida — ${detalle}`);
+  throw new Error(`Cubo Pago error ${status}: ${detalle}`);
+}
 
-  // Cubo Pago recibe el monto en centavos (entero)
+async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedireccion, cliente, items }) {
+  const { url: cuboApiUrl, key: cuboApiKey } = resolverCredenciales();
+
   const montoCentavos = Math.round(parseFloat(monto) * 100);
 
-  // metadata es devuelta sin cambios por Cubo en el webhook — incluir todos los
-  // identificadores posibles para que buscarPedido() siempre encuentre el pedido
+  // metadata es devuelta sin cambios por Cubo en el webhook — incluir orderId (UUID del pedido)
   const body = {
     description: titulo,
     amount:      montoCentavos,
@@ -40,26 +48,11 @@ async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedirec
   let data;
   try {
     ({ data } = await axios.post(`${cuboApiUrl}/api/v1/links/one-use`, body, {
-      headers: {
-        'X-API-KEY':    cuboApiKey,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'X-API-KEY': cuboApiKey, 'Content-Type': 'application/json' },
       timeout: 10000,
     }));
   } catch (err) {
-    if (!err.response) {
-      throw new Error(`Cubo Pago: error de red — ${err.message}`);
-    }
-    const status  = err.response.status;
-    const msg     = err.response.data?.message ?? err.message;
-    const detalle = Array.isArray(msg) ? msg.join(', ') : String(msg);
-    if (status === 401 || status === 403) {
-      throw new Error('Cubo Pago: API key inválida o sin permisos (401/403)');
-    }
-    if (status === 400) {
-      throw new Error(`Cubo Pago: solicitud inválida — ${detalle}`);
-    }
-    throw new Error(`Cubo Pago error ${status}: ${detalle}`);
+    manejarErrorAxios(err);
   }
 
   if (!data?.cuboRedirectUri) {
@@ -72,4 +65,51 @@ async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedirec
   };
 }
 
-module.exports = { generarLinkPago };
+// Consulta el estado de una transacción directamente en Cubo.
+// Usada por el webhook para verificación independiente antes de confirmar un pago.
+// Errores tipados: { code: 'NOT_FOUND' | 'AUTH_ERROR' | 'NETWORK_ERROR' | 'HTTP_ERROR' }
+async function consultarTransaccionCubo(paymentIntentToken) {
+  if (!paymentIntentToken || typeof paymentIntentToken !== 'string') {
+    const err = new Error('paymentIntentToken requerido para consultar transacción');
+    err.code = 'INVALID_TOKEN';
+    throw err;
+  }
+
+  const { url: cuboApiUrl, key: cuboApiKey } = resolverCredenciales();
+
+  let data;
+  try {
+    ({ data } = await axios.get(
+      `${cuboApiUrl}/api/v1/transactions/${encodeURIComponent(paymentIntentToken)}`,
+      {
+        headers: { 'X-API-KEY': cuboApiKey },
+        timeout: 10000,
+      }
+    ));
+  } catch (err) {
+    if (!err.response) {
+      const e = new Error(`Cubo Pago: error de red consultando transacción — ${err.message}`);
+      e.code = 'NETWORK_ERROR';
+      throw e;
+    }
+    const status = err.response.status;
+    if (status === 404) {
+      const e = new Error(`Cubo Pago: transacción no encontrada — ${paymentIntentToken}`);
+      e.code = 'NOT_FOUND';
+      throw e;
+    }
+    if (status === 401 || status === 403) {
+      const e = new Error('Cubo Pago: API key inválida consultando transacción (401/403)');
+      e.code = 'AUTH_ERROR';
+      throw e;
+    }
+    const e = new Error(`Cubo Pago error ${status} consultando transacción`);
+    e.code = 'HTTP_ERROR';
+    e.httpStatus = status;
+    throw e;
+  }
+
+  return data;
+}
+
+module.exports = { generarLinkPago, consultarTransaccionCubo };

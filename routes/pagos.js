@@ -433,7 +433,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     }
     console.log('[PAGO] items Cubo:', JSON.stringify(cuboItems));
 
-    const { url: visaLinkUrl } = await generarLinkPago({
+    const { url: visaLinkUrl, token: paymentIntentToken } = await generarLinkPago({
       referencia:     referenceCode,
       pedidoId:       pedido.id,
       titulo,
@@ -447,6 +447,20 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       items: cuboItems,
     });
 
+    // Guardar token y monto esperado para verificación independiente del webhook
+    const montoCentavos = Math.round(total * 100);
+    const { error: tokenUpdateErr } = await supabase.from('pedidos')
+      .update({
+        cubo_payment_intent_token: paymentIntentToken || null,
+        monto_esperado_centavos:   montoCentavos,
+      })
+      .eq('id', pedido.id);
+    if (tokenUpdateErr) {
+      console.warn('[PAGO] No se pudo guardar cubo_payment_intent_token (migración pendiente):', tokenUpdateErr.message);
+    } else {
+      console.log('[PAGO] token guardado en pedido:', paymentIntentToken, '| monto_esperado_centavos:', montoCentavos);
+    }
+
     res.json({
       pedidoId: pedido.id,
       codigoRecogida,
@@ -456,6 +470,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       comisionPasarela,
       montoNetoRestaurante,
       visaLinkUrl,
+      paymentIntentToken,
     });
   } catch (err) {
     console.error('cubopago error:', err.message);

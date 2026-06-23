@@ -1,78 +1,173 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
+const { consultarTransaccionCubo } = require('../services/visaLink');
 const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Provisional — confirmar con integracion@cubopago.com el listado oficial de estados antes de producción real
-const ESTADOS_APROBADO = new Set(['SUCCEEDED', 'PAID', 'APPROVED']);
-const ESTADOS_FALLIDO  = new Set(['REJECTED', 'FAILED', 'CANCELLED', 'CANCELED']);
+// Solo estados documentados oficialmente por Cubo Pago
+const ESTADOS_APROBADO = new Set(['SUCCEEDED']);
+const ESTADOS_FALLIDO  = new Set(['REJECTED']);
 
-// Busca un pedido usando múltiples estrategias para cubrir variaciones del webhook de Cubo
-async function buscarPedido(orderId, referencia) {
-  const SELECT = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
+const SELECT_PEDIDO = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
 
-  // Estrategia 1: UUID directo → buscar por pedidos.id
-  const uuids = [orderId].filter(v => v && UUID_RE.test(v));
-  for (const uuid of uuids) {
-    const { data } = await supabase.from('pedidos').select(SELECT).eq('id', uuid).single();
-    if (data) return data;
+async function buscarPedido(orderId) {
+  if (!orderId || !UUID_RE.test(orderId)) return null;
+
+  const { data } = await supabase.from('pedidos').select(SELECT_PEDIDO).eq('id', orderId).single();
+  if (!data) return null;
+
+  // Intentar obtener columnas de verificación Cubo (pueden no existir si migración pendiente)
+  const { data: cuboData } = await supabase
+    .from('pedidos')
+    .select('cubo_payment_intent_token, monto_esperado_centavos')
+    .eq('id', data.id)
+    .single();
+
+  return { ...data, ...(cuboData || {}) };
+}
+
+// Valida el payload y el resultado de la consulta a Cubo.
+// Función pura — sin efectos de red ni BD; exportada para pruebas unitarias.
+function validarWebhookCubo({ body, pedido, consulta, monedaEsperada }) {
+  // 1. Campos mínimos del payload
+  if (!body.identifier) {
+    return { ok: false, statusCode: 400, error: 'payload incompleto: falta identifier' };
+  }
+  if (!body.metadata?.orderId) {
+    return { ok: false, statusCode: 400, error: 'payload incompleto: falta metadata.orderId' };
   }
 
-  // Estrategia 2: código de referencia → buscar por payu_reference_code
-  const refs = [...new Set([referencia].filter(Boolean))];
-  for (const ref of refs) {
-    const { data } = await supabase.from('pedidos').select(SELECT).eq('payu_reference_code', ref).single();
-    if (data) return data;
+  const rawStatus = String(body.status || '').trim().toUpperCase();
+
+  // 2. Solo estados documentados
+  if (!ESTADOS_APROBADO.has(rawStatus) && !ESTADOS_FALLIDO.has(rawStatus)) {
+    return { ok: false, statusCode: 200, warning: `estado no reconocido: ${rawStatus}` };
   }
 
-  return null;
+  // Para REJECTED no se requiere verificación de monto ni token (no hay cargo)
+  if (ESTADOS_FALLIDO.has(rawStatus)) {
+    return { ok: true, statusCode: 200, tipo: 'fallido' };
+  }
+
+  // A partir de aquí: rawStatus === 'SUCCEEDED'
+
+  // 3. Consulta de verificación disponible
+  if (!consulta) {
+    return { ok: false, statusCode: 503, error: 'Verificación con Cubo no disponible temporalmente' };
+  }
+
+  // 4. Cubo confirma SUCCEEDED independientemente
+  const statusConsulta = String(consulta.status || '').trim().toUpperCase();
+  if (statusConsulta !== 'SUCCEEDED') {
+    return { ok: false, statusCode: 409, error: `Cubo confirma estado "${statusConsulta}", no SUCCEEDED` };
+  }
+
+  // 5. Token de la consulta coincide con el identifier del webhook
+  if (consulta.paymentIntentToken !== body.identifier) {
+    return { ok: false, statusCode: 409, error: 'Token no coincide entre webhook identifier y consulta Cubo' };
+  }
+
+  // 6. Pedido encontrado en la BD
+  if (!pedido) {
+    return { ok: false, statusCode: 200, warning: 'Pedido no encontrado' };
+  }
+
+  // 7. Token almacenado en el pedido coincide (si la migración ya corrió)
+  if (pedido.cubo_payment_intent_token && pedido.cubo_payment_intent_token !== body.identifier) {
+    return { ok: false, statusCode: 409, error: 'Token no coincide con el almacenado en el pedido' };
+  }
+
+  // 8. Moneda
+  if (consulta.currency && consulta.currency !== monedaEsperada) {
+    return { ok: false, statusCode: 409, error: `Moneda no coincide: Cubo devuelve "${consulta.currency}", esperada "${monedaEsperada}"` };
+  }
+
+  // 9. Monto — Cubo devuelve string decimal ("10.00") en la consulta GET; centavos en webhook
+  if (pedido.monto_esperado_centavos != null) {
+    const centavosConsulta = Math.round(parseFloat(consulta.amount) * 100);
+    if (centavosConsulta !== pedido.monto_esperado_centavos) {
+      return {
+        ok: false,
+        statusCode: 409,
+        error: `Monto no coincide: consulta ${centavosConsulta}¢ ≠ esperado ${pedido.monto_esperado_centavos}¢`,
+      };
+    }
+  }
+
+  // 10. Idempotencia: ya fue procesado
+  if (pedido.estado_pago === 'pagado') {
+    return { ok: true, statusCode: 200, tipo: 'duplicado' };
+  }
+
+  return { ok: true, statusCode: 200, tipo: 'aprobado' };
 }
 
 // Procesa un evento de pago de Cubo — compartido por la ruta canónica y la legacy.
-// NOTA DE SEGURIDAD: hasta que Cubo confirme firma/secreto/IP o endpoint GET de verificación,
-// no se puede autenticar criptográficamente el origen de este evento.
 async function procesarWebhookCubo(body) {
-  const rawStatus  = String(body.status || '').trim().toUpperCase();
-  const { identifier, referenceId, authorizationCode, processedAt, metadata } = body;
-  const orderId    = metadata?.orderId || metadata?.pedidoId;
-  const referencia = metadata?.referencia || referenceId;
+  const rawStatus = String(body.status || '').trim().toUpperCase();
+  const paymentIntentToken = body.identifier;
+  const { referenceId, authorizationCode, processedAt, metadata } = body;
+  const orderId = metadata?.orderId;
 
-  console.log('[CUBO WEBHOOK] status:', rawStatus, '| identifier:', identifier);
-  console.log('[CUBO WEBHOOK] buscando pedido por:', { orderId, referencia });
+  console.log('[CUBO WEBHOOK] status:', rawStatus, '| identifier:', paymentIntentToken);
+  console.log('[CUBO WEBHOOK] metadata.orderId:', orderId);
 
-  if (!orderId && !referencia) {
-    console.warn('[CUBO WEBHOOK] Sin orderId ni referencia — ignorando. Claves body:', Object.keys(body).join(','));
-    return { warning: 'no se encontró identificador de pedido en el webhook' };
+  // Validación rápida del payload (sin consultar Cubo ni BD)
+  const validacionBasica = validarWebhookCubo({ body, pedido: null, consulta: null, monedaEsperada: '' });
+  if (!validacionBasica.ok && validacionBasica.statusCode === 400) {
+    console.warn('[CUBO WEBHOOK] Payload incompleto:', validacionBasica.error, '| keys:', Object.keys(body).join(','));
+    return validacionBasica;
+  }
+  if (!ESTADOS_APROBADO.has(rawStatus) && !ESTADOS_FALLIDO.has(rawStatus)) {
+    console.log('[CUBO WEBHOOK] Estado no reconocido:', rawStatus, '— ignorando');
+    return { statusCode: 200, warning: validacionBasica.warning };
   }
 
+  // ── SUCCEEDED: verificar con Cubo antes de tocar la BD ──────────────────────
   if (ESTADOS_APROBADO.has(rawStatus)) {
-    const pedido = await buscarPedido(orderId, referencia);
-    if (!pedido) {
-      console.warn(`[CUBO WEBHOOK] Pedido no encontrado — orderId: ${orderId}, referencia: ${referencia}`);
-      return { warning: 'Pedido no encontrado' };
+    let consulta;
+    try {
+      consulta = await consultarTransaccionCubo(paymentIntentToken);
+      console.log('[CUBO WEBHOOK] Consulta Cubo OK — status:', consulta.status, '| currency:', consulta.currency, '| amount:', consulta.amount);
+    } catch (err) {
+      if (err.code === 'NOT_FOUND') {
+        console.error('[CUBO WEBHOOK] Transacción no encontrada en Cubo:', paymentIntentToken);
+        return { statusCode: 409, error: 'Transacción no encontrada en Cubo al verificar' };
+      }
+      // Error de red o servidor Cubo caído → no confirmar; devolver 502 para que Cubo reintente
+      console.error('[CUBO WEBHOOK] No se pudo verificar transacción con Cubo:', err.code, err.message);
+      return { statusCode: 502, error: 'Verificación con Cubo temporalmente no disponible — reintenta' };
     }
 
-    // Optimización: fast-path para webhooks claramente duplicados
-    // La barrera real de concurrencia está en el UPDATE condicional de abajo
-    if (pedido.estado_pago === 'pagado') {
+    const pedido = await buscarPedido(orderId);
+    const monedaEsperada = process.env.CUBO_CURRENCY || 'USD';
+
+    const validacion = validarWebhookCubo({ body, pedido, consulta, monedaEsperada });
+    console.log('[CUBO WEBHOOK] Validación:', JSON.stringify(validacion));
+
+    if (!validacion.ok) {
+      console.error('[CUBO WEBHOOK] Fallo de verificación:', validacion.error || validacion.warning, '| pedido:', orderId);
+      return validacion;
+    }
+
+    if (validacion.tipo === 'duplicado') {
       console.log('[CUBO WEBHOOK] Pedido ya pagado (fast path):', pedido.id);
-      return { warning: 'pedido ya procesado' };
+      return { statusCode: 200, warning: 'pedido ya procesado' };
     }
 
     // Actualización condicional atómica: solo actualiza si el pedido todavía no está pagado.
-    // Dos webhooks concurrentes que pasen el fast-path compiten aquí;
-    // PostgreSQL garantiza que solo uno gana — el otro obtiene 0 filas actualizadas.
-    // Columnas cubo_identifier etc. son opcionales (ver SQL en docs/cubo-sandbox-test.md § 7)
+    // Dos webhooks concurrentes compiten aquí; PostgreSQL garantiza que solo uno gana.
     const { data: updatedPedido, error: updateErr } = await supabase
       .from('pedidos')
       .update({
         estado_pago:             'pagado',
         estado:                  'confirmado',
-        cubo_identifier:         identifier         || null,
-        cubo_authorization_code: authorizationCode  || null,
-        pagado_en:               processedAt        || new Date().toISOString(),
+        cubo_identifier:         paymentIntentToken,
+        cubo_authorization_code: authorizationCode || null,
+        cubo_reference_id:       referenceId       || null,
+        pagado_en:               processedAt       || new Date().toISOString(),
       })
       .eq('id', pedido.id)
       .neq('estado_pago', 'pagado')
@@ -80,7 +175,7 @@ async function procesarWebhookCubo(body) {
       .maybeSingle();
 
     if (updateErr) {
-      // Columnas opcionales no existen aún → reintentar sin ellas (misma barrera atómica)
+      // Columnas opcionales no existen aún → reintentar sin ellas
       console.warn('[CUBO WEBHOOK] Columnas opcionales no disponibles (', updateErr.code, ') — reintentando sin ellas');
       const { data: u2, error: e2 } = await supabase
         .from('pedidos')
@@ -91,23 +186,21 @@ async function procesarWebhookCubo(body) {
         .maybeSingle();
       if (e2) {
         console.error('[CUBO WEBHOOK] Error crítico actualizando pedido:', e2);
-        return { error: 'Error al actualizar pedido' };
+        return { statusCode: 500, error: 'Error al actualizar pedido' };
       }
       if (!u2) {
-        console.log('[CUBO WEBHOOK] Pedido ya procesado (webhook concurrente ganó la carrera, retry):', pedido.id);
-        return { warning: 'pedido ya procesado' };
+        console.log('[CUBO WEBHOOK] Pedido ya procesado (webhook concurrente ganó, retry):', pedido.id);
+        return { statusCode: 200, warning: 'pedido ya procesado' };
       }
       console.log('[CUBO WEBHOOK] Pedido actualizado (sin cols extra):', pedido.id, '→ confirmado/pagado');
     } else if (!updatedPedido) {
-      // UPDATE no afectó ninguna fila: webhook concurrente ganó la carrera atómica
       console.log('[CUBO WEBHOOK] Pedido ya procesado (webhook concurrente ganó la carrera atómica):', pedido.id);
-      return { warning: 'pedido ya procesado' };
+      return { statusCode: 200, warning: 'pedido ya procesado' };
     } else {
-      console.log('[CUBO WEBHOOK] Pedido actualizado:', updatedPedido.id, '→ confirmado/pagado | identifier:', identifier);
+      console.log('[CUBO WEBHOOK] Pedido actualizado:', updatedPedido.id, '→ confirmado/pagado | token:', paymentIntentToken);
     }
 
-    // Decrementar stock — primero intenta con pedido_items (carrito multi-bolsa)
-    // No usar Math.max para sobreventas: si hay insuficiencia, registrar crítico sin descontar
+    // Decrementar stock — no usar Math.max; stock insuficiente requiere intervención manual
     const { data: pedidoItems } = await supabase
       .from('pedido_items').select('bolsa_id, cantidad').eq('pedido_id', pedido.id);
 
@@ -119,7 +212,6 @@ async function procesarWebhookCubo(body) {
             console.error('[CUBO WEBHOOK] CRÍTICO: Stock insuficiente bolsa:', pi.bolsa_id,
               '| disponible:', b.cantidad_disponible, '| solicitado:', pi.cantidad,
               '| pedido:', pedido.id, '— requiere intervención manual');
-            // No decrementar — el pago fue recibido pero el inventario debe corregirse manualmente
           } else {
             await supabase.from('bolsas')
               .update({ cantidad_disponible: b.cantidad_disponible - pi.cantidad })
@@ -129,7 +221,7 @@ async function procesarWebhookCubo(body) {
         }
       }
     } else {
-      // Fallback: pedido antiguo con una sola bolsa
+      // Fallback: pedido con bolsa única
       const cantDisp         = pedido.bolsas?.cantidad_disponible ?? 0;
       const cantidadComprada = pedido.cantidad || 1;
       if (cantDisp < cantidadComprada) {
@@ -184,23 +276,26 @@ async function procesarWebhookCubo(body) {
     }
 
     console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} (${pedido.codigo_recogida}) PAGADO — notificaciones enviadas`);
+    return { statusCode: 200 };
 
-  } else if (ESTADOS_FALLIDO.has(rawStatus)) {
-    const pedido = await buscarPedido(orderId, referencia);
+  }
+
+  // ── REJECTED: marcar fallido sin verificar monto (sin cargo) ────────────────
+  if (ESTADOS_FALLIDO.has(rawStatus)) {
+    const pedido = await buscarPedido(orderId);
     if (!pedido) {
-      console.warn(`[CUBO WEBHOOK] Pedido no encontrado para estado ${rawStatus}`);
-      return { warning: 'Pedido no encontrado' };
+      console.warn('[CUBO WEBHOOK] Pedido no encontrado para REJECTED — orderId:', orderId);
+      return { statusCode: 200, warning: 'Pedido no encontrado' };
     }
     await supabase.from('pedidos')
       .update({ estado_pago: 'fallido', estado: 'cancelado' })
-      .eq('id', pedido.id);
-    console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} marcado ${rawStatus} → cancelado/fallido`);
-
-  } else {
-    console.log(`[CUBO WEBHOOK] Estado no reconocido: ${rawStatus}`);
+      .eq('id', pedido.id)
+      .neq('estado_pago', 'pagado'); // no sobreescribir un pago ya confirmado
+    console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} marcado fallido/cancelado — status Cubo: ${rawStatus}`);
+    return { statusCode: 200 };
   }
 
-  return {};
+  return { statusCode: 200 };
 }
 
 // POST /api/webhooks/cubo — URL canónica; configurar en Cubo Admin → Developers → Webhooks
@@ -209,12 +304,14 @@ router.post('/cubo', async (req, res) => {
   try {
     console.log('[CUBO WEBHOOK] body completo:', JSON.stringify(req.body, null, 2));
     const result = await procesarWebhookCubo(req.body);
-    res.status(200).json({ received: true, ...result });
+    const { statusCode = 200, ...data } = result;
+    return res.status(statusCode).json({ received: true, ...data });
   } catch (err) {
-    console.error('[CUBO WEBHOOK] Error interno:', err.message);
-    res.status(200).json({ received: true });
+    console.error('[CUBO WEBHOOK] Error interno no capturado:', err.message);
+    return res.status(500).json({ received: true, error: 'Error interno' });
   }
 });
 
 module.exports = router;
 module.exports.procesarWebhookCubo = procesarWebhookCubo;
+module.exports.validarWebhookCubo  = validarWebhookCubo;

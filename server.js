@@ -2,11 +2,12 @@ require('dotenv').config();
 
 // Diagnóstico seguro: presencia de variables, nunca valores
 console.log('[CUBO ENV CHECK]', {
-  commit: process.env.RENDER_GIT_COMMIT || 'local',
-  cuboApiKeyPresent:  Boolean(process.env.CUBO_API_KEY),
-  cuboApiUrlPresent:  Boolean(process.env.CUBO_API_URL),
-  cuboEnvironment:    process.env.CUBO_ENVIRONMENT || null,
-  cuboVariableNames:  Object.keys(process.env).filter(k => k.includes('CUBO')).sort(),
+  commit:            process.env.RENDER_GIT_COMMIT || 'local',
+  cuboApiKeyPresent: Boolean(process.env.CUBO_API_KEY),
+  cuboApiUrlPresent: Boolean(process.env.CUBO_API_URL),
+  cuboEnvironment:   process.env.CUBO_ENVIRONMENT || null,
+  cuboCurrency:      process.env.CUBO_CURRENCY    || 'USD (default)',
+  cuboVariableNames: Object.keys(process.env).filter(k => k.includes('CUBO')).sort(),
 });
 
 // Validación de arranque para Cubo Pago en producción
