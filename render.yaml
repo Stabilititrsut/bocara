@@ -65,5 +65,13 @@ services:
         value: "50"
 
       # Cubo Pago Guatemala — https://developers.cubopago.com
-      - key: CUBOPAGO_API_KEY
+      - key: CUBO_API_URL
+        value: https://api-payment-a.cubopago.com
+      - key: CUBO_API_KEY
+        sync: false
+      - key: CUBO_ENVIRONMENT
+        value: production
+      - key: CUBO_PAYMENTS_ENABLED
+        value: "false"
+      - key: CUBOPAGO_API_KEY  # legacy — reemplazada por CUBO_API_KEY; mantener mientras se migra
         sync: false

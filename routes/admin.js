@@ -836,4 +836,18 @@ router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req
   res.json({ ok: true });
 });
 
+// GET /api/admin/cubo-status — diagnóstico de integración Cubo Pago (nunca expone keys ni fragmentos)
+router.get('/cubo-status', authMiddleware, adminOnly, (req, res) => {
+  const apiUrl = process.env.CUBO_API_URL || '';
+  res.json({
+    configurado:                    !!(apiUrl && process.env.CUBO_API_KEY),
+    ambiente:                       process.env.CUBO_ENVIRONMENT || 'no configurado',
+    pagos_habilitados:              process.env.CUBO_PAYMENTS_ENABLED === 'true',
+    api_url_produccion:             !!(apiUrl && !/sandbox/i.test(apiUrl)),
+    api_key_configurada:            !!(process.env.CUBO_API_KEY || (process.env.CUBO_ENVIRONMENT !== 'production' && process.env.CUBOPAGO_API_KEY)),
+    webhook_url:                    'https://bocara.onrender.com/api/webhooks/cubo',
+    verificacion_webhook_disponible: false,
+  });
+});
+
 module.exports = router;

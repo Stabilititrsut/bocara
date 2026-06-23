@@ -6,6 +6,7 @@ const authMiddleware = require('../middleware/auth');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { generarLinkPago } = require('../services/visaLink');
 const { getReservadoPendiente } = require('../services/stock');
+const { procesarWebhookCubo } = require('./webhooks');
 const router = express.Router();
 
 const SANDBOX = process.env.PAYU_SANDBOX !== 'false';
@@ -266,8 +267,14 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
     const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
 
-    if (!process.env.CUBOPAGO_API_KEY) {
-      return res.status(500).json({ error: 'CUBOPAGO_API_KEY no configurada en el servidor' });
+    if (process.env.CUBO_PAYMENTS_ENABLED !== 'true') {
+      return res.status(503).json({ error: 'Pagos temporalmente deshabilitados' });
+    }
+
+    const apiKeyDisponible = process.env.CUBO_API_KEY
+      || (process.env.CUBO_ENVIRONMENT !== 'production' ? process.env.CUBOPAGO_API_KEY : null);
+    if (!apiKeyDisponible) {
+      return res.status(500).json({ error: 'CUBO_API_KEY no configurada en el servidor' });
     }
 
     // Normalizar: soportar modo carrito (items[]) y modo legado (bolsa_id + cantidad)
@@ -456,62 +463,50 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/pagos/cubo/crear-link-test — endpoint sin auth para validar Cubo Sandbox
-router.post('/cubo/crear-link-test', async (req, res) => {
+// POST /api/pagos/cubo/crear-link-test — diagnóstico de integración Cubo (solo dev, admins)
+router.post('/cubo/crear-link-test', authMiddleware, async (req, res) => {
+  if (process.env.CUBO_ENVIRONMENT === 'production') {
+    return res.status(404).json({ error: 'Endpoint no disponible en producción' });
+  }
+  if (req.usuario?.rol !== 'admin') {
+    return res.status(403).json({ error: 'Solo administradores pueden usar este endpoint' });
+  }
+
+  const cuboApiUrl = process.env.CUBO_API_URL;
+  const apiKey     = process.env.CUBO_API_KEY || process.env.CUBOPAGO_API_KEY;
+
+  if (!cuboApiUrl) return res.status(500).json({ error: 'CUBO_API_URL no configurada' });
+  if (!apiKey)     return res.status(500).json({ error: 'CUBO_API_KEY no configurada' });
+
+  console.log('[CUBO TEST] Creando link de prueba | URL:', cuboApiUrl, '| key: configurada ✓');
+
+  const payload = {
+    description: 'Prueba Bocara Dev',
+    amount: 100,
+    redirectUri: 'https://bocara.vercel.app/pago-exitoso',
+    metadata: { orderId: 'TEST-CUBO-001', source: 'bocara', environment: 'dev' },
+    clientName: 'Cliente Prueba',
+    clientEmail: 'test@bocara.com',
+    clientPhone: '+50255555555',
+    items: [{ name: 'Bolsa de comida prueba', price: '1.00', quantity: 1 }],
+  };
+
   try {
-    const apiKey = process.env.CUBO_API_KEY_SANDBOX || process.env.CUBOPAGO_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ error: 'CUBO_API_KEY_SANDBOX no configurada en el servidor' });
-    }
-
-    const baseUrl = process.env.VISALINK_API_URL || 'https://api-payment-sandbox.cubopago.com';
-
-    console.log('[CUBO TEST] Creando link de pago...');
-    console.log('[CUBO TEST] API key exists:', !!apiKey, '| prefix:', apiKey.substring(0, 6) + '...');
-    console.log('[CUBO TEST] Base URL:', baseUrl);
-
-    const payload = {
-      description: 'Prueba Bocara Sandbox',
-      amount: 100,
-      redirectUri: 'https://bocara.vercel.app/pago-exitoso',
-      metadata: {
-        orderId: 'TEST-CUBO-001',
-        source: 'bocara',
-        environment: 'sandbox',
-      },
-      clientName: 'Cliente Prueba',
-      clientEmail: 'test@bocara.com',
-      clientPhone: '+50255555555',
-      items: [
-        { name: 'Bolsa de comida prueba', price: '1.00', quantity: 1 },
-      ],
-    };
-
-    console.log('[CUBO TEST] Payload enviado a Cubo:', JSON.stringify(payload, null, 2));
-
-    const response = await axios.post(`${baseUrl}/api/v1/links/one-use`, payload, {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-KEY': apiKey,
-      },
+    const response = await axios.post(`${cuboApiUrl}/api/v1/links/one-use`, payload, {
+      headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
+      timeout: 10000,
     });
 
-    console.log('[CUBO TEST] Response Cubo:', JSON.stringify(response.data, null, 2));
-
+    console.log('[CUBO TEST] Respuesta Cubo status:', response.status);
     res.json({
       success: true,
       paymentLink: response.data.cuboRedirectUri || response.data.url || null,
-      identifier: response.data.paymentIntentToken || response.data.identifier || response.data.id || null,
+      identifier: response.data.paymentIntentToken || response.data.identifier || null,
       cuboRawResponse: response.data,
-      requestSent: {
-        url: `${baseUrl}/api/v1/links/one-use`,
-        payload,
-        note: 'X-API-KEY omitida de este log por seguridad',
-      },
     });
   } catch (err) {
     const errorData = err.response?.data;
-    console.error('[CUBO TEST] Error al crear link:', err.message, errorData || '');
+    console.error('[CUBO TEST] Error:', err.message, errorData || '');
     res.status(err.response?.status || 500).json({
       success: false,
       error: err.message,
@@ -520,73 +515,16 @@ router.post('/cubo/crear-link-test', async (req, res) => {
   }
 });
 
-// POST /api/pagos/cubo-webhook — Cubo Pago notifica aquí el resultado de cada pago
-// Configurar en Cubo Admin → Developers → Webhooks
+// POST /api/pagos/cubo-webhook — URL legacy de Cubo (conservada por retrocompatibilidad)
+// Configurar en Cubo Admin la URL canónica: https://bocara.onrender.com/api/webhooks/cubo
 router.post('/cubo-webhook', async (req, res) => {
+  console.warn('[CUBO WEBHOOK LEGACY] Recibido en /api/pagos/cubo-webhook — actualiza la URL del webhook en Cubo Admin a /api/webhooks/cubo');
   try {
-    const { paymentIntentToken, status, metadata } = req.body;
-    const referencia = metadata?.referencia;
-
-    if (!referencia) {
-      console.warn('cubo-webhook: sin referencia en metadata', req.body);
-      return res.status(200).send('OK');
-    }
-
-    const { data: pedido } = await supabase
-      .from('pedidos')
-      .select('id, bolsa_id, usuarios(id,expo_push_token), negocios(propietario_id), codigo_recogida, total, tipo_entrega, bolsas(nombre,cantidad_disponible)')
-      .eq('payu_reference_code', referencia)
-      .single();
-
-    if (!pedido) {
-      console.warn('cubo-webhook: pedido no encontrado para referencia', referencia);
-      return res.status(200).send('OK');
-    }
-
-    if (status === 'SUCCEEDED' || status === 'PAID' || status === 'APPROVED' || status === 'success') {
-      await supabase.from('pedidos')
-        .update({ estado_pago: 'pagado', estado: 'confirmado' })
-        .eq('id', pedido.id);
-
-      // Decrementar stock
-      const cantDisp = pedido.bolsas?.cantidad_disponible ?? 0;
-      if (cantDisp > 0) {
-        await supabase.from('bolsas')
-          .update({ cantidad_disponible: cantDisp - 1 })
-          .eq('id', pedido.bolsa_id);
-      }
-
-      // Sumar puntos al cliente
-      try {
-        const { data: cfg } = await supabase.from('configuracion').select('valor').eq('clave', 'puntos_por_pedido').single();
-        const puntos = cfg ? parseInt(cfg.valor) : 10;
-        await supabase.rpc('sumar_puntos', { user_id: pedido.usuarios.id, puntos });
-      } catch { }
-
-      // Push al cliente
-      const mensajeCliente = pedido.tipo_entrega === 'recogida'
-        ? `Código de recogida: ${pedido.codigo_recogida} — ¡Ya puedes ir!`
-        : 'Tu pedido está siendo preparado. Te avisamos cuando salga.';
-      await enviarNotificacionPush(pedido.usuarios?.expo_push_token, '✅ ¡Pago confirmado!', mensajeCliente, { pedidoId: pedido.id, screen: 'pedidos' });
-      await guardarNotificacion(supabase, pedido.usuarios.id, 'pago_confirmado', '✅ Pago confirmado', mensajeCliente, { pedidoId: pedido.id });
-
-      // Push al restaurante
-      const { data: propietario } = await supabase
-        .from('usuarios').select('expo_push_token').eq('id', pedido.negocios.propietario_id).single();
-      const mensajeRest = `Pedido ${pedido.codigo_recogida} — Q${pedido.total}`;
-      await enviarNotificacionPush(propietario?.expo_push_token, '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id, screen: 'restaurante' });
-      await guardarNotificacion(supabase, pedido.negocios.propietario_id, 'nuevo_pedido', '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id });
-
-    } else {
-      await supabase.from('pedidos')
-        .update({ estado_pago: 'fallido', estado: 'cancelado' })
-        .eq('id', pedido.id);
-    }
-
-    res.status(200).send('OK');
+    const result = await procesarWebhookCubo(req.body);
+    res.status(200).json({ received: true, ...result });
   } catch (err) {
-    console.error('cubo-webhook error:', err.message);
-    res.status(200).send('OK'); // Siempre 200 para que Cubo no reintente indefinidamente
+    console.error('[CUBO WEBHOOK LEGACY] Error interno:', err.message);
+    res.status(200).json({ received: true });
   }
 });
 

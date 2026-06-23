@@ -5,11 +5,20 @@
  */
 const axios = require('axios');
 
-const BASE_URL = process.env.VISALINK_API_URL || 'https://api-payment-sandbox.cubopago.com';
-
 async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedireccion, cliente, items }) {
-  const apiKey = process.env.CUBO_API_KEY_SANDBOX || process.env.CUBOPAGO_API_KEY;
-  if (!apiKey) throw new Error('CUBO_API_KEY_SANDBOX no configurada en el servidor');
+  const cuboApiUrl = process.env.CUBO_API_URL;
+  let cuboApiKey = process.env.CUBO_API_KEY;
+
+  // En desarrollo se acepta CUBOPAGO_API_KEY como fallback con advertencia explícita
+  if (!cuboApiKey && process.env.CUBO_ENVIRONMENT !== 'production') {
+    cuboApiKey = process.env.CUBOPAGO_API_KEY;
+    if (cuboApiKey) {
+      console.warn('[CUBO] Usando CUBOPAGO_API_KEY como fallback de desarrollo. Configure CUBO_API_KEY en producción.');
+    }
+  }
+
+  if (!cuboApiUrl) throw new Error('CUBO_API_URL no configurada en el servidor');
+  if (!cuboApiKey) throw new Error('CUBO_API_KEY no configurada en el servidor');
 
   // Cubo Pago recibe el monto en centavos (entero)
   const montoCentavos = Math.round(parseFloat(monto) * 100);
@@ -24,21 +33,33 @@ async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedirec
   };
 
   if (cliente?.nombre)   body.clientName  = cliente.nombre;
-  if (cliente?.email)    body.clientEmail  = cliente.email;
-  if (cliente?.telefono) body.clientPhone  = cliente.telefono;
-  if (items?.length)     body.items        = items;
+  if (cliente?.email)    body.clientEmail = cliente.email;
+  if (cliente?.telefono) body.clientPhone = cliente.telefono;
+  if (items?.length)     body.items       = items;
 
   let data;
   try {
-    ({ data } = await axios.post(`${BASE_URL}/api/v1/links/one-use`, body, {
+    ({ data } = await axios.post(`${cuboApiUrl}/api/v1/links/one-use`, body, {
       headers: {
-        'X-API-KEY':    apiKey,
+        'X-API-KEY':    cuboApiKey,
         'Content-Type': 'application/json',
       },
+      timeout: 10000,
     }));
   } catch (err) {
-    const msg = err.response?.data?.message ?? err.message;
-    throw new Error(`Cubo Pago error: ${Array.isArray(msg) ? msg.join(', ') : msg}`);
+    if (!err.response) {
+      throw new Error(`Cubo Pago: error de red — ${err.message}`);
+    }
+    const status  = err.response.status;
+    const msg     = err.response.data?.message ?? err.message;
+    const detalle = Array.isArray(msg) ? msg.join(', ') : String(msg);
+    if (status === 401 || status === 403) {
+      throw new Error('Cubo Pago: API key inválida o sin permisos (401/403)');
+    }
+    if (status === 400) {
+      throw new Error(`Cubo Pago: solicitud inválida — ${detalle}`);
+    }
+    throw new Error(`Cubo Pago error ${status}: ${detalle}`);
   }
 
   if (!data?.cuboRedirectUri) {

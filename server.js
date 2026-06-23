@@ -1,4 +1,22 @@
 require('dotenv').config();
+
+// Validación de arranque para Cubo Pago en producción
+if (process.env.CUBO_ENVIRONMENT === 'production') {
+  if (!process.env.CUBO_API_URL) {
+    console.error('❌ CUBO_API_URL no configurada en producción. Configúrala en Render Dashboard.');
+    process.exit(1);
+  }
+  if (!process.env.CUBO_API_KEY) {
+    console.error('❌ CUBO_API_KEY no configurada en producción. Configúrala en Render Dashboard.');
+    process.exit(1);
+  }
+  if (/sandbox/i.test(process.env.CUBO_API_URL)) {
+    console.error('❌ CUBO_API_URL apunta a sandbox en producción:', process.env.CUBO_API_URL);
+    process.exit(1);
+  }
+  console.warn('[CUBO PROD] Webhook sin verificación criptográfica ni consulta independiente a Cubo. Contactar integracion@cubopago.com para obtener firma, secreto o endpoint GET de verificación antes de activar CUBO_PAYMENTS_ENABLED=true.');
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
