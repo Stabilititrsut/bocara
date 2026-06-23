@@ -1,7 +1,7 @@
 const express = require('express');
 const supabase = require('../config/supabase');
-const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { consultarTransaccionCubo } = require('../services/visaLink');
+const { procesarEventosPedido } = require('../services/pagoEventos');
 const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -198,6 +198,9 @@ async function procesarWebhookCubo(body) {
 
     if (validacion.tipo === 'duplicado') {
       console.log('[CUBO WEBHOOK] Fast-path: pedido ya pagado:', pedido.id);
+      procesarEventosPedido(pedido.id).catch(err =>
+        console.warn('[CUBO WEBHOOK] Error procesando eventos pendientes (fast-path duplicado):', err.message)
+      );
       return { statusCode: 200, warning: 'pedido ya procesado' };
     }
 
@@ -227,6 +230,9 @@ async function procesarWebhookCubo(body) {
 
     switch (resultado) {
       case 'duplicado':
+        procesarEventosPedido(pedido.id).catch(err =>
+          console.warn('[CUBO WEBHOOK] Error procesando eventos pendientes (RPC duplicado):', err.message)
+        );
         return { statusCode: 200, warning: 'pedido ya procesado' };
 
       case 'stock_insuficiente':
@@ -244,50 +250,20 @@ async function procesarWebhookCubo(body) {
       case 'pedido_no_encontrado':
         return { statusCode: 200, warning: 'Pedido no encontrado (RPC)' };
 
-      case 'procesado':
-        break; // continuar a notificaciones
+      case 'procesado': {
+        const codigoRecogida = rpcResult.codigo_recogida || pedido.codigo_recogida;
+        procesarEventosPedido(pedido.id).catch(err =>
+          console.warn('[CUBO WEBHOOK] Error procesando eventos post-pago:', err.message)
+        );
+        console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} CONFIRMADO — código: ${codigoRecogida}`);
+        return { statusCode: 200 };
+      }
 
       default:
         console.error('[CUBO WEBHOOK] RPC resultado inesperado:', resultado);
         return { statusCode: 503, error: `Resultado inesperado del procesador de pago: ${resultado}` };
     }
 
-    // ── Notificaciones fuera de la transacción ───────────────────────────────
-    // El pago ya está confirmado atómicamente por la RPC.
-    // Si falla una notificación, no revierte el pago ni lo duplica al repetir el webhook.
-    const codigoRecogida = rpcResult.codigo_recogida || pedido.codigo_recogida;
-    const mensajeCliente = pedido.tipo_entrega === 'recogida'
-      ? `Código de recogida: ${codigoRecogida} — ¡Ya puedes ir!`
-      : 'Tu pedido está siendo preparado. Te avisamos cuando salga.';
-
-    await enviarNotificacionPush(
-      pedido.usuarios?.expo_push_token,
-      '✅ ¡Pago confirmado!', mensajeCliente,
-      { pedidoId: pedido.id, screen: 'pedidos' }
-    ).catch(err => console.warn('[CUBO WEBHOOK] Notif. cliente fallida (pago ya confirmado):', err.message));
-
-    await guardarNotificacion(
-      supabase, pedido.usuario_id, 'pago_confirmado',
-      '✅ Pago confirmado', mensajeCliente, { pedidoId: pedido.id }
-    ).catch(err => console.warn('[CUBO WEBHOOK] guardarNotificacion cliente fallida:', err.message));
-
-    if (pedido.negocios?.propietario_id) {
-      const { data: propietario } = await supabase
-        .from('usuarios').select('expo_push_token').eq('id', pedido.negocios.propietario_id).single();
-      const mensajeRest = `Pedido ${codigoRecogida} — Q${pedido.total}`;
-      await enviarNotificacionPush(
-        propietario?.expo_push_token,
-        '🛍️ Nuevo pedido', mensajeRest,
-        { pedidoId: pedido.id, screen: 'restaurante' }
-      ).catch(err => console.warn('[CUBO WEBHOOK] Notif. restaurante fallida:', err.message));
-      await guardarNotificacion(
-        supabase, pedido.negocios.propietario_id, 'nuevo_pedido',
-        '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id }
-      ).catch(err => console.warn('[CUBO WEBHOOK] guardarNotificacion restaurante fallida:', err.message));
-    }
-
-    console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} CONFIRMADO — código: ${codigoRecogida}`);
-    return { statusCode: 200 };
   }
 
   // ── REJECTED: marcar fallido sin cargo, sin verificación de monto ────────────
