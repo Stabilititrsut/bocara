@@ -713,8 +713,6 @@ DECLARE
   v_filas_2       integer;
   v_notif_clave   text;
   v_notif_count   integer;
-  v_evento_abd_id uuid;
-  v_estado_abd    text;
 BEGIN
 
   -- ──────────────────────────────────────────────────────────────────────────
@@ -781,9 +779,9 @@ BEGIN
           'pendiente', 'pendiente', 'recogida', 210.00, 'BOC-MI',
           v_tok_mi, v_monto, 2)
   RETURNING id INTO v_ped_mi;
-  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
-  VALUES (v_ped_mi, v_bolsa_a, 2, 75.00),
-         (v_ped_mi, v_bolsa_b, 1, 60.00);
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario, subtotal)
+  VALUES (v_ped_mi, v_bolsa_a, 2, 75.00, 150.00),
+         (v_ped_mi, v_bolsa_b, 1, 60.00,  60.00);
 
   -- Pedido misma bolsa: bolsa_a × 1 + bolsa_a × 1 (mismo bolsa_id en dos filas)
   INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
@@ -793,9 +791,9 @@ BEGIN
           'pendiente', 'pendiente', 'recogida', 150.00, 'BOC-MB',
           v_tok_mb, v_monto, 1)
   RETURNING id INTO v_ped_mb;
-  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
-  VALUES (v_ped_mb, v_bolsa_a, 1, 75.00),
-         (v_ped_mb, v_bolsa_a, 1, 75.00);
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario, subtotal)
+  VALUES (v_ped_mb, v_bolsa_a, 1, 75.00, 75.00),
+         (v_ped_mb, v_bolsa_a, 1, 75.00, 75.00);
 
   -- Pedido sin items — legacy/histórico (no Cubo): NO se insertan pedido_items
   INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
@@ -814,9 +812,9 @@ BEGIN
           'pendiente', 'pendiente', 'recogida', 175.00, 'BOC-INS',
           v_tok_ins, v_monto, 1)
   RETURNING id INTO v_ped_ins;
-  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
-  VALUES (v_ped_ins, v_bolsa_a, 1, 75.00),
-         (v_ped_ins, v_bolsa_c, 2, 50.00);
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario, subtotal)
+  VALUES (v_ped_ins, v_bolsa_a, 1, 75.00,  75.00),
+         (v_ped_ins, v_bolsa_c, 2, 50.00, 100.00);
 
   -- Pedido discrepancia: pedidos.cantidad=1 (primera bolsa), items sum=4 (bolsa_a × 1 + bolsa_a × 3)
   INSERT INTO pedidos (id, usuario_id, bolsa_id, negocio_id, estado, estado_pago,
@@ -826,9 +824,9 @@ BEGIN
           'pendiente', 'pendiente', 'recogida', 300.00, 'BOC-QTY',
           v_tok_qty, v_monto, 1)
   RETURNING id INTO v_ped_qty;
-  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
-  VALUES (v_ped_qty, v_bolsa_a, 1, 75.00),
-         (v_ped_qty, v_bolsa_a, 3, 75.00);
+  INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario, subtotal)
+  VALUES (v_ped_qty, v_bolsa_a, 1, 75.00,  75.00),
+         (v_ped_qty, v_bolsa_a, 3, 75.00, 225.00);
 
   -- ════════════════════════════════════════════════════════════════
   -- TEST 1 — Multi-item: todas las bolsas descontadas exactamente una vez
@@ -1006,8 +1004,8 @@ BEGIN
             'pendiente', 'pendiente', 'recogida', 60.00, 'BOC-MT',
             v_tok_mt, 5000)   -- monto_esperado = 5000 centavos (server-computed)
     RETURNING id INTO v_ped_mt;
-    INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario)
-    VALUES (v_ped_mt, v_bolsa_b, 1, 50.00);
+    INSERT INTO pedido_items (pedido_id, bolsa_id, cantidad, precio_unitario, subtotal)
+    VALUES (v_ped_mt, v_bolsa_b, 1, 50.00, 50.00);
 
     -- Enviar monto distinto al almacenado → monto_incorrecto
     SELECT confirmar_pago_cubo(v_ped_mt, v_tok_mt, 9999, 'SUCCEEDED', v_tok_mt, NULL, NULL, NULL)

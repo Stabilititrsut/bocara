@@ -408,8 +408,11 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     }));
     const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
     if (itemsInsertErr) {
-      // Tabla pedido_items no existe aún — ejecutar migración SQL (ver docs)
-      console.warn('[PAGO] pedido_items no disponible, stock se gestionará por bolsa_id principal:', itemsInsertErr.message);
+      await supabase.from('pedidos')
+        .update({ estado: 'cancelado', estado_pago: 'fallido' })
+        .eq('id', pedido.id);
+      console.error('[PAGO] Error insertando pedido_items — pedido cancelado. Ejecutar migración SQL si la tabla o columnas no existen:', itemsInsertErr.message);
+      return res.status(500).json({ error: 'Error al registrar los items del pedido. Intenta de nuevo.' });
     }
 
     const { data: usuario } = await supabase
@@ -456,10 +459,13 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       })
       .eq('id', pedido.id);
     if (tokenUpdateErr) {
-      console.warn('[PAGO] No se pudo guardar cubo_payment_intent_token (migración pendiente):', tokenUpdateErr.message);
-    } else {
-      console.log('[PAGO] token guardado en pedido:', paymentIntentToken, '| monto_esperado_centavos:', montoCentavos);
+      await supabase.from('pedidos')
+        .update({ estado: 'cancelado', estado_pago: 'fallido' })
+        .eq('id', pedido.id);
+      console.error('[PAGO] Error guardando token Cubo — pedido cancelado. Columnas Cubo pueden no existir (ejecutar migración SQL):', tokenUpdateErr.message);
+      return res.status(500).json({ error: 'Error al guardar el token de pago. Ejecuta la migración SQL (cubo-pago-schema.sql) e intenta de nuevo.' });
     }
+    console.log('[PAGO] token guardado en pedido:', paymentIntentToken, '| monto_esperado_centavos:', montoCentavos);
 
     res.json({
       pedidoId: pedido.id,
