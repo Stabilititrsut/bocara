@@ -122,6 +122,7 @@ async function enviarRecordatoriosRecogida() {
 app.listen(PORT, () => {
   console.log(`🚀 Bocara API corriendo en puerto ${PORT}`);
   console.log(`🌍 Ambiente: ${process.env.NODE_ENV}`);
+  console.log('[ADMIN] Ruta disponible: GET /api/admin/cubo-status');
   setInterval(enviarRecordatoriosRecogida, 60 * 1000);
   console.log('⏰ Cron de recordatorios de recogida activo');
 });
