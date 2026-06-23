@@ -186,7 +186,11 @@ async function procesarWebhookCubo(body) {
     }
 
     const pedido        = await buscarPedido(orderId);
-    const monedaEsperada = process.env.CUBO_CURRENCY || 'USD';
+    const monedaEsperada = process.env.CUBO_CURRENCY;
+    if (!monedaEsperada) {
+      console.error('[CUBO WEBHOOK] CUBO_CURRENCY no configurada — no se puede verificar moneda. Configurar como GTQ en Render Dashboard.');
+      return { statusCode: 503, error: 'CUBO_CURRENCY no configurada en el servidor — configurar como GTQ' };
+    }
 
     const validacion = validarWebhookCubo({ body, pedido, consulta, monedaEsperada });
     console.log('[CUBO WEBHOOK] Validación:', JSON.stringify(validacion));

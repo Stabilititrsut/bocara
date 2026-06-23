@@ -6,7 +6,7 @@ console.log('[CUBO ENV CHECK]', {
   cuboApiKeyPresent: Boolean(process.env.CUBO_API_KEY),
   cuboApiUrlPresent: Boolean(process.env.CUBO_API_URL),
   cuboEnvironment:   process.env.CUBO_ENVIRONMENT || null,
-  cuboCurrency:      process.env.CUBO_CURRENCY    || 'USD (default)',
+  cuboCurrency:      process.env.CUBO_CURRENCY    || '⚠ NO CONFIGURADA',
   cuboVariableNames: Object.keys(process.env).filter(k => k.includes('CUBO')).sort(),
 });
 
@@ -18,6 +18,14 @@ if (process.env.CUBO_ENVIRONMENT === 'production') {
   }
   if (!process.env.CUBO_API_KEY) {
     console.error('❌ CUBO_API_KEY no configurada en producción. Configúrala en Render Dashboard.');
+    process.exit(1);
+  }
+  if (!process.env.CUBO_CURRENCY) {
+    console.error('❌ CUBO_CURRENCY no configurada en producción. Configurar como GTQ en Render Dashboard.');
+    process.exit(1);
+  }
+  if (process.env.CUBO_CURRENCY !== 'GTQ') {
+    console.error(`❌ CUBO_CURRENCY="${process.env.CUBO_CURRENCY}" — debe ser "GTQ" (quetzales, confirmado por Cubo). Verificar en Render Dashboard.`);
     process.exit(1);
   }
   if (/sandbox/i.test(process.env.CUBO_API_URL)) {
