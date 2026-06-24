@@ -32,7 +32,11 @@ if (process.env.CUBO_ENVIRONMENT === 'production') {
     console.error('❌ CUBO_API_URL apunta a sandbox en producción:', process.env.CUBO_API_URL);
     process.exit(1);
   }
-  console.warn('[CUBO PROD] Webhook sin verificación criptográfica ni consulta independiente a Cubo. Contactar integracion@cubopago.com para obtener firma, secreto o endpoint GET de verificación antes de activar CUBO_PAYMENTS_ENABLED=true.');
+  // Verificación de webhook implementada en routes/webhooks.js:
+  //   1. GET /api/v1/transactions/:token  (consulta independiente a Cubo antes de cualquier escritura)
+  //   2. Valida: status=SUCCEEDED, token, currency=GTQ, monto en centavos vs monto_esperado_centavos
+  //   3. RPC confirmar_pago_cubo: bloqueo FOR UPDATE + revalidación atómica de token, monto e inventario
+  console.log('[CUBO PROD] Verificación de webhook activa: consulta independiente GET /api/v1/transactions/:token + validación de token, moneda GTQ y monto server-side.');
 }
 
 const express = require('express');
