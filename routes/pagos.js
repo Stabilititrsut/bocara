@@ -420,7 +420,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
 
     const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
-    const redirectUri = `${frontendUrl}/pago-exitoso?pedidoId=${pedido.id}`;
+    const redirectUri = `${frontendUrl}/pago-retorno?pedidoId=${pedido.id}`;
     console.log('[CUBO] redirectUri:', redirectUri);
 
     // Items para Cubo: todos los productos del carrito + propina si aplica
@@ -507,7 +507,7 @@ router.post('/cubo/crear-link-test', authMiddleware, async (req, res) => {
   const payload = {
     description: 'Prueba Bocara Dev',
     amount: 100,
-    redirectUri: 'https://bocara.vercel.app/pago-exitoso',
+    redirectUri: 'https://bocara.vercel.app/pago-retorno',
     metadata: { orderId: 'TEST-CUBO-001', source: 'bocara', environment: 'dev' },
     clientName: 'Cliente Prueba',
     clientEmail: 'test@bocara.com',

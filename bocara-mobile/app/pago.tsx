@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Alert, ActivityIndicator, SafeAreaView, Image, Modal, TextInput,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -196,31 +197,39 @@ export default function PagoScreen() {
       }
 
       console.log('C. URL de redirección:', visaLinkUrl);
-      console.log('D. Abriendo URL de pago...');
+      console.log('D. Abriendo URL de pago... (platform:', Platform.OS, ')');
 
-      await WebBrowser.openBrowserAsync(visaLinkUrl, { showTitle: true, toolbarColor: Colors.primary });
+      if (Platform.OS === 'web') {
+        // En web móvil, window.open() después de un await es bloqueado como popup.
+        // window.location.href navega en la misma pestaña — nunca bloqueado.
+        window.location.href = visaLinkUrl;
+        // La página navega fuera — pago-retorno.tsx maneja el retorno de CuboPago.
+      } else {
+        // En nativo: in-app browser (SFSafariViewController / Chrome Custom Tab)
+        await WebBrowser.openBrowserAsync(visaLinkUrl, { showTitle: true, toolbarColor: Colors.primary });
 
-      console.log('E. Browser cerrado — iniciando verificación de pago');
+        console.log('E. Browser cerrado — iniciando verificación de pago');
 
-      setVerificando(true);
-      let intentos = 0;
-      pollingRef.current = setInterval(async () => {
-        intentos++;
-        try {
-          const estadoRes = await pagosAPI.estado(pedidoId);
-          const { estado_pago, estado } = estadoRes.data;
-          if (estado_pago === 'pagado' && estado === 'confirmado') {
-            limpiarPolling(); setVerificando(false);
-            setFacturaVisible(true);
-          } else if (estado_pago === 'fallido' || estado === 'cancelado') {
-            limpiarPolling(); setVerificando(false);
-            setErrorPago('El pago fue rechazado o cancelado. Revisa los datos de tu tarjeta e intenta de nuevo.');
-          } else if (intentos >= 10) {
-            limpiarPolling(); setVerificando(false);
-            setPendiente(true);
-          }
-        } catch {}
-      }, 3000);
+        setVerificando(true);
+        let intentos = 0;
+        pollingRef.current = setInterval(async () => {
+          intentos++;
+          try {
+            const estadoRes = await pagosAPI.estado(pedidoId);
+            const { estado_pago, estado } = estadoRes.data;
+            if (estado_pago === 'pagado' && estado === 'confirmado') {
+              limpiarPolling(); setVerificando(false);
+              setFacturaVisible(true);
+            } else if (estado_pago === 'fallido' || estado === 'cancelado') {
+              limpiarPolling(); setVerificando(false);
+              setErrorPago('El pago fue rechazado o cancelado. Revisa los datos de tu tarjeta e intenta de nuevo.');
+            } else if (intentos >= 10) {
+              limpiarPolling(); setVerificando(false);
+              setPendiente(true);
+            }
+          } catch {}
+        }, 3000);
+      }
     } catch (e: any) {
       clearTimeout(timeoutId);
       if (!timedOut) {
