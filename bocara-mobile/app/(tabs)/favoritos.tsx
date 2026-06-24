@@ -13,8 +13,8 @@ import ProductCard, { CARD_W } from '@/components/ProductCard';
 import { Colors } from '@/constants/Colors';
 
 const GOLD = '#E8820C';
-const DARK = '#2C4A2E';
-const RED  = '#E53935';
+const DARK = '#4A2C12';
+const RED  = '#C0392B';
 
 type TabKey = 'negocios' | 'bolsas';
 

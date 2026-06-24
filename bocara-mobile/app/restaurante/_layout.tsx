@@ -3,11 +3,11 @@ import { Tabs } from 'expo-router';
 import { Text, View } from 'react-native';
 import { notificacionesAPI } from '@/src/services/api';
 
-const PRIMARY = '#2C4A2E';
+const PRIMARY = '#4A2C12';
 const GOLD    = '#E8820C';
 const WHITE   = '#FFFFFF';
 const DIM     = 'rgba(255,255,255,0.4)';
-const BORDER  = '#1E3520';
+const BORDER  = '#2E1A0A';
 
 function TabIcon({ emoji, label, focused }: { emoji: string; label: string; focused: boolean }) {
   return (

@@ -14,7 +14,7 @@ import ProductCard, { CARD_W } from '@/components/ProductCard';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 const GOLD  = '#E8820C';
-const DARK  = '#2C4A2E';
+const DARK  = '#4A2C12';
 const SURF  = '#FFF4E6';
 const GRAY  = '#8A8A8A';
 

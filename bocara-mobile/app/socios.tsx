@@ -6,9 +6,9 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-const PRIMARY = '#2C4A2E';
+const PRIMARY = '#4A2C12';
 const ACCENT = '#E8820C';
-const SURFACE = '#F8FAF8';
+const SURFACE = '#FFFAF4';
 const WHITE = '#FFFFFF';
 const SUBTLE = '#8A8A8A';
 
@@ -189,7 +189,7 @@ export default function SociosScreen() {
             <View style={[s.comisionVsCard, s.comisionVsCardBocara]}>
               <Text style={[s.comisionVsPlat, { color: ACCENT }]}>Bocara</Text>
               <Text style={[s.comisionVsNum, { color: ACCENT }]}>25%</Text>
-              <Text style={[s.comisionVsSub, { color: 'rgba(200,169,126,0.7)' }]}>de comisión</Text>
+              <Text style={[s.comisionVsSub, { color: 'rgba(232,130,12,0.7)' }]}>de comisión</Text>
             </View>
           </View>
         </View>
@@ -256,7 +256,7 @@ const s = StyleSheet.create({
 
   // Hero
   hero:          { backgroundColor: PRIMARY, padding: 28, paddingTop: 32, paddingBottom: 36 },
-  heroBadge:     { backgroundColor: 'rgba(200,169,126,0.2)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 20, borderWidth: 1, borderColor: 'rgba(200,169,126,0.3)' },
+  heroBadge:     { backgroundColor: 'rgba(232,130,12,0.2)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6, alignSelf: 'flex-start', marginBottom: 20, borderWidth: 1, borderColor: 'rgba(232,130,12,0.3)' },
   heroBadgeText: { fontSize: 12, fontWeight: '700', color: ACCENT, letterSpacing: 0.3 },
   heroTitle:     { fontSize: 38, fontWeight: '900', color: WHITE, lineHeight: 44, marginBottom: 14, letterSpacing: -0.5 },
   heroAccent:    { color: ACCENT },
@@ -292,7 +292,7 @@ const s = StyleSheet.create({
   // Beneficios
   beneficiosGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   beneficioCard:  { width: '47.5%', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 18, padding: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
-  beneficioIcon:  { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(200,169,126,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  beneficioIcon:  { width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(232,130,12,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
   beneficioTitulo:{ fontSize: 14, fontWeight: '800', color: WHITE, marginBottom: 6 },
   beneficioDesc:  { fontSize: 12, color: 'rgba(255,255,255,0.5)', lineHeight: 18 },
 

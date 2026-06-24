@@ -6,7 +6,7 @@ const GOLD     = '#E8820C';
 const INACTIVE = '#9CA3AF';
 const WHITE    = '#FFFFFF';
 const BORDER   = '#E5E7EB';
-const DARK_GREEN = '#2C4A2E';
+const DARK_GREEN = '#4A2C12';
 
 const TABS = [
   { name: 'index',             label: 'Dashboard',  icon: 'stats-chart'       },
