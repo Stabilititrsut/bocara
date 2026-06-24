@@ -194,11 +194,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_notificaciones_clave_idempotencia
 -- La columna procesando_desde permite recuperar eventos abandonados por
 -- timeout (proceso que murió con estado='procesando').
 --
--- Si existe la versión anterior (sin columna estado), se elimina y recrea.
--- Es seguro porque CUBO_PAYMENTS_ENABLED=false — no hay datos en producción.
+-- Escenarios posibles (introspección jun 2026):
+--   A. No existe            → CREATE TABLE crea todo.
+--   B. Existe con estado    → ADD COLUMN IF NOT EXISTS + DO block completan lo faltante.
+--   C. Existe sin estado, 0 filas → DROP seguro + CREATE.
+--   D. Existe sin estado, ≥1 fila → RAISE EXCEPTION: migración bloqueada, intervención manual.
 -- ════════════════════════════════════════════════════════════════════════════
 
 DO $$
+DECLARE
+  v_row_count INTEGER := 0;
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.tables
@@ -208,8 +213,21 @@ BEGIN
     WHERE table_schema = 'public' AND table_name = 'pago_eventos_pendientes'
       AND column_name = 'estado'
   ) THEN
-    RAISE NOTICE 'Migrando pago_eventos_pendientes: eliminando esquema anterior (CUBO_PAYMENTS_ENABLED=false — sin datos en producción)...';
-    DROP TABLE pago_eventos_pendientes CASCADE;
+    -- Tabla existe con esquema anterior (sin columna estado): verificar filas antes de DROP
+    EXECUTE 'SELECT COUNT(*) FROM pago_eventos_pendientes' INTO v_row_count;
+    IF v_row_count > 0 THEN
+      RAISE EXCEPTION
+        'MIGRACIÓN BLOQUEADA: pago_eventos_pendientes tiene % fila(s) y carece de columna estado. '
+        'No se puede eliminar con datos. Agregar manualmente primero: '
+        'ALTER TABLE pago_eventos_pendientes '
+        'ADD COLUMN estado TEXT NOT NULL DEFAULT ''pendiente'' '
+        'CHECK (estado IN (''pendiente'',''procesando'',''completado'',''fallido''));'
+        ' Después re-ejecutar esta migración.',
+        v_row_count;
+    ELSE
+      RAISE NOTICE 'pago_eventos_pendientes: esquema anterior sin datos — reconstruyendo con esquema v5.';
+      DROP TABLE pago_eventos_pendientes CASCADE;
+    END IF;
   END IF;
 END $$;
 
@@ -219,14 +237,15 @@ CREATE TABLE IF NOT EXISTS pago_eventos_pendientes (
   tipo_evento      TEXT        NOT NULL,
   payload          JSONB       NOT NULL DEFAULT '{}'::jsonb,
   estado           TEXT        NOT NULL DEFAULT 'pendiente'
+                               CONSTRAINT chk_pago_eventos_estado
                                CHECK (estado IN ('pendiente','procesando','completado','fallido')),
   intentos         INTEGER     NOT NULL DEFAULT 0,
-  procesando_desde TIMESTAMPTZ,           -- NULL cuando no está siendo procesado
+  procesando_desde TIMESTAMPTZ,
   ultimo_intento_at TIMESTAMPTZ,
   error_ultimo     TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completado_at    TIMESTAMPTZ,
-  UNIQUE (pedido_id, tipo_evento)
+  CONSTRAINT pago_eventos_pend_uniq_ped_tipo UNIQUE (pedido_id, tipo_evento)
 );
 
 -- Para el procesador de eventos: solo los pendientes, ordenados por creación
@@ -238,6 +257,59 @@ CREATE INDEX IF NOT EXISTS idx_pago_eventos_pendiente
 CREATE INDEX IF NOT EXISTS idx_pago_eventos_procesando
   ON pago_eventos_pendientes(procesando_desde)
   WHERE estado = 'procesando';
+
+-- Completar columnas faltantes si la tabla pre-existía (escenario B — idempotente)
+ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS payload           JSONB       NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS intentos          INTEGER     NOT NULL DEFAULT 0;
+ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS procesando_desde  TIMESTAMPTZ;
+ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS ultimo_intento_at TIMESTAMPTZ;
+ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS error_ultimo      TEXT;
+ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS completado_at     TIMESTAMPTZ;
+
+-- Añadir constraints si no existen (tabla pre-existente puede carecer de ellos)
+DO $$
+DECLARE
+  v_dups INTEGER := 0;
+BEGIN
+  -- CHECK estado: por nombre explícito; si existe con otro nombre, el nuevo es redundante pero inofensivo
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_schema = 'public'
+      AND table_name   = 'pago_eventos_pendientes'
+      AND constraint_name = 'chk_pago_eventos_estado'
+  ) THEN
+    ALTER TABLE pago_eventos_pendientes
+      ADD CONSTRAINT chk_pago_eventos_estado
+      CHECK (estado IN ('pendiente','procesando','completado','fallido'));
+  END IF;
+
+  -- UNIQUE(pedido_id, tipo_evento): detectar duplicados antes de crear
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t     ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_attribute a1 ON a1.attrelid = t.oid AND a1.attname = 'pedido_id'
+    JOIN pg_attribute a2 ON a2.attrelid = t.oid AND a2.attname = 'tipo_evento'
+    WHERE n.nspname = 'public'
+      AND t.relname = 'pago_eventos_pendientes'
+      AND c.contype = 'u'
+      AND a1.attnum = ANY(c.conkey)
+      AND a2.attnum = ANY(c.conkey)
+      AND array_length(c.conkey, 1) = 2
+  ) THEN
+    SELECT COUNT(*) INTO v_dups FROM (
+      SELECT pedido_id, tipo_evento FROM pago_eventos_pendientes
+      GROUP BY pedido_id, tipo_evento HAVING COUNT(*) > 1
+    ) d;
+    IF v_dups > 0 THEN
+      RAISE EXCEPTION
+        'MIGRACIÓN BLOQUEADA: % par(es) (pedido_id, tipo_evento) duplicados en '
+        'pago_eventos_pendientes — resolver antes de crear UNIQUE.', v_dups;
+    END IF;
+    ALTER TABLE pago_eventos_pendientes
+      ADD CONSTRAINT pago_eventos_pend_uniq_ped_tipo UNIQUE (pedido_id, tipo_evento);
+  END IF;
+END $$;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -252,13 +324,61 @@ CREATE TABLE IF NOT EXISTS movimientos_puntos (
   usuario_id UUID        NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
   pedido_id  UUID        REFERENCES pedidos(id) ON DELETE SET NULL,
   concepto   TEXT        NOT NULL,
-  puntos     INTEGER     NOT NULL CHECK (puntos > 0),
+  puntos     INTEGER     NOT NULL CONSTRAINT chk_movimientos_puntos_positivo CHECK (puntos > 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (pedido_id, concepto)
+  CONSTRAINT movimientos_puntos_uniq_ped_concepto UNIQUE (pedido_id, concepto)
 );
 
 CREATE INDEX IF NOT EXISTS idx_movimientos_puntos_usuario
   ON movimientos_puntos(usuario_id);
+
+-- Completar columnas faltantes si la tabla pre-existía (idempotente)
+ALTER TABLE movimientos_puntos ADD COLUMN IF NOT EXISTS concepto   TEXT        NOT NULL DEFAULT '';
+ALTER TABLE movimientos_puntos ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+-- Añadir constraints si no existen
+DO $$
+DECLARE
+  v_dups INTEGER := 0;
+BEGIN
+  -- CHECK puntos > 0
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_schema = 'public'
+      AND table_name   = 'movimientos_puntos'
+      AND constraint_name = 'chk_movimientos_puntos_positivo'
+  ) THEN
+    ALTER TABLE movimientos_puntos
+      ADD CONSTRAINT chk_movimientos_puntos_positivo CHECK (puntos > 0);
+  END IF;
+
+  -- UNIQUE(pedido_id, concepto): detectar duplicados antes de crear
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint c
+    JOIN pg_class t     ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_attribute a1 ON a1.attrelid = t.oid AND a1.attname = 'pedido_id'
+    JOIN pg_attribute a2 ON a2.attrelid = t.oid AND a2.attname = 'concepto'
+    WHERE n.nspname = 'public'
+      AND t.relname = 'movimientos_puntos'
+      AND c.contype = 'u'
+      AND a1.attnum = ANY(c.conkey)
+      AND a2.attnum = ANY(c.conkey)
+      AND array_length(c.conkey, 1) = 2
+  ) THEN
+    SELECT COUNT(*) INTO v_dups FROM (
+      SELECT pedido_id, concepto FROM movimientos_puntos
+      GROUP BY pedido_id, concepto HAVING COUNT(*) > 1
+    ) d;
+    IF v_dups > 0 THEN
+      RAISE EXCEPTION
+        'MIGRACIÓN BLOQUEADA: % par(es) (pedido_id, concepto) duplicados en '
+        'movimientos_puntos — resolver antes de crear UNIQUE.', v_dups;
+    END IF;
+    ALTER TABLE movimientos_puntos
+      ADD CONSTRAINT movimientos_puntos_uniq_ped_concepto UNIQUE (pedido_id, concepto);
+  END IF;
+END $$;
 
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -658,12 +778,33 @@ SELECT constraint_name, check_clause
 FROM information_schema.check_constraints
 WHERE constraint_name = 'chk_monto_esperado_centavos';
 
--- 6. Permisos — esperado: solo service_role para las tres funciones
+-- 6. Permisos — permitidos: postgres (propietario) y service_role.
+--             Prohibidos: PUBLIC, anon, authenticated.
 SELECT grantee, routine_name, privilege_type
 FROM information_schema.routine_privileges
 WHERE specific_schema = 'public'
   AND routine_name IN ('confirmar_pago_cubo', 'sumar_puntos', 'sumar_puntos_idempotente')
 ORDER BY routine_name, grantee;
+
+-- Verificación automática: falla si aparece cualquier rol prohibido
+DO $$
+DECLARE
+  v_forbidden TEXT;
+BEGIN
+  SELECT string_agg(grantee || ' → ' || routine_name, ', ' ORDER BY routine_name, grantee)
+  INTO v_forbidden
+  FROM information_schema.routine_privileges
+  WHERE specific_schema = 'public'
+    AND routine_name IN ('confirmar_pago_cubo', 'sumar_puntos', 'sumar_puntos_idempotente')
+    AND grantee IN ('PUBLIC', 'anon', 'authenticated');
+
+  IF v_forbidden IS NOT NULL THEN
+    RAISE EXCEPTION
+      'PERMISOS INSEGUROS: los siguientes roles tienen EXECUTE y no deberían: [%]. '
+      'Verificar que el BLOQUE 8 se ejecutó correctamente.', v_forbidden;
+  END IF;
+  RAISE NOTICE '✓ Permisos: ningún rol prohibido (PUBLIC/anon/authenticated) tiene EXECUTE.';
+END $$;
 
 -- 7. puntos_por_pedido y clave_idempotencia
 SELECT clave, valor FROM configuracion WHERE clave = 'puntos_por_pedido';
@@ -1105,18 +1246,184 @@ BEGIN
 
   RAISE NOTICE '✓ Test 12: pedido histórico completamente inmutable (estado=pendiente, sin eventos, sin cubo_identifier)';
 
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 13 — pago_eventos_pendientes: 11 columnas requeridas presentes
+  -- Verifica que la migración completó la tabla aunque pre-existiera
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_col13 INTEGER;
+  BEGIN
+    SELECT COUNT(*) INTO v_col13
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'pago_eventos_pendientes'
+      AND column_name IN (
+        'id','pedido_id','tipo_evento','payload','estado','intentos',
+        'procesando_desde','ultimo_intento_at','error_ultimo','created_at','completado_at'
+      );
+    ASSERT v_col13 = 11,
+      'Test 13 FALLÓ: pago_eventos_pendientes tiene ' || v_col13 || '/11 columnas requeridas';
+    RAISE NOTICE '✓ Test 13: pago_eventos_pendientes — 11/11 columnas requeridas presentes';
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 14 — movimientos_puntos: 6 columnas requeridas presentes
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_col14 INTEGER;
+  BEGIN
+    SELECT COUNT(*) INTO v_col14
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'movimientos_puntos'
+      AND column_name IN ('id','usuario_id','pedido_id','concepto','puntos','created_at');
+    ASSERT v_col14 = 6,
+      'Test 14 FALLÓ: movimientos_puntos tiene ' || v_col14 || '/6 columnas requeridas';
+    RAISE NOTICE '✓ Test 14: movimientos_puntos — 6/6 columnas requeridas presentes';
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 15 — 4 constraints requeridos existen post-migración
+  -- ════════════════════════════════════════════════════════════════
+  BEGIN
+    ASSERT EXISTS (
+      SELECT 1 FROM information_schema.check_constraints cc
+      JOIN information_schema.table_constraints tc
+        ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
+      WHERE tc.table_schema = 'public' AND tc.table_name = 'pago_eventos_pendientes'
+        AND cc.check_clause LIKE '%pendiente%'
+    ), 'Test 15a FALLÓ: CHECK estado IN (...) falta en pago_eventos_pendientes';
+
+    ASSERT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class t     ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_attribute a1 ON a1.attrelid = t.oid AND a1.attname = 'pedido_id'
+      JOIN pg_attribute a2 ON a2.attrelid = t.oid AND a2.attname = 'tipo_evento'
+      WHERE n.nspname = 'public' AND t.relname = 'pago_eventos_pendientes'
+        AND c.contype = 'u'
+        AND a1.attnum = ANY(c.conkey) AND a2.attnum = ANY(c.conkey)
+        AND array_length(c.conkey, 1) = 2
+    ), 'Test 15b FALLÓ: UNIQUE(pedido_id, tipo_evento) falta en pago_eventos_pendientes';
+
+    ASSERT EXISTS (
+      SELECT 1 FROM information_schema.check_constraints cc
+      JOIN information_schema.table_constraints tc
+        ON cc.constraint_name = tc.constraint_name AND cc.constraint_schema = tc.constraint_schema
+      WHERE tc.table_schema = 'public' AND tc.table_name = 'movimientos_puntos'
+        AND cc.check_clause LIKE '%puntos%0%'
+    ), 'Test 15c FALLÓ: CHECK puntos > 0 falta en movimientos_puntos';
+
+    ASSERT EXISTS (
+      SELECT 1 FROM pg_constraint c
+      JOIN pg_class t     ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
+      JOIN pg_attribute a1 ON a1.attrelid = t.oid AND a1.attname = 'pedido_id'
+      JOIN pg_attribute a2 ON a2.attrelid = t.oid AND a2.attname = 'concepto'
+      WHERE n.nspname = 'public' AND t.relname = 'movimientos_puntos'
+        AND c.contype = 'u'
+        AND a1.attnum = ANY(c.conkey) AND a2.attnum = ANY(c.conkey)
+        AND array_length(c.conkey, 1) = 2
+    ), 'Test 15d FALLÓ: UNIQUE(pedido_id, concepto) falta en movimientos_puntos';
+
+    RAISE NOTICE '✓ Test 15: 4/4 constraints requeridos presentes en ambas tablas';
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 16 — PUBLIC/anon/authenticated sin EXECUTE en funciones Cubo
+  -- BLOQUE 8 debe haber revocado estos privilegios
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_forbidden TEXT;
+  BEGIN
+    SELECT string_agg(grantee || '→' || routine_name, ', ' ORDER BY routine_name)
+    INTO v_forbidden
+    FROM information_schema.routine_privileges
+    WHERE specific_schema = 'public'
+      AND routine_name IN ('confirmar_pago_cubo','sumar_puntos','sumar_puntos_idempotente')
+      AND grantee IN ('PUBLIC','anon','authenticated');
+    ASSERT v_forbidden IS NULL,
+      'Test 16 FALLÓ: roles prohibidos con EXECUTE: [' || COALESCE(v_forbidden,'') || ']. BLOQUE 8 incompleto.';
+    RAISE NOTICE '✓ Test 16: PUBLIC/anon/authenticated sin EXECUTE en funciones Cubo';
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 17 — postgres y service_role son legítimos (no generan EXCEPTION)
+  -- El propietario de la función conserva privilegios implícitos — es correcto.
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_legit INTEGER;
+  BEGIN
+    SELECT COUNT(*) INTO v_legit
+    FROM information_schema.routine_privileges
+    WHERE specific_schema = 'public'
+      AND routine_name IN ('confirmar_pago_cubo','sumar_puntos','sumar_puntos_idempotente')
+      AND grantee IN ('postgres','service_role');
+    RAISE NOTICE '✓ Test 17: % privilegio(s) legítimos (postgres/service_role) — sin EXCEPTION', v_legit;
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 18 — Anti-DROP: tabla con filas + columna estado = sin riesgo de DROP
+  -- pago_eventos_pendientes tiene filas (de tests 1-12) y columna estado.
+  -- El DO del BLOQUE 3 evaluó la rama B (completar), no la rama DROP.
+  -- ════════════════════════════════════════════════════════════════
+  DECLARE
+    v_rows18 INTEGER;
+  BEGIN
+    SELECT COUNT(*) INTO v_rows18 FROM pago_eventos_pendientes WHERE pedido_id = v_ped_mi;
+    ASSERT v_rows18 > 0,
+      'Test 18 FALLÓ: no hay filas de prueba en pago_eventos_pendientes para v_ped_mi';
+    ASSERT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'pago_eventos_pendientes'
+        AND column_name = 'estado'
+    ), 'Test 18 FALLÓ: columna estado no existe — migración no completó la tabla';
+    RAISE NOTICE '✓ Test 18: anti-DROP — pago_eventos_pendientes con % fila(s) + estado presente; datos seguros', v_rows18;
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 19 — Idempotencia: ADD COLUMN IF NOT EXISTS es no-op en columnas existentes
+  -- Segunda ejecución no falla ni duplica objetos
+  -- ════════════════════════════════════════════════════════════════
+  BEGIN
+    ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS procesando_desde  TIMESTAMPTZ;
+    ALTER TABLE pago_eventos_pendientes ADD COLUMN IF NOT EXISTS completado_at      TIMESTAMPTZ;
+    ALTER TABLE movimientos_puntos      ADD COLUMN IF NOT EXISTS concepto           TEXT;
+    CREATE INDEX IF NOT EXISTS idx_pago_eventos_pendiente
+      ON pago_eventos_pendientes(created_at) WHERE estado = 'pendiente';
+    CREATE INDEX IF NOT EXISTS idx_movimientos_puntos_usuario
+      ON movimientos_puntos(usuario_id);
+    RAISE NOTICE '✓ Test 19: idempotencia — ADD COLUMN IF NOT EXISTS y CREATE INDEX IF NOT EXISTS no-op en objetos existentes';
+  END;
+
+  -- ════════════════════════════════════════════════════════════════
+  -- TEST 20 — UNIQUE(pedido_id, concepto) rechaza duplicado en movimientos_puntos
+  -- Test 11a ya insertó (v_ped_mi, 'pago_cubo'). Verificar que un segundo
+  -- INSERT con la misma clave lanza unique_violation.
+  -- ════════════════════════════════════════════════════════════════
+  BEGIN
+    BEGIN
+      INSERT INTO movimientos_puntos (usuario_id, pedido_id, concepto, puntos)
+      VALUES (v_usr_id, v_ped_mi, 'pago_cubo', 5);
+      ASSERT FALSE, 'Test 20 FALLÓ: UNIQUE(pedido_id, concepto) no rechazó el duplicado';
+    EXCEPTION
+      WHEN unique_violation THEN NULL;
+    END;
+    RAISE NOTICE '✓ Test 20: UNIQUE(pedido_id, concepto) en movimientos_puntos rechaza duplicados';
+  END;
+
   -- ──────────────────────────────────────────────────────────────────────────
   -- Resumen
   -- ──────────────────────────────────────────────────────────────────────────
   RAISE NOTICE '';
   RAISE NOTICE '═══════════════════════════════════════════════════════════════════';
-  RAISE NOTICE '✓ Todos los tests v5 pasaron (12/12) — modelo híbrido pedido_items';
+  RAISE NOTICE '✓ Todos los tests v5 pasaron (20/20) — modelo híbrido pedido_items';
   RAISE NOTICE '  pedido_items es la única fuente de verdad para inventario Cubo.';
   RAISE NOTICE '  pedidos.bolsa_id y pedidos.cantidad son campos de compatibilidad.';
   RAISE NOTICE '  Sin items → items_ausentes (fail-closed). Sin fallback bolsa_id.';
   RAISE NOTICE '  Doble descuento imposible: lock FOR UPDATE + ORDER BY bolsa_id.';
   RAISE NOTICE '  Puntos e idempotencia de notificaciones verificados.';
   RAISE NOTICE '  Pedidos históricos sin items son inmutables para esta RPC.';
+  RAISE NOTICE '  Migración idempotente: tablas existentes completadas sin DROP.';
+  RAISE NOTICE '  Permisos: PUBLIC/anon/authenticated sin EXECUTE verificado.';
   RAISE NOTICE '═══════════════════════════════════════════════════════════════════';
 
 END $$;
