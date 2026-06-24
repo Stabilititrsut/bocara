@@ -886,8 +886,8 @@ BEGIN
   -- ──────────────────────────────────────────────────────────────────────────
   -- Datos de prueba
   -- ──────────────────────────────────────────────────────────────────────────
-  INSERT INTO usuarios (id, email, nombre, rol, puntos, total_bolsas_salvadas)
-  VALUES (gen_random_uuid(), 'v5_test@bocara.test', 'Test v5', 'cliente', 0, 0)
+  INSERT INTO usuarios (id, email, password_hash, nombre, rol, puntos, total_bolsas_salvadas)
+  VALUES (gen_random_uuid(), 'v5_test@bocara.test', 'TEST_ONLY_INVALID_PASSWORD_HASH', 'Test v5', 'cliente', 0, 0)
   RETURNING id INTO v_usr_id;
 
   INSERT INTO negocios (id, propietario_id, nombre, direccion, zona, ciudad, categoria)
