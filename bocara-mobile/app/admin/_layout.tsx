@@ -18,6 +18,7 @@ const TABS = [
   { name: 'financiero',        label: 'Finanzas',   icon: 'wallet'            },
   { name: 'usuarios',          label: 'Usuarios',   icon: 'people'            },
   { name: 'config',            label: 'Config',     icon: 'settings'          },
+  { name: 'cubo-status',       label: 'Cubo Pago',  icon: 'card'              },
 ] as const;
 
 export default function AdminLayout() {

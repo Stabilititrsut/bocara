@@ -173,6 +173,7 @@ export const adminAPI = {
   aprobarCambioPerfil: (id: string) => api.put(`/admin/cambios-perfil/${id}/aprobar`),
   rechazarCambioPerfil: (id: string, motivo?: string) =>
     api.put(`/admin/cambios-perfil/${id}/rechazar`, { motivo }),
+  cuboStatus: () => api.get('/admin/cubo-status'),
 };
 
 export const promocionesAPI = {
