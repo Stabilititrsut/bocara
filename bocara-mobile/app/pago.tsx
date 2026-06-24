@@ -46,6 +46,7 @@ export default function PagoScreen() {
   const [loading, setLoading] = useState(false);
   const [verificando, setVerificando] = useState(false);
   const [errorPago, setErrorPago] = useState<string | null>(null);
+  const [pendiente, setPendiente] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pedidoDataRef = useRef<{ pedidoId: string; codigoRecogida: string; token?: string } | null>(null);
 
@@ -160,8 +161,19 @@ export default function PagoScreen() {
   // ── Iniciar pago ─────────────────────────────────────────────────────────
   async function iniciarPago() {
     setErrorPago(null);
+    setPendiente(false);
     if (items.length === 0) return;
     setLoading(true);
+
+    console.log('A. iniciarPago llamado');
+
+    let timedOut = false;
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      setLoading(false);
+      setErrorPago('El servidor tardó demasiado en responder. Intenta de nuevo.');
+    }, 15000);
+
     try {
       const cuboItems = items.map(i => ({ bolsa_id: i.bolsa.id, cantidad: i.cantidad }));
       const res = await pagosAPI.cubopago({
@@ -169,10 +181,27 @@ export default function PagoScreen() {
         tipo_entrega: 'recogida',
         propina: propina > 0 ? propina : undefined,
       });
+
+      clearTimeout(timeoutId);
+      if (timedOut) return;
+
+      console.log('B. Respuesta del backend:', res.data);
+
       const { pedidoId, codigoRecogida, visaLinkUrl } = res.data;
       pedidoDataRef.current = { pedidoId, codigoRecogida };
 
+      if (!visaLinkUrl) {
+        setErrorPago('No se recibió el link de pago. Intenta de nuevo.');
+        return;
+      }
+
+      console.log('C. URL de redirección:', visaLinkUrl);
+      console.log('D. Abriendo URL de pago...');
+
       await WebBrowser.openBrowserAsync(visaLinkUrl, { showTitle: true, toolbarColor: Colors.primary });
+
+      console.log('E. Browser cerrado — iniciando verificación de pago');
+
       setVerificando(true);
       let intentos = 0;
       pollingRef.current = setInterval(async () => {
@@ -186,21 +215,59 @@ export default function PagoScreen() {
           } else if (estado_pago === 'fallido' || estado === 'cancelado') {
             limpiarPolling(); setVerificando(false);
             setErrorPago('El pago fue rechazado o cancelado. Revisa los datos de tu tarjeta e intenta de nuevo.');
-          } else if (intentos >= 20) {
+          } else if (intentos >= 10) {
             limpiarPolling(); setVerificando(false);
-            Alert.alert('Verificando pago', 'No pudimos confirmar tu pago aún. Revisa "Mis pedidos" en unos minutos.', [
-              { text: 'Ver pedidos', onPress: () => router.replace('/(tabs)/pedidos' as any) },
-              { text: 'Quedarse', style: 'cancel' },
-            ]);
+            setPendiente(true);
           }
         } catch {}
-      }, 2000);
+      }, 3000);
     } catch (e: any) {
-      setErrorPago(e.message || 'No se pudo generar el link de pago. Intenta de nuevo.');
+      clearTimeout(timeoutId);
+      if (!timedOut) {
+        console.error('Error en pago:', e);
+        setErrorPago(e.message || 'Error al conectar con el servidor de pagos.');
+      }
     } finally {
-      setLoading(false);
+      if (!timedOut) setLoading(false);
     }
   }
+
+  function reintentar() {
+    setErrorPago(null);
+    iniciarPago();
+  }
+
+  // ── Error de pago ─────────────────────────────────────────────────────────
+  if (errorPago) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={s.errorIcon}>⚠️</Text>
+      <Text style={s.errorTitulo}>No se pudo procesar el pago</Text>
+      <Text style={s.errorMsg}>{errorPago}</Text>
+      <TouchableOpacity onPress={reintentar} style={s.btnReintentar}>
+        <Text style={s.btnReintentarText}>Reintentar</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={() => router.back()}>
+        <Text style={s.linkVolver}>Volver al carrito</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+
+  // ── Pago pendiente (no confirmado tras polling) ────────────────────────────
+  if (pendiente) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={{ fontSize: 48 }}>⏳</Text>
+      <Text style={s.verificandoTitle}>Pago en proceso</Text>
+      <Text style={s.verificandoText}>
+        Si el cobro se realizó, tu pedido aparecerá en "Mis pedidos" en los próximos minutos.
+      </Text>
+      <TouchableOpacity
+        onPress={() => router.replace('/(tabs)/pedidos' as any)}
+        style={[s.btnReintentar, { marginTop: 8 }]}
+      >
+        <Text style={s.btnReintentarText}>Ver mis pedidos →</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
 
   // ── Skeleton ──────────────────────────────────────────────────────────────
   if (!bolsa) {
@@ -494,13 +561,6 @@ export default function PagoScreen() {
           </View>
         </View>
 
-        {errorPago && (
-          <View style={s.errorBox}>
-            <Ionicons name="alert-circle-outline" size={16} color={Colors.error} />
-            <Text style={s.errorText}>{errorPago}</Text>
-          </View>
-        )}
-
         <View style={{ height: 24 }} />
       </ScrollView>
 
@@ -600,8 +660,13 @@ const s = StyleSheet.create({
   totalFinalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalFinalLabel:{ fontSize: 16, fontWeight: '700', color: Colors.primary },
   totalFinalAmt:  { fontSize: 24, fontWeight: '900', color: Colors.primary },
-  errorBox:  { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: Colors.errorLight, borderRadius: 14, padding: 14, marginBottom: 8 },
-  errorText: { flex: 1, fontSize: 13, color: Colors.error, lineHeight: 18 },
+  // Error pantalla completa
+  errorIcon:   { fontSize: 48, marginBottom: 16 },
+  errorTitulo: { fontSize: 20, fontWeight: '800', color: Colors.primary, marginBottom: 8, textAlign: 'center' },
+  errorMsg:    { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20, marginBottom: 28, paddingHorizontal: 8 },
+  btnReintentar:     { backgroundColor: Colors.primary, borderRadius: 50, paddingVertical: 14, paddingHorizontal: 32, alignItems: 'center' as const, marginBottom: 12 },
+  btnReintentarText: { color: Colors.white, fontWeight: '900', fontSize: 15 },
+  linkVolver:        { fontSize: 14, color: Colors.textSecondary, fontWeight: '700', paddingVertical: 8 },
 
   // Footer
   footer:       { backgroundColor: Colors.white, padding: 16, paddingBottom: 28, borderTopWidth: 1, borderTopColor: Colors.border },

@@ -264,6 +264,7 @@ router.post('/webhook', async (req, res) => {
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/cubopago', authMiddleware, async (req, res) => {
   try {
+    console.log('1. Endpoint /pagos/cubopago recibido', req.body);
     const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
     const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
 
@@ -436,6 +437,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     }
     console.log('[PAGO] items Cubo:', JSON.stringify(cuboItems));
 
+    console.log('2. Llamando a generarLinkPago...');
     const { url: visaLinkUrl, token: paymentIntentToken } = await generarLinkPago({
       referencia:     referenceCode,
       pedidoId:       pedido.id,
@@ -450,6 +452,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       items: cuboItems,
     });
 
+    console.log('3. Link generado:', visaLinkUrl);
     // Guardar token y monto esperado para verificación independiente del webhook
     const montoCentavos = Math.round(total * 100);
     const { error: tokenUpdateErr } = await supabase.from('pedidos')

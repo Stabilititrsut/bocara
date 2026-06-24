@@ -46,11 +46,14 @@ async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedirec
   if (items?.length)     body.items       = items;
 
   let data;
+  console.log('4. Llamando a CuboPago sandbox:', cuboApiUrl);
+  console.log('5. Body enviado:', JSON.stringify(body));
   try {
     ({ data } = await axios.post(`${cuboApiUrl}/api/v1/links/one-use`, body, {
       headers: { 'X-API-KEY': cuboApiKey, 'Content-Type': 'application/json' },
       timeout: 10000,
     }));
+    console.log('6. Respuesta CuboPago:', data);
   } catch (err) {
     manejarErrorAxios(err);
   }
