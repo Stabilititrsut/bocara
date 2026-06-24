@@ -253,7 +253,7 @@ export default function BolsasRestauranteScreen() {
   const filtrados = tabVista === 'todos' ? items
     : items.filter(b => tabVista === 'cupon' ? b.tipo === 'cupon' : b.tipo !== 'cupon');
 
-  if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
+  if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.aqua} size="large" /></View>;
 
   return (
     <SafeAreaView style={s.root}>
@@ -285,7 +285,7 @@ export default function BolsasRestauranteScreen() {
 
       <ScrollView
         contentContainerStyle={s.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.aqua} />}
       >
         {filtrados.length === 0 && !loading && (
           <View style={s.empty}>
@@ -388,7 +388,7 @@ export default function BolsasRestauranteScreen() {
             <Text style={s.modalTitle}>{editId ? 'Editar publicación' : 'Nueva publicación'}</Text>
             <TouchableOpacity onPress={guardar} disabled={saving}>
               {saving
-                ? <ActivityIndicator color={Colors.orange} size="small" />
+                ? <ActivityIndicator color={Colors.aqua} size="small" />
                 : <Text style={s.saveText}>Guardar</Text>
               }
             </TouchableOpacity>
@@ -608,12 +608,12 @@ const s = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   headerTitle: { fontSize: 20, fontWeight: '900', color: Colors.brown },
   headerSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  addBtn: { backgroundColor: Colors.orange, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
+  addBtn: { backgroundColor: Colors.aqua, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 },
   addBtnText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
 
   vistaRow: { flexDirection: 'row', backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, paddingHorizontal: 14, paddingVertical: 8, gap: 8 },
   vistaBtn: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: Colors.white },
-  vistaBtnActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
+  vistaBtnActive: { backgroundColor: Colors.aqua, borderColor: Colors.aqua },
   vistaBtnText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   vistaBtnTextActive: { color: Colors.white, fontWeight: '700' },
 
@@ -632,11 +632,11 @@ const s = StyleSheet.create({
   foto: { width: 72, height: 72, borderRadius: 12, backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   fotoImg: { width: 72, height: 72, borderRadius: 12 },
   badgeRow: { flexDirection: 'row', gap: 5, marginBottom: 4, flexWrap: 'wrap' },
-  tipoBadge: { backgroundColor: Colors.orange, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
+  tipoBadge: { backgroundColor: Colors.aqua, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   tipoBadgeCupon: { backgroundColor: '#7C3AED' },
   tipoBadgeText: { color: Colors.white, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
   descBadge: { backgroundColor: Colors.brown, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
-  descBadgeText: { color: Colors.white, fontSize: 10, fontWeight: '800' },
+  descBadgeText: { color: Colors.gold, fontSize: 10, fontWeight: '800' },
   inactivaBadge: { backgroundColor: Colors.border, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   inactivaText: { fontSize: 10, color: Colors.textSecondary, fontWeight: '600' },
   cardNombre: { fontSize: 15, fontWeight: '800', color: Colors.brown },
@@ -645,12 +645,12 @@ const s = StyleSheet.create({
   cardHora: { fontSize: 12, color: Colors.textSecondary, marginTop: 4 },
   cardRight: { alignItems: 'flex-end', justifyContent: 'center' },
   precioOriginal: { fontSize: 11, color: Colors.textLight, textDecorationLine: 'line-through' },
-  precioBocara: { fontSize: 22, fontWeight: '900', color: Colors.orange },
+  precioBocara: { fontSize: 22, fontWeight: '900', color: Colors.gold },
   disp: { fontSize: 11, color: Colors.textSecondary, marginTop: 2 },
   cardActions: { flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 10 },
   switchLabel: { fontSize: 12, color: Colors.textSecondary, marginLeft: 4 },
-  editBtn: { borderWidth: 1.5, borderColor: Colors.orange, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8 },
-  editBtnText: { color: Colors.orange, fontSize: 13, fontWeight: '700' },
+  editBtn: { borderWidth: 1.5, borderColor: Colors.aqua, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8 },
+  editBtnText: { color: Colors.aqua, fontSize: 13, fontWeight: '700' },
   deleteBtn: { borderWidth: 1.5, borderColor: Colors.error, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
   deleteBtnText: { color: Colors.error, fontSize: 13, fontWeight: '700' },
 
@@ -668,7 +668,7 @@ const s = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   modalTitle: { fontSize: 17, fontWeight: '800', color: Colors.brown },
   cancelText: { color: Colors.error, fontSize: 15 },
-  saveText: { color: Colors.orange, fontSize: 15, fontWeight: '800' },
+  saveText: { color: Colors.aqua, fontSize: 15, fontWeight: '800' },
   modalScroll: { padding: 16 },
   sectionLabel: { fontSize: 15, fontWeight: '800', color: Colors.brown, marginTop: 16, marginBottom: 10 },
   priceRow: { flexDirection: 'row' },
@@ -686,13 +686,13 @@ const s = StyleSheet.create({
   tipoSelectorWrap: { marginBottom: 4 },
   tipoSelector: { flexDirection: 'row', gap: 10 },
   tipoBtn: { flex: 1, borderWidth: 2, borderColor: Colors.border, borderRadius: 16, padding: 14, alignItems: 'center', gap: 4, backgroundColor: Colors.white },
-  tipoBtnActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
+  tipoBtnActive: { backgroundColor: Colors.aqua, borderColor: Colors.aqua },
   tipoBtnEmoji: { fontSize: 28 },
   tipoBtnLabel: { fontSize: 13, fontWeight: '800', color: Colors.brown, textAlign: 'center' },
   tipoBtnLabelActive: { color: Colors.white },
   tipoBtnDesc: { fontSize: 10, color: Colors.textSecondary, textAlign: 'center', marginTop: 2 },
   discChip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, backgroundColor: Colors.white },
-  discChipActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
+  discChipActive: { backgroundColor: Colors.aqua, borderColor: Colors.aqua },
   discChipText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
   discChipTextActive: { color: Colors.white, fontWeight: '800' },
 
@@ -703,7 +703,7 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20,
     paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.white,
   },
-  clasifChipActive: { backgroundColor: '#1A1A1A', borderColor: '#1A1A1A' },
+  clasifChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   clasifChipEmoji: { fontSize: 14 },
   clasifChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   clasifChipTextActive: { color: '#fff', fontWeight: '700' },
@@ -714,7 +714,7 @@ const s = StyleSheet.create({
     borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20,
     paddingHorizontal: 10, paddingVertical: 7, backgroundColor: Colors.white,
   },
-  catChipActive: { backgroundColor: '#14532D', borderColor: '#14532D' },
+  catChipActive: { backgroundColor: Colors.aqua, borderColor: Colors.aqua },
   catChipEmoji: { fontSize: 13 },
   catChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   catChipTextActive: { color: '#fff', fontWeight: '700' },

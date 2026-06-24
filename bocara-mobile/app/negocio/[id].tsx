@@ -13,10 +13,10 @@ import { useCart } from '@/src/context/CartContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
-const GOLD  = '#E8820C';
-const DARK  = '#1A2E1A';
-const SURF  = '#FFF4E6';
-const GRAY  = '#8A8A8A';
+const GOLD  = '#C8960C';
+const DARK  = '#0A2A2A';
+const SURF  = '#F4F7F7';
+const GRAY  = '#5A7070';
 
 const { width: SW } = Dimensions.get('window');
 const COVER_H   = 220;
@@ -578,12 +578,12 @@ const s = StyleSheet.create({
   },
   chipsContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   chip: {
-    borderWidth: 1.5, borderColor: '#E0E0E0', borderRadius: 50,
+    borderWidth: 1.5, borderColor: '#D8E4E4', borderRadius: 50,
     paddingHorizontal: 16, paddingVertical: 7, backgroundColor: '#fff',
   },
   chipActive: { backgroundColor: DARK, borderColor: DARK },
-  chipText: { fontSize: 13, color: DARK, fontWeight: '600' },
-  chipTextActive: { color: '#fff', fontWeight: '700' },
+  chipText: { fontSize: 13, color: '#5A7070', fontWeight: '600' },
+  chipTextActive: { color: GOLD, fontWeight: '700' },
 
   // Content
   content: { paddingHorizontal: 16, paddingTop: 16 },

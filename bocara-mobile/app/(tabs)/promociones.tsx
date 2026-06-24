@@ -8,8 +8,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { promocionesAPI } from '@/src/services/api';
 
-const GOLD = '#E8820C';
+const GOLD = '#C8960C';
 const YELLOW = '#FFD600';
+const DARK = '#0A2A2A';
 const { width: SW } = Dimensions.get('window');
 const CARD_W = Math.floor((SW - 48) / 2);
 const CARD_H = 255;
@@ -56,7 +57,7 @@ function PromoCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
           </View>
           {!agotada && (
             <TouchableOpacity style={s.addBtn} onPress={onPress}>
-              <Ionicons name="add" size={18} color="#1A2E1A" />
+              <Ionicons name="add" size={18} color="#FFFFFF" />
             </TouchableOpacity>
           )}
         </View>
@@ -199,18 +200,18 @@ const s = StyleSheet.create({
 
   header: {
     paddingHorizontal: 20, paddingVertical: 16, backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1, borderBottomColor: '#EBEBEB',
+    borderBottomWidth: 1, borderBottomColor: '#D8E4E4',
   },
-  headerTitle: { fontSize: 24, fontWeight: '900', color: '#1A2E1A' },
+  headerTitle: { fontSize: 24, fontWeight: '900', color: DARK },
 
   chipsRow: { paddingHorizontal: 20, paddingVertical: 14, gap: 8 },
-  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 50, backgroundColor: '#F8FAF8', borderWidth: 1.5, borderColor: '#E8EDE8' },
-  chipActive: { backgroundColor: '#1A2E1A', borderColor: '#1A2E1A' },
-  chipText: { fontSize: 13, fontWeight: '700', color: '#8A8A8A' },
+  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 50, backgroundColor: '#F4F7F7', borderWidth: 1.5, borderColor: '#D8E4E4' },
+  chipActive: { backgroundColor: DARK, borderColor: DARK },
+  chipText: { fontSize: 13, fontWeight: '700', color: '#5A7070' },
   chipTextActive: { color: '#FFFFFF' },
 
   loadingBox: { paddingVertical: 60, alignItems: 'center', gap: 16 },
-  loadingText: { color: '#8A8A8A', fontSize: 14 },
+  loadingText: { color: '#5A7070', fontSize: 14 },
 
   banner: {
     flexDirection: 'row', backgroundColor: GOLD, borderRadius: 20,
@@ -219,27 +220,27 @@ const s = StyleSheet.create({
   },
   bannerLeft: { flex: 1, marginRight: 12 },
   bannerSavePill: { backgroundColor: YELLOW, paddingHorizontal: 10, paddingVertical: 3, borderRadius: 50, alignSelf: 'flex-start', marginBottom: 8 },
-  bannerSaveText: { fontSize: 12, fontWeight: '800', color: '#1A2E1A' },
+  bannerSaveText: { fontSize: 12, fontWeight: '800', color: DARK },
   bannerNombre: { fontSize: 18, fontWeight: '900', color: '#FFFFFF', lineHeight: 22, marginBottom: 6 },
-  bannerNegocio: { fontSize: 12, color: 'rgba(26,26,26,0.6)', fontWeight: '600' },
+  bannerNegocio: { fontSize: 12, color: 'rgba(10,42,42,0.7)', fontWeight: '600' },
   bannerImg: { width: 90, height: 90, borderRadius: 16 },
 
   gridContainer: { paddingHorizontal: 16, paddingTop: 4 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
 
   promoCard: { backgroundColor: '#FFFFFF', borderRadius: 20, overflow: 'hidden', elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.07, shadowRadius: 10 },
-  promoImgWrap: { backgroundColor: '#FFF4E6', justifyContent: 'center', alignItems: 'center' },
-  discBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: '#E8820C', borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
-  discText: { color: '#FFFFFF', fontSize: 10, fontWeight: '900' },
+  promoImgWrap: { backgroundColor: '#F4F7F7', justifyContent: 'center', alignItems: 'center' },
+  discBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: DARK, borderRadius: 50, paddingHorizontal: 9, paddingVertical: 4 },
+  discText: { color: GOLD, fontSize: 10, fontWeight: '900' },
   promoInfo: { padding: 12 },
-  negocioLabel: { fontSize: 10, color: '#6B7B6B', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
-  promoNombre: { fontSize: 13, fontWeight: '800', color: '#1A2E1A', lineHeight: 18, marginBottom: 8 },
+  negocioLabel: { fontSize: 10, color: '#5A7070', fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+  promoNombre: { fontSize: 13, fontWeight: '800', color: DARK, lineHeight: 18, marginBottom: 8 },
   precioRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  precioOriginal: { fontSize: 10, color: '#B0BDB0', textDecorationLine: 'line-through' },
-  precioDescuento: { fontSize: 18, fontWeight: '900', color: '#1A2E1A' },
-  addBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#E8820C', alignItems: 'center', justifyContent: 'center' },
+  precioOriginal: { fontSize: 10, color: '#5A7070', textDecorationLine: 'line-through' },
+  precioDescuento: { fontSize: 18, fontWeight: '900', color: GOLD },
+  addBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: DARK, alignItems: 'center', justifyContent: 'center' },
 
   emptyState: { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 32 },
-  emptyTitle: { fontSize: 18, fontWeight: '800', color: '#1A2E1A', marginTop: 12 },
-  emptySub: { fontSize: 13, color: '#8A8A8A', textAlign: 'center', marginTop: 6, lineHeight: 20 },
+  emptyTitle: { fontSize: 18, fontWeight: '800', color: DARK, marginTop: 12 },
+  emptySub: { fontSize: 13, color: '#5A7070', textAlign: 'center', marginTop: 6, lineHeight: 20 },
 });

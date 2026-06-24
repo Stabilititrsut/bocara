@@ -6,14 +6,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
 
-const BG     = '#F8FAFC';
+const BG     = '#FAFAFA';
 const CARD   = '#FFFFFF';
-const BORDER = '#E5E7EB';
-const TEXT   = '#111827';
-const TEXT2  = '#6B7280';
-const GOLD   = '#E8820C';
-const GREEN  = '#22C55E';
-const RED    = '#EF4444';
+const BORDER = '#D8E4E4';
+const TEXT   = '#0A2A2A';
+const TEXT2  = '#5A7070';
+const GOLD   = '#C8960C';
+const GREEN  = '#1A5C5C';
+const RED    = '#C0392B';
 
 type CuboStatus = {
   configurado: boolean;

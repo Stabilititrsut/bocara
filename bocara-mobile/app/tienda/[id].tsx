@@ -11,10 +11,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, bolsasAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 
-const GOLD = '#E8820C';
-const DARK = '#1A2E1A';
-const SURF = '#FFF4E6';
-const GRAY = '#8A8A8A';
+const GOLD = '#C8960C';
+const DARK = '#0A2A2A';
+const SURF = '#F4F7F7';
+const GRAY = '#5A7070';
 
 const { width: SW } = Dimensions.get('window');
 const COVER_H   = 200;
@@ -344,7 +344,7 @@ const pc = StyleSheet.create({
     backgroundColor: DARK, borderRadius: 50,
     paddingHorizontal: 8, paddingVertical: 3,
   },
-  badgeDiscTxt: { fontSize: 10, fontWeight: '900', color: '#fff' },
+  badgeDiscTxt: { fontSize: 10, fontWeight: '900', color: GOLD },
   badgeTipo: {
     position: 'absolute', top: 10, right: 10,
     backgroundColor: GOLD, borderRadius: 50,
@@ -354,8 +354,8 @@ const pc = StyleSheet.create({
   body: { padding: 10 },
   nombre: { fontSize: 13, fontWeight: '700', color: DARK, lineHeight: 18, marginBottom: 8 },
   bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
-  precio: { fontSize: 16, fontWeight: '900', color: DARK },
-  orig: { fontSize: 10, color: '#C4C4C4', textDecorationLine: 'line-through', marginTop: 1 },
+  precio: { fontSize: 16, fontWeight: '900', color: GOLD },
+  orig: { fontSize: 10, color: '#5A7070', textDecorationLine: 'line-through', marginTop: 1 },
   addBtn: {
     width: 32, height: 32, borderRadius: 16, backgroundColor: DARK,
     alignItems: 'center', justifyContent: 'center',
@@ -415,12 +415,12 @@ const s = StyleSheet.create({
   },
   filtersContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
   chip: {
-    borderWidth: 1.5, borderColor: DARK, borderRadius: 50,
+    borderWidth: 1.5, borderColor: '#D8E4E4', borderRadius: 50,
     paddingHorizontal: 16, paddingVertical: 7, backgroundColor: '#fff',
   },
   chipActive: { backgroundColor: DARK },
-  chipTxt: { fontSize: 13, color: DARK, fontWeight: '600' },
-  chipTxtActive: { color: '#fff', fontWeight: '700' },
+  chipTxt: { fontSize: 13, color: '#5A7070', fontWeight: '600' },
+  chipTxtActive: { color: GOLD, fontWeight: '700' },
 
   gridContent: { padding: 16 },
   gridRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },

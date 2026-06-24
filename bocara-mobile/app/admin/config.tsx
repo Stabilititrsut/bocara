@@ -7,12 +7,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI, API_BASE_URL } from '@/src/services/api';
 
-const BG     = '#F8FAFC';
+const BG     = '#FAFAFA';
 const CARD   = '#FFFFFF';
-const BORDER = '#E5E7EB';
-const TEXT   = '#111827';
-const TEXT2  = '#6B7280';
-const GOLD   = '#E8820C';
+const BORDER = '#D8E4E4';
+const TEXT   = '#0A2A2A';
+const TEXT2  = '#5A7070';
+const GOLD   = '#C8960C';
 
 const CAMPOS: Array<{
   clave: string;

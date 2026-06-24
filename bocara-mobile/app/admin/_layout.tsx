@@ -2,11 +2,11 @@ import { Tabs } from 'expo-router';
 import { Platform, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-const GOLD     = '#E8820C';
+const GOLD     = '#C8960C';
 const INACTIVE = '#9CA3AF';
 const WHITE    = '#FFFFFF';
 const BORDER   = '#E5E7EB';
-const DARK_GREEN = '#1A2E1A';
+const DARK_GREEN = '#0A2A2A';
 
 const TABS = [
   { name: 'index',             label: 'Dashboard',  icon: 'stats-chart'       },

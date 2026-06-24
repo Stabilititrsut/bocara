@@ -12,9 +12,9 @@ import { useAuth } from '@/src/context/AuthContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 import { Colors } from '@/constants/Colors';
 
-const GOLD = '#E8820C';
-const DARK = '#1A2E1A';
-const RED  = '#E53935';
+const GOLD = '#C8960C';
+const DARK = '#0A2A2A';
+const RED  = '#C0392B';
 
 type TabKey = 'negocios' | 'bolsas';
 
