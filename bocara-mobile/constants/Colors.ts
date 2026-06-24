@@ -1,35 +1,26 @@
 export const Colors = {
-  // Paleta oficial Bocara
-  naranja:         '#E8820C',
-  cacao:           '#4A2C12',
-  verde:           '#2C4A2E',
-  superficie:      '#FFFAF4',
-  textoSecundario: '#8A8A8A',
-
-  // Sistema
-  primary:     '#4A2C12',   // cacao
-  accent:      '#E8820C',   // naranja
+  primary: '#1A2E1A',
+  accent: '#E8820C',
   accentLight: '#FFF4E6',
-  secondary:   '#4A7C3F',
-  white:       '#FFFFFF',
-  background:  '#FFFAF4',
-  surface:     '#FFFAF4',
+  secondary: '#4A7C3F',
+  white: '#FFFFFF',
+  background: '#FFFFFF',
+  surface: '#F8FAF8',
   textPrimary: '#1A2E1A',
-  textSecondary: '#8A8A8A',
-  textLight:   '#B0BDB0',
-  border:      '#E8EDE8',
-  error:       '#C0392B',
-  errorLight:  '#FFEBEE',
-  success:     '#2C4A2E',
-  inputBg:     '#FFFAF4',
-  card:        '#FFFFFF',
-  tabBarBg:    '#FFFFFF',
-
-  // Aliases de compatibilidad
-  orange:      '#E8820C',
-  brown:       '#4A2C12',
-  green:       '#2C4A2E',
+  textSecondary: '#6B7B6B',
+  textLight: '#B0BDB0',
+  border: '#E8EDE8',
+  error: '#E53935',
+  errorLight: '#FFEBEE',
+  success: '#1A2E1A',
+  inputBg: '#F8FAF8',
+  card: '#FFFFFF',
+  tabBarBg: '#FFFFFF',
+  // backward-compat aliases
+  orange: '#E8820C',
+  brown: '#1A2E1A',
+  green: '#1A2E1A',
   orangeLight: '#FFF4E6',
-  brownLight:  '#FFFAF4',
-  greenLight:  '#FFFAF4',
+  brownLight: '#F8FAF8',
+  greenLight: '#F8FAF8',
 };

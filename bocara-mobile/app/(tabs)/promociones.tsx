@@ -36,7 +36,7 @@ function PromoCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
         {bolsa.imagen_url ? (
           <Image source={{ uri: bolsa.imagen_url }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
         ) : (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFAF4', justifyContent: 'center', alignItems: 'center' }]}>
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: '#F5F0EB', justifyContent: 'center', alignItems: 'center' }]}>
             <Text style={{ fontSize: 38 }}>🏷️</Text>
           </View>
         )}
@@ -56,7 +56,7 @@ function PromoCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
           </View>
           {!agotada && (
             <TouchableOpacity style={s.addBtn} onPress={onPress}>
-              <Ionicons name="add" size={18} color="#4A2C12" />
+              <Ionicons name="add" size={18} color="#1A2E1A" />
             </TouchableOpacity>
           )}
         </View>
@@ -204,8 +204,8 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 24, fontWeight: '900', color: '#1A2E1A' },
 
   chipsRow: { paddingHorizontal: 20, paddingVertical: 14, gap: 8 },
-  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 50, backgroundColor: '#FFFAF4', borderWidth: 1.5, borderColor: '#E8EDE8' },
-  chipActive: { backgroundColor: '#4A2C12', borderColor: '#4A2C12' },
+  chip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 50, backgroundColor: '#F8FAF8', borderWidth: 1.5, borderColor: '#E8EDE8' },
+  chipActive: { backgroundColor: '#1A2E1A', borderColor: '#1A2E1A' },
   chipText: { fontSize: 13, fontWeight: '700', color: '#8A8A8A' },
   chipTextActive: { color: '#FFFFFF' },
 
