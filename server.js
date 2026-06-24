@@ -140,6 +140,15 @@ async function enviarRecordatoriosRecogida() {
 app.listen(PORT, () => {
   console.log(`🚀 Bocara API corriendo en puerto ${PORT}`);
   console.log(`🌍 Ambiente: ${process.env.NODE_ENV}`);
+
+  const _cuboUrl     = process.env.CUBO_API_URL || '';
+  const _cuboKey     = process.env.CUBO_API_KEY || process.env.CUBOPAGO_API_KEY || '';
+  console.log('[CUBO STATUS]');
+  console.log(`ambiente=${process.env.CUBO_ENVIRONMENT || 'no_configurado'}`);
+  console.log(`pagos_habilitados=${process.env.CUBO_PAYMENTS_ENABLED === 'true'}`);
+  console.log(`api_url_produccion=${_cuboUrl === 'https://api-payment-a.cubopago.com'}`);
+  console.log(`api_key_configurada=${_cuboKey.length > 0}`);
+
   console.log('[ADMIN] Ruta disponible: GET /api/admin/cubo-status');
   setInterval(enviarRecordatoriosRecogida, 60 * 1000);
   console.log('⏰ Cron de recordatorios de recogida activo');
