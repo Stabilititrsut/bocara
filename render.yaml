@@ -74,6 +74,6 @@ services:
       - key: CUBO_PAYMENTS_ENABLED
         value: "false"
       - key: CUBO_CURRENCY
-        value: USD
+        value: GTQ
       - key: CUBOPAGO_API_KEY  # legacy — reemplazada por CUBO_API_KEY; mantener mientras se migra
         sync: false
