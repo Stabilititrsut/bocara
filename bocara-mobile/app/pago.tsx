@@ -44,10 +44,10 @@ export default function PagoScreen() {
   const router = useRouter();
 
   // Core payment
-  const [urlPago, setUrlPago] = useState<string | null>(null);
-  const [estadoLink, setEstadoLink] = useState<'generando' | 'listo' | 'error'>('generando');
-  const [errorPago, setErrorPago] = useState<string | null>(null);
-  const generacionIdRef = useRef(0);
+  const [pedidoId, setPedidoId] = useState<string | null>(null);
+  const [fase, setFase] = useState<'preparando' | 'listo' | 'generando_link' | 'error'>('preparando');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [errorFase, setErrorFase] = useState<'preparar' | 'generar'>('preparar');
   const pedidoDataRef = useRef<{ pedidoId: string; codigoRecogida: string; token?: string } | null>(null);
 
   // Propina
@@ -85,14 +85,21 @@ export default function PagoScreen() {
   const comisionServicio = Math.round(total * 0.035 * 100) / 100;
   const totalFinal = total + comisionServicio + propina;
 
-  // Genera el link al montar y al cambiar propina. Para propina personalizada
-  // (tipeo carácter a carácter) usa un debounce de 600 ms para evitar llamadas extra.
+  // Al montar: preparar pedido borrador
   useEffect(() => {
     if (items.length === 0) return;
+    prepararPedido();
+  }, []);
+
+  // PATCH propina en borrador cuando cambia (debounced para tipeo)
+  useEffect(() => {
+    if (!pedidoId || fase !== 'listo') return;
     const delay = propinaMode === 'otro' ? 600 : 0;
-    const t = setTimeout(() => generarLink(), delay);
+    const t = setTimeout(() => {
+      pagosAPI.actualizarBorrador(pedidoId, { propina: propina > 0 ? propina : 0 }).catch(() => {});
+    }, delay);
     return () => clearTimeout(t);
-  }, [propina]);
+  }, [propina, pedidoId]);
 
   function irAQR() {
     const d = pedidoDataRef.current;
@@ -163,55 +170,64 @@ export default function PagoScreen() {
     if (tarjetaSelId === id) setTarjetaSelId(null);
   }
 
-  // ── Generar link de pago (se llama al montar y al cambiar propina) ─────────
-  async function generarLink() {
-    setEstadoLink('generando');
-    setUrlPago(null);
-    setErrorPago(null);
-    const id = ++generacionIdRef.current;
+  // ── Preparar pedido borrador al montar ───────────────────────────────────
+  async function prepararPedido() {
+    setFase('preparando');
+    setErrorMsg('');
     try {
       const cuboItems = items.map(i => ({ bolsa_id: i.bolsa.id, cantidad: i.cantidad }));
-      const res = await pagosAPI.cubopago({
+      const res = await pagosAPI.preparar({
         items: cuboItems,
         tipo_entrega: 'recogida',
         propina: propina > 0 ? propina : undefined,
       });
-      if (generacionIdRef.current !== id) return; // generación más nueva en curso
-      const { pedidoId, codigoRecogida, visaLinkUrl } = res.data;
-      pedidoDataRef.current = { pedidoId, codigoRecogida };
-      if (!visaLinkUrl) throw new Error('No se recibió el link de pago. Intenta de nuevo.');
-      setUrlPago(visaLinkUrl);
-      setEstadoLink('listo');
+      const { pedidoId: id, codigoRecogida } = res.data;
+      setPedidoId(id);
+      pedidoDataRef.current = { pedidoId: id, codigoRecogida };
+      setFase('listo');
     } catch (e: any) {
-      if (generacionIdRef.current !== id) return;
-      setEstadoLink('error');
-      setErrorPago(e.message || 'Error al generar el link de pago.');
+      setErrorFase('preparar');
+      setFase('error');
+      setErrorMsg(e.message || 'Error al preparar el pedido.');
     }
   }
 
-  // ── Abrir pago en nativo → delega verificación a pago-retorno ────────────
-  async function abrirPagoNativo(url: string) {
-    await WebBrowser.openBrowserAsync(url, { showTitle: true, toolbarColor: Colors.primary });
-    const d = pedidoDataRef.current;
-    if (d?.pedidoId) {
-      router.replace({ pathname: '/pago-retorno', params: { pedidoId: d.pedidoId } } as any);
+  // ── Generar link y navegar al pago (se llama al presionar Pagar) ─────────
+  async function handlePagar() {
+    if (!pedidoId) return;
+    setFase('generando_link');
+    try {
+      const res = await pagosAPI.generarLink({ pedidoId });
+      const { visaLinkUrl } = res.data;
+      if (Platform.OS !== 'web') {
+        await WebBrowser.openBrowserAsync(visaLinkUrl, { showTitle: true, toolbarColor: Colors.primary });
+        router.replace({ pathname: '/pago-retorno', params: { pedidoId } } as any);
+      } else {
+        (window as any).location.href = visaLinkUrl;
+      }
+    } catch (e: any) {
+      setErrorFase('generar');
+      setFase('error');
+      setErrorMsg(e.message || 'Error al generar el link de pago.');
+    }
+  }
+
+  function handleReintentar() {
+    if (errorFase === 'preparar') {
+      prepararPedido();
     } else {
-      router.replace('/(tabs)/pedidos' as any);
+      setFase('listo');
+      setErrorMsg('');
     }
   }
 
-  function reintentar() {
-    setErrorPago(null);
-    generarLink();
-  }
-
-  // ── Error de pago ─────────────────────────────────────────────────────────
-  if (errorPago) return (
+  // ── Error ─────────────────────────────────────────────────────────────────
+  if (fase === 'error') return (
     <SafeAreaView style={[s.root, s.centerBox]}>
       <Text style={s.errorIcon}>⚠️</Text>
       <Text style={s.errorTitulo}>No se pudo procesar el pago</Text>
-      <Text style={s.errorMsg}>{errorPago}</Text>
-      <TouchableOpacity onPress={reintentar} style={s.btnReintentar}>
+      <Text style={s.errorMsg}>{errorMsg}</Text>
+      <TouchableOpacity onPress={handleReintentar} style={s.btnReintentar}>
         <Text style={s.btnReintentarText}>Reintentar</Text>
       </TouchableOpacity>
       <TouchableOpacity onPress={() => router.back()}>
@@ -495,16 +511,16 @@ export default function PagoScreen() {
 
       {/* ── Footer ── */}
       <View style={s.footer}>
-        {estadoLink === 'generando' && (
+        {(fase === 'preparando' || fase === 'generando_link') && (
           <View style={[s.btnPagar, s.btnOff]}>
             <ActivityIndicator color={Colors.white} size="small" />
           </View>
         )}
 
-        {estadoLink === 'listo' && urlPago && Platform.OS !== 'web' && (
+        {fase === 'listo' && (
           <TouchableOpacity
             style={s.btnPagar}
-            onPress={() => abrirPagoNativo(urlPago)}
+            onPress={handlePagar}
             activeOpacity={0.85}
           >
             <Text style={s.btnPagarText}>
@@ -513,37 +529,6 @@ export default function PagoScreen() {
                 : `💳  Pagar Q${totalFinal.toFixed(2)}`
               }
             </Text>
-          </TouchableOpacity>
-        )}
-
-        {estadoLink === 'listo' && urlPago && Platform.OS === 'web' && (
-          // <a href> nativo: el browser NUNCA bloquea un link presionado directamente por el usuario
-          // @ts-ignore — 'a' es válido en contexto Expo Web / React Native Web
-          <a
-            href={urlPago}
-            style={{
-              display: 'block',
-              backgroundColor: Colors.primary,
-              color: '#FFFFFF',
-              textAlign: 'center',
-              padding: '17px 24px',
-              borderRadius: '50px',
-              fontWeight: '900',
-              fontSize: '15px',
-              textDecoration: 'none',
-              letterSpacing: '0.2px',
-            }}
-          >
-            {tarjetaSelId
-              ? `💳  Pagar con •••• ${tarjetas.find(t => t.id === tarjetaSelId)?.ultimos4} · Q${totalFinal.toFixed(2)}`
-              : `💳  Pagar Q${totalFinal.toFixed(2)}`
-            }
-          </a>
-        )}
-
-        {estadoLink === 'error' && (
-          <TouchableOpacity style={s.btnPagar} onPress={generarLink} activeOpacity={0.85}>
-            <Text style={s.btnPagarText}>Reintentar pago</Text>
           </TouchableOpacity>
         )}
 

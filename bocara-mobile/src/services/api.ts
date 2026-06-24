@@ -107,6 +107,17 @@ export const pagosAPI = {
     direccion_envio?: any;
     propina?: number;
   }) => api.post('/pagos/cubopago', data),
+  preparar: (data: {
+    items?: Array<{ bolsa_id: string; cantidad: number }>;
+    bolsa_id?: string;
+    cantidad?: number;
+    tipo_entrega: string;
+    propina?: number;
+  }) => api.post('/pagos/preparar', data),
+  generarLink: (data: { pedidoId: string }) =>
+    api.post('/pagos/generar-link', data),
+  actualizarBorrador: (id: string, data: { propina: number }) =>
+    api.patch(`/pagos/borrador/${id}`, data),
   estado: (id: string) => api.get(`/pagos/estado/${id}`),
 };
 

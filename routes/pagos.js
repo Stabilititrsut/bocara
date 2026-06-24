@@ -552,4 +552,249 @@ router.post('/cubo-webhook', async (req, res) => {
   }
 });
 
+// POST /api/pagos/preparar — crea pedido en estado 'borrador' sin generar link de pago
+router.post('/preparar', authMiddleware, async (req, res) => {
+  try {
+    const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
+    const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
+
+    if (process.env.CUBO_PAYMENTS_ENABLED !== 'true') {
+      return res.status(503).json({ error: 'Pagos temporalmente deshabilitados' });
+    }
+
+    let cartItems;
+    if (Array.isArray(itemsReq) && itemsReq.length > 0) {
+      cartItems = itemsReq;
+    } else if (bolsa_id) {
+      cartItems = [{ bolsa_id, cantidad: Math.max(1, parseInt(cantidadReq) || 1) }];
+    } else {
+      return res.status(400).json({ error: 'Se requiere items[] o bolsa_id' });
+    }
+
+    const bolsasResults = await Promise.all(
+      cartItems.map(item =>
+        supabase.from('bolsas').select('*, negocios(id,nombre,propietario_id)').eq('id', item.bolsa_id).single()
+      )
+    );
+
+    const bolsas = [];
+    for (let i = 0; i < cartItems.length; i++) {
+      const { data: bolsa, error } = bolsasResults[i];
+      if (error || !bolsa) return res.status(404).json({ error: `Bolsa ${cartItems[i].bolsa_id} no encontrada` });
+      bolsas.push(bolsa);
+    }
+
+    const { data: viejos } = await supabase
+      .from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('usuario_id', req.usuario.id)
+      .in('estado', ['borrador', 'pendiente'])
+      .eq('estado_pago', 'pendiente')
+      .select('id');
+    console.log('[PREPARAR] pedidos anteriores cancelados:', viejos?.length ?? 0);
+
+    for (let i = 0; i < cartItems.length; i++) {
+      const bolsa = bolsas[i];
+      const cantidadSolicitada = cartItems[i].cantidad;
+      const reservado = await getReservadoPendiente(bolsa.id);
+      const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+      if (cantidadSolicitada > disponibleReal) {
+        return res.status(400).json({
+          error: disponibleReal === 0
+            ? `"${bolsa.nombre}": Esta bolsa ya no tiene unidades disponibles.`
+            : `"${bolsa.nombre}": Solo quedan ${disponibleReal} unidad(es) disponibles.`,
+        });
+      }
+    }
+
+    const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
+    const subtotalProductos = Math.round(
+      cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
+    ) / 100;
+    const subtotal = subtotalProductos + costoEnvio + propina;
+    const COMISION_CUBO = 0.035;
+    const comisionBocara = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
+    const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const total = Math.round((subtotal + comisionPasarela) * 100) / 100;
+    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela + propina) * 100) / 100;
+
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
+      chars[Math.floor(Math.random() * chars.length)]
+    ).join('');
+    const referenceCode = `BOC-${Date.now()}-${req.usuario.id.slice(0, 8)}`;
+
+    const bolsaPrincipal = bolsas[0];
+    const itemPrincipal = cartItems[0];
+
+    const insertBase = {
+      usuario_id: req.usuario.id,
+      bolsa_id: bolsaPrincipal.id,
+      negocio_id: bolsaPrincipal.negocios.id,
+      tipo_entrega,
+      direccion_envio: tipo_entrega === 'envio' ? direccion_envio : null,
+      precio_bolsa: bolsaPrincipal.precio_descuento,
+      costo_envio: costoEnvio,
+      comision_bocara: comisionBocara,
+      comision_pasarela: comisionPasarela,
+      monto_neto_restaurante: montoNetoRestaurante,
+      total,
+      estado: 'borrador',
+      estado_pago: 'pendiente',
+      codigo_recogida: codigoRecogida,
+      payu_reference_code: referenceCode,
+      hora_recogida_inicio: bolsaPrincipal.hora_recogida_inicio,
+      hora_recogida_fin: bolsaPrincipal.hora_recogida_fin,
+    };
+
+    const insertConExtras = { ...insertBase, cantidad: itemPrincipal.cantidad, ...(propina > 0 ? { propina } : {}) };
+    let { data: pedido, error: pedidoErr } = await supabase
+      .from('pedidos').insert([insertConExtras]).select().single();
+    if (pedidoErr) {
+      const r2 = await supabase.from('pedidos').insert([{ ...insertBase, cantidad: itemPrincipal.cantidad }]).select().single();
+      pedido = r2.data; pedidoErr = r2.error;
+    }
+    if (pedidoErr) {
+      const r3 = await supabase.from('pedidos').insert([insertBase]).select().single();
+      pedido = r3.data; pedidoErr = r3.error;
+    }
+    if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
+
+    const pedidoItemsData = cartItems.map((item, i) => ({
+      pedido_id: pedido.id,
+      bolsa_id: item.bolsa_id,
+      cantidad: item.cantidad,
+      precio_unitario: bolsas[i].precio_descuento,
+      subtotal: Math.round(bolsas[i].precio_descuento * item.cantidad * 100) / 100,
+    }));
+    const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
+    if (itemsInsertErr) {
+      await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+      return res.status(500).json({ error: 'Error al registrar los items del pedido.' });
+    }
+
+    console.log('[PREPARAR] borrador creado:', pedido.id, '| total:', total);
+    res.json({ pedidoId: pedido.id, codigoRecogida, total, costoEnvio, comisionPasarela, montoNetoRestaurante });
+  } catch (err) {
+    console.error('preparar error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/pagos/generar-link — genera link CuboPago para un borrador existente (se llama al presionar Pagar)
+router.post('/generar-link', authMiddleware, async (req, res) => {
+  try {
+    const { pedidoId } = req.body;
+    if (!pedidoId) return res.status(400).json({ error: 'pedidoId requerido' });
+
+    if (process.env.CUBO_PAYMENTS_ENABLED !== 'true') {
+      return res.status(503).json({ error: 'Pagos temporalmente deshabilitados' });
+    }
+
+    const apiKeyDisponible = process.env.CUBO_API_KEY
+      || (process.env.CUBO_ENVIRONMENT !== 'production' ? process.env.CUBOPAGO_API_KEY : null);
+    if (!apiKeyDisponible) {
+      return res.status(500).json({ error: 'CUBO_API_KEY no configurada en el servidor' });
+    }
+
+    const { data: pedido, error: pedidoErr } = await supabase
+      .from('pedidos')
+      .select('*, bolsas(nombre), negocios(nombre)')
+      .eq('id', pedidoId)
+      .single();
+
+    if (pedidoErr || !pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.usuario_id !== req.usuario.id) return res.status(403).json({ error: 'No autorizado' });
+    if (pedido.estado !== 'borrador') return res.status(400).json({ error: 'El pedido ya no está en borrador' });
+
+    const { data: usuario } = await supabase
+      .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
+
+    const { data: pedidoItems } = await supabase
+      .from('pedido_items').select('*, bolsas(nombre)').eq('pedido_id', pedidoId);
+
+    const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
+    const redirectUri = `${frontendUrl}/pago-retorno?pedidoId=${pedido.id}`;
+
+    const items = pedidoItems || [];
+    const tituloStr = items.length === 1
+      ? `Bocara - ${items[0].bolsas?.nombre || pedido.bolsas?.nombre || 'pedido'}`
+      : `Bocara - ${items.length} productos`;
+
+    const cuboItems = items.map(pi => ({
+      name: pi.bolsas?.nombre || 'Producto',
+      price: pi.precio_unitario.toFixed(2),
+      quantity: pi.cantidad,
+    }));
+    if (pedido.propina > 0) {
+      cuboItems.push({ name: `Propina para ${pedido.negocios?.nombre || 'restaurante'}`, price: pedido.propina.toFixed(2), quantity: 1 });
+    }
+
+    const { url: visaLinkUrl, token: paymentIntentToken } = await generarLinkPago({
+      referencia: pedido.payu_reference_code,
+      pedidoId: pedido.id,
+      titulo: tituloStr,
+      monto: pedido.total,
+      urlRedireccion: redirectUri,
+      cliente: {
+        nombre: `${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim() || undefined,
+        email: usuario?.email || undefined,
+        telefono: usuario?.telefono ? `+502${usuario.telefono.replace(/\D/g, '')}` : undefined,
+      },
+      items: cuboItems,
+    });
+
+    const montoCentavos = Math.round(pedido.total * 100);
+    await supabase.from('pedidos').update({
+      estado: 'pendiente',
+      cubo_payment_intent_token: paymentIntentToken || null,
+      monto_esperado_centavos: montoCentavos,
+    }).eq('id', pedido.id);
+
+    console.log('[GENERAR LINK] pedido:', pedido.id, '| link generado');
+    res.json({ visaLinkUrl, paymentIntentToken });
+  } catch (err) {
+    console.error('generar-link error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/pagos/borrador/:id — actualiza propina en borrador y recalcula totales
+router.patch('/borrador/:id', authMiddleware, async (req, res) => {
+  try {
+    const { propina: propinaReq } = req.body;
+    const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
+
+    const { data: pedido, error: pedidoErr } = await supabase
+      .from('pedidos').select('*').eq('id', req.params.id).single();
+
+    if (pedidoErr || !pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.usuario_id !== req.usuario.id) return res.status(403).json({ error: 'No autorizado' });
+    if (pedido.estado !== 'borrador') return res.status(400).json({ error: 'El pedido ya no está en borrador' });
+
+    const { data: pedidoItems } = await supabase
+      .from('pedido_items').select('precio_unitario, cantidad').eq('pedido_id', req.params.id);
+
+    const subtotalProductos = Math.round(
+      (pedidoItems || []).reduce((sum, pi) => sum + pi.precio_unitario * pi.cantidad, 0) * 100
+    ) / 100;
+    const COMISION_CUBO = 0.035;
+    const subtotal = subtotalProductos + pedido.costo_envio + propina;
+    const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const total = Math.round((subtotal + comisionPasarela) * 100) / 100;
+    const montoNetoRestaurante = Math.round((subtotalProductos - pedido.comision_bocara - comisionPasarela + propina) * 100) / 100;
+
+    const { error: updateErr } = await supabase.from('pedidos').update({
+      propina, total, comision_pasarela: comisionPasarela, monto_neto_restaurante: montoNetoRestaurante,
+    }).eq('id', req.params.id);
+
+    if (updateErr) return res.status(400).json({ error: updateErr.message });
+
+    res.json({ pedidoId: req.params.id, propina, total, comisionPasarela, montoNetoRestaurante });
+  } catch (err) {
+    console.error('borrador patch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

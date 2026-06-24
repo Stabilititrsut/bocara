@@ -156,6 +156,22 @@ app.listen(PORT, () => {
   console.log('[ADMIN] Ruta disponible: GET /api/admin/cubo-status');
   setInterval(enviarRecordatoriosRecogida, 60 * 1000);
   console.log('⏰ Cron de recordatorios de recogida activo');
+
+  setInterval(async () => {
+    try {
+      const hace2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        .from('pedidos')
+        .update({ estado: 'cancelado', estado_pago: 'fallido' })
+        .eq('estado', 'borrador')
+        .lt('created_at', hace2h)
+        .select('id');
+      if (data?.length) console.log('[CLEANUP] borradores expirados cancelados:', data.length);
+    } catch (err) {
+      console.error('[CLEANUP] error limpiando borradores:', err.message);
+    }
+  }, 60 * 60 * 1000);
+  console.log('⏰ Cron de limpieza de borradores activo (cada hora)');
 });
 
 module.exports = app;
