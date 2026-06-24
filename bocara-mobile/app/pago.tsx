@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Alert, ActivityIndicator, SafeAreaView, Image, Modal, TextInput,
+  ActivityIndicator, SafeAreaView, Image, Modal, TextInput,
   Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -44,11 +44,10 @@ export default function PagoScreen() {
   const router = useRouter();
 
   // Core payment
-  const [loading, setLoading] = useState(false);
-  const [verificando, setVerificando] = useState(false);
+  const [urlPago, setUrlPago] = useState<string | null>(null);
+  const [estadoLink, setEstadoLink] = useState<'generando' | 'listo' | 'error'>('generando');
   const [errorPago, setErrorPago] = useState<string | null>(null);
-  const [pendiente, setPendiente] = useState(false);
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const generacionIdRef = useRef(0);
   const pedidoDataRef = useRef<{ pedidoId: string; codigoRecogida: string; token?: string } | null>(null);
 
   // Propina
@@ -86,9 +85,14 @@ export default function PagoScreen() {
   const comisionServicio = Math.round(total * 0.035 * 100) / 100;
   const totalFinal = total + comisionServicio + propina;
 
-  function limpiarPolling() {
-    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-  }
+  // Genera el link al montar y al cambiar propina. Para propina personalizada
+  // (tipeo carácter a carácter) usa un debounce de 600 ms para evitar llamadas extra.
+  useEffect(() => {
+    if (items.length === 0) return;
+    const delay = propinaMode === 'otro' ? 600 : 0;
+    const t = setTimeout(() => generarLink(), delay);
+    return () => clearTimeout(t);
+  }, [propina]);
 
   function irAQR() {
     const d = pedidoDataRef.current;
@@ -159,22 +163,12 @@ export default function PagoScreen() {
     if (tarjetaSelId === id) setTarjetaSelId(null);
   }
 
-  // ── Iniciar pago ─────────────────────────────────────────────────────────
-  async function iniciarPago() {
+  // ── Generar link de pago (se llama al montar y al cambiar propina) ─────────
+  async function generarLink() {
+    setEstadoLink('generando');
+    setUrlPago(null);
     setErrorPago(null);
-    setPendiente(false);
-    if (items.length === 0) return;
-    setLoading(true);
-
-    console.log('A. iniciarPago llamado');
-
-    let timedOut = false;
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      setLoading(false);
-      setErrorPago('El servidor tardó demasiado en responder. Intenta de nuevo.');
-    }, 15000);
-
+    const id = ++generacionIdRef.current;
     try {
       const cuboItems = items.map(i => ({ bolsa_id: i.bolsa.id, cantidad: i.cantidad }));
       const res = await pagosAPI.cubopago({
@@ -182,68 +176,33 @@ export default function PagoScreen() {
         tipo_entrega: 'recogida',
         propina: propina > 0 ? propina : undefined,
       });
-
-      clearTimeout(timeoutId);
-      if (timedOut) return;
-
-      console.log('B. Respuesta del backend:', res.data);
-
+      if (generacionIdRef.current !== id) return; // generación más nueva en curso
       const { pedidoId, codigoRecogida, visaLinkUrl } = res.data;
       pedidoDataRef.current = { pedidoId, codigoRecogida };
-
-      if (!visaLinkUrl) {
-        setErrorPago('No se recibió el link de pago. Intenta de nuevo.');
-        return;
-      }
-
-      console.log('C. URL de redirección:', visaLinkUrl);
-      console.log('D. Abriendo URL de pago... (platform:', Platform.OS, ')');
-
-      if (Platform.OS === 'web') {
-        // En web móvil, window.open() después de un await es bloqueado como popup.
-        // window.location.href navega en la misma pestaña — nunca bloqueado.
-        window.location.href = visaLinkUrl;
-        // La página navega fuera — pago-retorno.tsx maneja el retorno de CuboPago.
-      } else {
-        // En nativo: in-app browser (SFSafariViewController / Chrome Custom Tab)
-        await WebBrowser.openBrowserAsync(visaLinkUrl, { showTitle: true, toolbarColor: Colors.primary });
-
-        console.log('E. Browser cerrado — iniciando verificación de pago');
-
-        setVerificando(true);
-        let intentos = 0;
-        pollingRef.current = setInterval(async () => {
-          intentos++;
-          try {
-            const estadoRes = await pagosAPI.estado(pedidoId);
-            const { estado_pago, estado } = estadoRes.data;
-            if (estado_pago === 'pagado' && estado === 'confirmado') {
-              limpiarPolling(); setVerificando(false);
-              setFacturaVisible(true);
-            } else if (estado_pago === 'fallido' || estado === 'cancelado') {
-              limpiarPolling(); setVerificando(false);
-              setErrorPago('El pago fue rechazado o cancelado. Revisa los datos de tu tarjeta e intenta de nuevo.');
-            } else if (intentos >= 10) {
-              limpiarPolling(); setVerificando(false);
-              setPendiente(true);
-            }
-          } catch {}
-        }, 3000);
-      }
+      if (!visaLinkUrl) throw new Error('No se recibió el link de pago. Intenta de nuevo.');
+      setUrlPago(visaLinkUrl);
+      setEstadoLink('listo');
     } catch (e: any) {
-      clearTimeout(timeoutId);
-      if (!timedOut) {
-        console.error('Error en pago:', e);
-        setErrorPago(e.message || 'Error al conectar con el servidor de pagos.');
-      }
-    } finally {
-      if (!timedOut) setLoading(false);
+      if (generacionIdRef.current !== id) return;
+      setEstadoLink('error');
+      setErrorPago(e.message || 'Error al generar el link de pago.');
+    }
+  }
+
+  // ── Abrir pago en nativo → delega verificación a pago-retorno ────────────
+  async function abrirPagoNativo(url: string) {
+    await WebBrowser.openBrowserAsync(url, { showTitle: true, toolbarColor: Colors.primary });
+    const d = pedidoDataRef.current;
+    if (d?.pedidoId) {
+      router.replace({ pathname: '/pago-retorno', params: { pedidoId: d.pedidoId } } as any);
+    } else {
+      router.replace('/(tabs)/pedidos' as any);
     }
   }
 
   function reintentar() {
     setErrorPago(null);
-    iniciarPago();
+    generarLink();
   }
 
   // ── Error de pago ─────────────────────────────────────────────────────────
@@ -257,23 +216,6 @@ export default function PagoScreen() {
       </TouchableOpacity>
       <TouchableOpacity onPress={() => router.back()}>
         <Text style={s.linkVolver}>Volver al carrito</Text>
-      </TouchableOpacity>
-    </SafeAreaView>
-  );
-
-  // ── Pago pendiente (no confirmado tras polling) ────────────────────────────
-  if (pendiente) return (
-    <SafeAreaView style={[s.root, s.centerBox]}>
-      <Text style={{ fontSize: 48 }}>⏳</Text>
-      <Text style={s.verificandoTitle}>Pago en proceso</Text>
-      <Text style={s.verificandoText}>
-        Si el cobro se realizó, tu pedido aparecerá en "Mis pedidos" en los próximos minutos.
-      </Text>
-      <TouchableOpacity
-        onPress={() => router.replace('/(tabs)/pedidos' as any)}
-        style={[s.btnReintentar, { marginTop: 8 }]}
-      >
-        <Text style={s.btnReintentarText}>Ver mis pedidos →</Text>
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -293,28 +235,6 @@ export default function PagoScreen() {
             <View key={i} style={[s.skeletonCard, { height: h }]} />
           ))}
         </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
-  // ── Verificando ───────────────────────────────────────────────────────────
-  if (verificando) {
-    return (
-      <SafeAreaView style={[s.root, s.centerBox]}>
-        <View style={s.spinnerRing}>
-          <ActivityIndicator color={Colors.primary} size="large" />
-        </View>
-        <Text style={s.verificandoTitle}>Verificando tu pago...</Text>
-        <Text style={s.verificandoText}>
-          Estamos confirmando tu transacción con Cubo Pago.{'\n'}Esto toma unos segundos.
-        </Text>
-        <TouchableOpacity
-          style={s.linkBtn}
-          onPress={() => { limpiarPolling(); setVerificando(false); router.replace('/(tabs)/pedidos' as any); }}
-        >
-          <Text style={s.linkBtnText}>Ver mis pedidos</Text>
-          <Ionicons name="arrow-forward" size={14} color={Colors.accent} />
-        </TouchableOpacity>
       </SafeAreaView>
     );
   }
@@ -575,22 +495,58 @@ export default function PagoScreen() {
 
       {/* ── Footer ── */}
       <View style={s.footer}>
-        <TouchableOpacity
-          style={[s.btnPagar, loading && s.btnOff]}
-          onPress={iniciarPago}
-          disabled={loading}
-          activeOpacity={0.85}
-        >
-          {loading
-            ? <ActivityIndicator color={Colors.white} size="small" />
-            : <Text style={s.btnPagarText}>
-                {tarjetaSelId
-                  ? `💳  Pagar con •••• ${tarjetas.find(t => t.id === tarjetaSelId)?.ultimos4} · Q${totalFinal.toFixed(2)}`
-                  : `💳  Pagar Q${totalFinal.toFixed(2)}`
-                }
-              </Text>
-          }
-        </TouchableOpacity>
+        {estadoLink === 'generando' && (
+          <View style={[s.btnPagar, s.btnOff]}>
+            <ActivityIndicator color={Colors.white} size="small" />
+          </View>
+        )}
+
+        {estadoLink === 'listo' && urlPago && Platform.OS !== 'web' && (
+          <TouchableOpacity
+            style={s.btnPagar}
+            onPress={() => abrirPagoNativo(urlPago)}
+            activeOpacity={0.85}
+          >
+            <Text style={s.btnPagarText}>
+              {tarjetaSelId
+                ? `💳  Pagar con •••• ${tarjetas.find(t => t.id === tarjetaSelId)?.ultimos4} · Q${totalFinal.toFixed(2)}`
+                : `💳  Pagar Q${totalFinal.toFixed(2)}`
+              }
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {estadoLink === 'listo' && urlPago && Platform.OS === 'web' && (
+          // <a href> nativo: el browser NUNCA bloquea un link presionado directamente por el usuario
+          // @ts-ignore — 'a' es válido en contexto Expo Web / React Native Web
+          <a
+            href={urlPago}
+            style={{
+              display: 'block',
+              backgroundColor: Colors.primary,
+              color: '#FFFFFF',
+              textAlign: 'center',
+              padding: '17px 24px',
+              borderRadius: '50px',
+              fontWeight: '900',
+              fontSize: '15px',
+              textDecoration: 'none',
+              letterSpacing: '0.2px',
+            }}
+          >
+            {tarjetaSelId
+              ? `💳  Pagar con •••• ${tarjetas.find(t => t.id === tarjetaSelId)?.ultimos4} · Q${totalFinal.toFixed(2)}`
+              : `💳  Pagar Q${totalFinal.toFixed(2)}`
+            }
+          </a>
+        )}
+
+        {estadoLink === 'error' && (
+          <TouchableOpacity style={s.btnPagar} onPress={generarLink} activeOpacity={0.85}>
+            <Text style={s.btnPagarText}>Reintentar pago</Text>
+          </TouchableOpacity>
+        )}
+
         <View style={s.secureRow}>
           <Ionicons name="lock-closed-outline" size={12} color={Colors.textLight} />
           <Text style={s.secureText}>Pago seguro · Cubo Pago · SSL cifrado</Text>
@@ -684,13 +640,6 @@ const s = StyleSheet.create({
   btnPagarText: { color: Colors.white, fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
   secureRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginTop: 10 },
   secureText:   { fontSize: 12, color: Colors.textLight },
-
-  // Verificando
-  spinnerRing:      { width: 80, height: 80, borderRadius: 40, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
-  verificandoTitle: { fontSize: 20, fontWeight: '800', color: Colors.primary, marginBottom: 8 },
-  verificandoText:  { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 22, marginBottom: 28 },
-  linkBtn:          { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  linkBtnText:      { color: Colors.accent, fontWeight: '700', fontSize: 14 },
 
   // Modales compartidos
   modalOverlay:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
