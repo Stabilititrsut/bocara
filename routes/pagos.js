@@ -592,6 +592,11 @@ router.post('/preparar', authMiddleware, async (req, res) => {
       .eq('estado_pago', 'pendiente')
       .select('id');
     console.log('[PREPARAR] pedidos anteriores cancelados:', viejos?.length ?? 0);
+    // Liberar reservas de cupón de borradores cancelados
+    for (const v of (viejos || [])) {
+      await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: v.id })
+        .catch(err => console.error('[PREPARAR] liberar_reserva_cupon error:', err.message));
+    }
 
     for (let i = 0; i < cartItems.length; i++) {
       const bolsa = bolsas[i];
@@ -607,23 +612,6 @@ router.post('/preparar', authMiddleware, async (req, res) => {
       }
     }
 
-    // Validar cupón antes de calcular totales
-    let cupon = null;
-    let descuentoCupon = 0;
-    if (cupon_id) {
-      const { data: cuponData } = await supabase
-        .from('cupones').select('*').eq('id', cupon_id).eq('activo', true).maybeSingle();
-      if (!cuponData) return res.status(400).json({ error: 'Cupón no válido o expirado' });
-      if (cuponData.fecha_vencimiento && new Date(cuponData.fecha_vencimiento) < new Date())
-        return res.status(400).json({ error: 'Este cupón ha vencido' });
-      if (cuponData.usos_actuales >= cuponData.uso_maximo)
-        return res.status(400).json({ error: 'Este cupón ya alcanzó su límite de usos' });
-      const { data: usoExistente } = await supabase
-        .from('cupones_usuarios').select('id').eq('cupon_id', cupon_id).eq('usuario_id', req.usuario.id).maybeSingle();
-      if (usoExistente) return res.status(400).json({ error: 'Ya usaste este cupón anteriormente' });
-      cupon = cuponData;
-    }
-
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
     const subtotalProductos = Math.round(
       cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
@@ -632,13 +620,8 @@ router.post('/preparar', authMiddleware, async (req, res) => {
     const COMISION_CUBO = 0.035;
     const comisionBocara = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
     const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
-    if (cupon) {
-      descuentoCupon = cupon.tipo === 'porcentaje'
-        ? Math.round(subtotal * cupon.valor / 100 * 100) / 100
-        : Math.min(cupon.valor, subtotal);
-      descuentoCupon = Math.round(descuentoCupon * 100) / 100;
-    }
-    const total = Math.round(Math.max(0, subtotal + comisionPasarela - descuentoCupon) * 100) / 100;
+    // Total sin descuento — se actualiza después de la reserva atómica del cupón
+    let total = Math.round((subtotal + comisionPasarela) * 100) / 100;
     const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela + propina) * 100) / 100;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -696,15 +679,44 @@ router.post('/preparar', authMiddleware, async (req, res) => {
       return res.status(500).json({ error: 'Error al registrar los items del pedido.' });
     }
 
-    if (cupon) {
-      await supabase.from('cupones_usuarios').insert({
-        cupon_id: cupon.id, usuario_id: req.usuario.id, pedido_id: pedido.id, descuento_aplicado: descuentoCupon,
-      }).catch(err => console.error('[PREPARAR] cupones_usuarios error:', err.message));
-      await supabase.from('cupones').update({ usos_actuales: cupon.usos_actuales + 1 }).eq('id', cupon.id)
-        .catch(err => console.error('[PREPARAR] cupones usos error:', err.message));
+    // Reserva atómica del cupón — SOLO aquí, NUNCA antes del pedido, NUNCA desde Node.js directamente
+    let descuentoCupon = 0;
+    if (cupon_id) {
+      const ERRORES_CUPON = {
+        cupon_no_encontrado:     'Cupón no válido o expirado',
+        cupon_inactivo:          'Este cupón no está disponible',
+        cupon_vencido:           'Este cupón ha vencido',
+        cupon_exclusivo:         'Este cupón no está disponible para tu cuenta',
+        limite_global_alcanzado: 'Este cupón ya alcanzó su límite de usos',
+        limite_usuario_alcanzado:'Ya usaste este cupón anteriormente',
+      };
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('reservar_cupon', {
+        p_cupon_id:     cupon_id,
+        p_usuario_id:   req.usuario.id,
+        p_pedido_id:    pedido.id,
+        p_monto_pedido: total, // total antes de descuento
+      });
+      if (rpcErr || !rpcRes?.ok) {
+        await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+        const msg = ERRORES_CUPON[rpcRes?.resultado] || rpcErr?.message || 'Error al aplicar el cupón';
+        console.error('[PREPARAR] reservar_cupon fallo:', rpcRes?.resultado || rpcErr?.message);
+        return res.status(400).json({ error: msg });
+      }
+      descuentoCupon = Math.round((parseFloat(String(rpcRes.descuento)) || 0) * 100) / 100;
+      const totalConDescuento = Math.round(Math.max(0, total - descuentoCupon) * 100) / 100;
+      const { error: updErr } = await supabase.from('pedidos').update({
+        total: totalConDescuento,
+        descuento_cupon: descuentoCupon,
+      }).eq('id', pedido.id);
+      if (updErr) {
+        await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+        return res.status(500).json({ error: 'Error al aplicar el descuento al pedido' });
+      }
+      total = totalConDescuento;
+      console.log('[PREPARAR] cupón reservado:', cupon_id, '| descuento: Q' + descuentoCupon);
     }
 
-    console.log('[PREPARAR] borrador creado:', pedido.id, '| total:', total, cupon ? `| cupón: Q${descuentoCupon}` : '');
+    console.log('[PREPARAR] borrador creado:', pedido.id, '| total:', total, cupon_id ? `| cupón: Q${descuentoCupon}` : '');
     res.json({ pedidoId: pedido.id, codigoRecogida, total, costoEnvio, comisionPasarela, montoNetoRestaurante, descuentoCupon });
   } catch (err) {
     console.error('preparar error:', err.message);
@@ -812,7 +824,8 @@ router.patch('/borrador/:id', authMiddleware, async (req, res) => {
     const COMISION_CUBO = 0.035;
     const subtotal = subtotalProductos + pedido.costo_envio + propina;
     const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
-    const total = Math.round((subtotal + comisionPasarela) * 100) / 100;
+    const descuentoCupon = Math.round((parseFloat(pedido.descuento_cupon) || 0) * 100) / 100;
+    const total = Math.round(Math.max(0, subtotal + comisionPasarela - descuentoCupon) * 100) / 100;
     const montoNetoRestaurante = Math.round((subtotalProductos - pedido.comision_bocara - comisionPasarela + propina) * 100) / 100;
 
     const { error: updateErr } = await supabase.from('pedidos').update({

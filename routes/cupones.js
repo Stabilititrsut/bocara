@@ -21,17 +21,24 @@ router.post('/validar', authMiddleware, async (req, res) => {
     if (cupon.fecha_vencimiento && new Date(cupon.fecha_vencimiento) < new Date())
       return res.status(400).json({ error: 'Este cupón ha vencido' });
 
+    // Límite global: usos_actuales refleja consumos confirmados (webhook). Es una pre-verificación
+    // aproximada; la reserva atómica en reservar_cupon hace el chequeo definitivo.
     if (cupon.usos_actuales >= cupon.uso_maximo)
       return res.status(400).json({ error: 'Este cupón ya alcanzó su límite de usos' });
 
-    const { data: usoExistente } = await supabase
-      .from('cupones_usuarios')
-      .select('id')
-      .eq('cupon_id', cupon.id)
-      .eq('usuario_id', req.usuario.id)
-      .maybeSingle();
+    // Cupón exclusivo para otro usuario
+    if (cupon.usuario_id_exclusivo && cupon.usuario_id_exclusivo !== usuario_id)
+      return res.status(400).json({ error: 'Este cupón no está disponible para tu cuenta' });
 
-    if (usoExistente) return res.status(400).json({ error: 'Ya usaste este cupón anteriormente' });
+    // Límite por usuario: contar usos confirmados
+    const { count: usosConfirmados } = await supabase
+      .from('cupon_usos')
+      .select('*', { count: 'exact', head: true })
+      .eq('cupon_id', cupon.id)
+      .eq('usuario_id', usuario_id);
+
+    if ((usosConfirmados || 0) >= cupon.uso_por_usuario)
+      return res.status(400).json({ error: 'Ya usaste este cupón anteriormente' });
 
     const montoBase = Math.max(0, parseFloat(monto_total) || 0);
     let descuento = cupon.tipo === 'porcentaje'
@@ -60,16 +67,26 @@ router.post('/validar', authMiddleware, async (req, res) => {
 // GET /api/cupones/mis-cupones
 router.get('/mis-cupones', authMiddleware, async (req, res) => {
   try {
-    const { data: usados } = await supabase
-      .from('cupones_usuarios')
-      .select('cupon_id')
-      .eq('usuario_id', req.usuario.id);
+    // Cupones ya consumidos (pago confirmado) y activamente reservados por el usuario
+    const [{ data: consumidos }, { data: reservados }] = await Promise.all([
+      supabase.from('cupon_usos').select('cupon_id').eq('usuario_id', req.usuario.id),
+      supabase.from('cupon_reservas').select('cupon_id')
+        .eq('usuario_id', req.usuario.id)
+        .eq('estado', 'activa')
+        .gt('expires_at', new Date().toISOString()),
+    ]);
 
-    const idsUsados = (usados || []).map(u => u.cupon_id);
+    const idsNoDisponibles = [
+      ...new Set([
+        ...(consumidos || []).map(u => u.cupon_id),
+        ...(reservados || []).map(r => r.cupon_id),
+      ]),
+    ];
 
-    let query = supabase.from('cupones').select('*').eq('activo', true);
-    if (idsUsados.length > 0) {
-      query = query.not('id', 'in', `(${idsUsados.join(',')})`);
+    let query = supabase.from('cupones').select('*').eq('activo', true)
+      .or(`usuario_id_exclusivo.is.null,usuario_id_exclusivo.eq.${req.usuario.id}`);
+    if (idsNoDisponibles.length > 0) {
+      query = query.not('id', 'in', `(${idsNoDisponibles.join(',')})`);
     }
 
     const { data: cupones } = await query;

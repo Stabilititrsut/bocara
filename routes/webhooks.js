@@ -260,6 +260,23 @@ async function procesarWebhookCubo(body) {
 
       case 'procesado': {
         const codigoRecogida = rpcResult.codigo_recogida || pedido.codigo_recogida;
+
+        // Convertir reserva de cupón en uso confirmado (idempotente)
+        supabase.rpc('consumir_cupon_pedido', { p_pedido_id: pedido.id })
+          .then(({ error }) => {
+            if (error) console.error('[CUBO WEBHOOK] consumir_cupon_pedido error:', error.message);
+            else console.log('[CUBO WEBHOOK] cupón consumido para pedido:', pedido.id);
+          });
+
+        // Recompensar referidor por primera compra del nuevo usuario (idempotente)
+        supabase.rpc('procesar_recompensa_referido', {
+          p_nuevo_usuario_id: pedido.usuario_id,
+          p_pedido_id: pedido.id,
+        }).then(({ data: res, error }) => {
+          if (error) console.error('[CUBO WEBHOOK] procesar_recompensa_referido error:', error.message);
+          else if (res && res !== 'sin_referidor') console.log('[CUBO WEBHOOK] referido:', res, '| usuario:', pedido.usuario_id);
+        });
+
         procesarEventosPedido(pedido.id).catch(err =>
           console.warn('[CUBO WEBHOOK] Error procesando eventos post-pago:', err.message)
         );
@@ -286,6 +303,11 @@ async function procesarWebhookCubo(body) {
       .update({ estado_pago: 'fallido', estado: 'cancelado' })
       .eq('id', pedido.id)
       .neq('estado_pago', 'pagado');
+
+    // Liberar reserva de cupón al rechazar el pago
+    supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedido.id })
+      .catch(err => console.error('[CUBO WEBHOOK] liberar_reserva_cupon (REJECTED) error:', err.message));
+
     console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} marcado fallido/cancelado — status Cubo: ${rawStatus}`);
     return { statusCode: 200 };
   }

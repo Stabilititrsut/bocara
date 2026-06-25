@@ -102,10 +102,10 @@ export default function PagoScreen() {
   const comisionServicio = Math.round(total * 0.035 * 100) / 100;
   const totalFinal = Math.max(0, total + comisionServicio + propina - descuentoCupon);
 
-  // Al montar: preparar pedido borrador
+  // Al montar: preparar pedido borrador (sin cupón)
   useEffect(() => {
     if (items.length === 0) return;
-    prepararPedido();
+    prepararPedido(null);
   }, []);
 
   // PATCH propina en borrador cuando cambia (debounced para tipeo)
@@ -187,8 +187,11 @@ export default function PagoScreen() {
     if (tarjetaSelId === id) setTarjetaSelId(null);
   }
 
-  // ── Preparar pedido borrador al montar ───────────────────────────────────
-  async function prepararPedido() {
+  // ── Preparar pedido borrador ─────────────────────────────────────────────
+  // Acepta un cupón explícito para evitar dependencias de estado async.
+  // Al re-llamar (cambio de cupón), el backend cancela el borrador anterior
+  // y libera su reserva antes de crear uno nuevo.
+  async function prepararPedido(cupon: CuponAplicado | null) {
     setFase('preparando');
     setErrorMsg('');
     try {
@@ -197,11 +200,16 @@ export default function PagoScreen() {
         items: cuboItems,
         tipo_entrega: 'recogida',
         propina: propina > 0 ? propina : undefined,
-        cupon_id: cuponAplicado?.cupon_id,
+        cupon_id: cupon?.cupon_id ?? undefined,
       });
-      const { pedidoId: id, codigoRecogida } = res.data;
+      const { pedidoId: id, codigoRecogida, descuentoCupon: serverDescuento } = res.data;
       setPedidoId(id);
       pedidoDataRef.current = { pedidoId: id, codigoRecogida };
+      // Si el servidor devuelve un descuento distinto al que calculó /validar,
+      // actualizar el estado para que el total mostrado sea el del servidor.
+      if (cupon && serverDescuento !== undefined && serverDescuento !== cupon.descuento_aplicado) {
+        setCuponAplicado({ ...cupon, descuento_aplicado: serverDescuento });
+      }
       setFase('listo');
     } catch (e: any) {
       setErrorFase('preparar');
@@ -232,7 +240,7 @@ export default function PagoScreen() {
 
   function handleReintentar() {
     if (errorFase === 'preparar') {
-      prepararPedido();
+      prepararPedido(cuponAplicado);
     } else {
       setFase('listo');
       setErrorMsg('');
@@ -244,13 +252,25 @@ export default function PagoScreen() {
     setLoadingCupon(true);
     setErrorCupon('');
     try {
-      const res = await cuponesAPI.validar(codigoCupon.trim(), total + comisionServicio + propina);
-      setCuponAplicado(res.data);
+      // Paso 1: validación rápida sin efectos secundarios → obtiene cupon_id
+      const validRes = await cuponesAPI.validar(codigoCupon.trim(), total + comisionServicio + propina);
+      const cuponData: CuponAplicado = validRes.data;
+      // Paso 2: re-preparar el borrador con el cupón — reserva atómica en el servidor
+      // Esto cancela el borrador anterior y crea uno nuevo con el descuento correcto.
+      await prepararPedido(cuponData);
+      setCuponAplicado(cuponData);
     } catch (e: any) {
       setErrorCupon(e.message || 'Cupón no válido');
     } finally {
       setLoadingCupon(false);
     }
+  }
+
+  function quitarCupon() {
+    setCuponAplicado(null);
+    setCodigoCupon('');
+    setErrorCupon('');
+    prepararPedido(null);
   }
 
   // ── Error ─────────────────────────────────────────────────────────────────
@@ -526,7 +546,7 @@ export default function PagoScreen() {
               editable={!cuponAplicado}
             />
             {cuponAplicado ? (
-              <TouchableOpacity style={s.cuponBtnRemove} onPress={() => { setCuponAplicado(null); setCodigoCupon(''); setErrorCupon(''); }}>
+              <TouchableOpacity style={s.cuponBtnRemove} onPress={quitarCupon}>
                 <Ionicons name="close-circle" size={24} color="#C0392B" />
               </TouchableOpacity>
             ) : (

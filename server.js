@@ -143,40 +143,13 @@ async function enviarRecordatoriosRecogida() {
 }
 
 if (!process.env.CUPONES_MIGRADO) {
-  console.log(`
+  console.warn(`
 [BOCARA — MIGRACIÓN CUPONES PENDIENTE]
-Ejecuta este SQL en Supabase Dashboard → SQL Editor:
-------------------------------------------------------
-CREATE TABLE IF NOT EXISTS cupones (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  codigo text UNIQUE NOT NULL,
-  tipo text CHECK (tipo IN ('porcentaje','monto_fijo','referido')) NOT NULL,
-  valor numeric NOT NULL,
-  uso_maximo integer DEFAULT 1,
-  usos_actuales integer DEFAULT 0,
-  uso_por_usuario integer DEFAULT 1,
-  activo boolean DEFAULT true,
-  fecha_vencimiento timestamp,
-  created_at timestamp DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS cupones_usuarios (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  cupon_id uuid REFERENCES cupones(id),
-  usuario_id uuid NOT NULL,
-  pedido_id uuid,
-  descuento_aplicado numeric NOT NULL,
-  created_at timestamp DEFAULT now(),
-  UNIQUE(cupon_id, usuario_id)
-);
-ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS codigo_referido text UNIQUE;
-ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS referido_por uuid REFERENCES usuarios(id);
-ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS credito_referido numeric DEFAULT 0;
-CREATE OR REPLACE FUNCTION incrementar_credito(usuario_id uuid, monto numeric)
-RETURNS void AS $$ BEGIN
-  UPDATE usuarios SET credito_referido = COALESCE(credito_referido,0) + monto WHERE id = usuario_id;
-END; $$ LANGUAGE plpgsql;
-------------------------------------------------------
-Luego agrega CUPONES_MIGRADO=true en las variables de entorno para silenciar este aviso.
+Ejecutar el archivo de migración en Supabase Dashboard → SQL Editor:
+  supabase/migrations/202406241200_cupones_referidos.sql
+
+Luego agregar CUPONES_MIGRADO=true en las variables de entorno para silenciar este aviso.
+NO habilitar pagos con cupones hasta ejecutar la migración.
 `);
 }
 
@@ -205,7 +178,14 @@ app.listen(PORT, () => {
         .eq('estado', 'borrador')
         .lt('created_at', hace2h)
         .select('id');
-      if (data?.length) console.log('[CLEANUP] borradores expirados cancelados:', data.length);
+      if (data?.length) {
+        console.log('[CLEANUP] borradores expirados cancelados:', data.length);
+        // Liberar reservas de cupón de borradores expirados
+        for (const d of data) {
+          await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: d.id })
+            .catch(err => console.error('[CLEANUP] liberar_reserva_cupon error:', err.message));
+        }
+      }
     } catch (err) {
       console.error('[CLEANUP] error limpiando borradores:', err.message);
     }

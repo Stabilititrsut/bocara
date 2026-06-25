@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  ActivityIndicator, SafeAreaView, Share, Platform,
+  ActivityIndicator, SafeAreaView, Share, Clipboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import { cuponesAPI } from '@/src/services/api';
 
 const TEAL = '#1A5C5C';
@@ -38,9 +37,9 @@ export default function ReferidosScreen() {
       .finally(() => setLoading(false));
   }, []);
 
-  async function copiar() {
+  function copiar() {
     if (!data?.codigo) return;
-    await Clipboard.setStringAsync(data.codigo);
+    Clipboard.setString(data.codigo);
     setCopiado(true);
     setTimeout(() => setCopiado(false), 2000);
   }
