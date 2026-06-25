@@ -58,6 +58,10 @@ export default function PagoScreen() {
   const [errorMsg, setErrorMsg] = useState('');
   const [errorFase, setErrorFase] = useState<'preparar' | 'generar'>('preparar');
 
+  // Total autoritativo devuelto por el servidor
+  const [serverTotal, setServerTotal] = useState<number | null>(null);
+  const [serverComision, setServerComision] = useState<number | null>(null);
+
   // Cupón
   const [codigoCupon, setCodigoCupon] = useState('');
   const [cuponAplicado, setCuponAplicado] = useState<CuponAplicado | null>(null);
@@ -99,8 +103,14 @@ export default function PagoScreen() {
     ? Math.max(0, parseFloat(propinaCustom) || 0)
     : (propinaMode as number);
   const descuentoCupon = cuponAplicado?.descuento_aplicado || 0;
-  const comisionServicio = Math.round(total * 0.035 * 100) / 100;
-  const totalFinal = Math.max(0, total + comisionServicio + propina - descuentoCupon);
+  // Usar comisión devuelta por el servidor; fallback local solo mientras no hay respuesta
+  const comisionServicio = serverComision !== null
+    ? serverComision
+    : Math.round(total * 0.035 * 100) / 100;
+  // Total autoritativo del servidor — nunca calculado en el frontend
+  const totalFinal = serverTotal !== null
+    ? serverTotal
+    : Math.max(0, total + comisionServicio + propina - descuentoCupon);
 
   // Al montar: preparar pedido borrador (sin cupón)
   useEffect(() => {
@@ -108,12 +118,17 @@ export default function PagoScreen() {
     prepararPedido(null);
   }, []);
 
-  // PATCH propina en borrador cuando cambia (debounced para tipeo)
+  // PATCH propina en borrador cuando cambia — captura el total recalculado por el servidor
   useEffect(() => {
     if (!pedidoId || fase !== 'listo') return;
     const delay = propinaMode === 'otro' ? 600 : 0;
     const t = setTimeout(() => {
-      pagosAPI.actualizarBorrador(pedidoId, { propina: propina > 0 ? propina : 0 }).catch(() => {});
+      pagosAPI.actualizarBorrador(pedidoId, { propina: propina > 0 ? propina : 0 })
+        .then(r => {
+          if (r.data?.total !== undefined) setServerTotal(r.data.total);
+          if (r.data?.comisionPasarela !== undefined) setServerComision(r.data.comisionPasarela);
+        })
+        .catch(() => {});
     }, delay);
     return () => clearTimeout(t);
   }, [propina, pedidoId]);
@@ -194,6 +209,8 @@ export default function PagoScreen() {
   async function prepararPedido(cupon: CuponAplicado | null) {
     setFase('preparando');
     setErrorMsg('');
+    setServerTotal(null);
+    setServerComision(null);
     try {
       const cuboItems = items.map(i => ({ bolsa_id: i.bolsa.id, cantidad: i.cantidad }));
       const res = await pagosAPI.preparar({
@@ -202,11 +219,20 @@ export default function PagoScreen() {
         propina: propina > 0 ? propina : undefined,
         cupon_id: cupon?.cupon_id ?? undefined,
       });
-      const { pedidoId: id, codigoRecogida, descuentoCupon: serverDescuento } = res.data;
+      const {
+        pedidoId: id,
+        codigoRecogida,
+        total: srvTotal,
+        comisionPasarela: srvComision,
+        descuentoCupon: serverDescuento,
+      } = res.data;
       setPedidoId(id);
       pedidoDataRef.current = { pedidoId: id, codigoRecogida };
+      // Almacenar total autoritativo del servidor
+      if (srvTotal !== undefined) setServerTotal(srvTotal);
+      if (srvComision !== undefined) setServerComision(srvComision);
       // Si el servidor devuelve un descuento distinto al que calculó /validar,
-      // actualizar el estado para que el total mostrado sea el del servidor.
+      // actualizar para que la línea de desglose muestre el valor correcto.
       if (cupon && serverDescuento !== undefined && serverDescuento !== cupon.descuento_aplicado) {
         setCuponAplicado({ ...cupon, descuento_aplicado: serverDescuento });
       }

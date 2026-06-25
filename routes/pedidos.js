@@ -147,11 +147,14 @@ router.get('/resumen-cliente', authMiddleware, async (req, res) => {
   try {
     const usuario_id = req.usuario.id;
 
+    // Incluir todos los estados de pago confirmado: confirmado, en_preparacion, listo, recogido
+    // y el estado legacy "completado". Excluir borrador/pendiente/cancelado.
     const { data: pedidos } = await supabase
       .from('pedidos')
-      .select('id')
+      .select('id, bolsa_id, precio_bolsa')
       .eq('usuario_id', usuario_id)
-      .eq('estado', 'completado');
+      .eq('estado_pago', 'pagado')
+      .not('estado', 'in', '(borrador,pendiente,cancelado)');
 
     if (!pedidos || pedidos.length === 0) {
       return res.json({ bolsas_rescatadas: 0, total_ahorrado: 0 });
@@ -159,10 +162,25 @@ router.get('/resumen-cliente', authMiddleware, async (req, res) => {
 
     const pedidoIds = pedidos.map(p => p.id);
 
+    // Flujo nuevo (Cubo): items en pedido_items con FK a bolsas
     const { data: items } = await supabase
       .from('pedido_items')
-      .select('cantidad, precio_unitario, bolsas(precio_original)')
+      .select('pedido_id, cantidad, precio_unitario, bolsas(precio_original)')
       .in('pedido_id', pedidoIds);
+
+    const pedidosConItems = new Set((items || []).map(i => i.pedido_id));
+
+    // Flujo legacy: pedidos sin pedido_items — usar bolsa_id del pedido directamente
+    const pedidosSinItems = pedidos.filter(p => !pedidosConItems.has(p.id));
+    let bolsasLegacy = [];
+    if (pedidosSinItems.length > 0) {
+      const bolsaIds = [...new Set(pedidosSinItems.map(p => p.bolsa_id).filter(Boolean))];
+      const { data: bData } = await supabase
+        .from('bolsas').select('id, precio_original').in('id', bolsaIds);
+      bolsasLegacy = bData || [];
+    }
+    const precioOriginalMap = {};
+    for (const b of bolsasLegacy) precioOriginalMap[b.id] = parseFloat(b.precio_original || 0);
 
     let bolsas_rescatadas = 0;
     let total_ahorrado = 0;
@@ -173,6 +191,13 @@ router.get('/resumen-cliente', authMiddleware, async (req, res) => {
       const precioPagado   = parseFloat(item.precio_unitario || 0);
       bolsas_rescatadas += cant;
       total_ahorrado    += (precioOriginal - precioPagado) * cant;
+    }
+
+    for (const pedido of pedidosSinItems) {
+      bolsas_rescatadas += 1;
+      const precioOriginal = precioOriginalMap[pedido.bolsa_id] || 0;
+      const precioPagado   = parseFloat(pedido.precio_bolsa || 0);
+      total_ahorrado += Math.max(0, precioOriginal - precioPagado);
     }
 
     res.json({

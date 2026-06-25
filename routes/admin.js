@@ -836,6 +836,96 @@ router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req
   res.json({ ok: true });
 });
 
+// ── Cupones (CRUD admin) ──────────────────────────────────────────────────────
+
+// GET /api/admin/cupones
+router.get('/cupones', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('cupones')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/cupones
+router.post('/cupones', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const {
+      codigo, tipo, valor, uso_maximo, uso_por_usuario,
+      fecha_vencimiento, usuario_id_exclusivo, activo,
+    } = req.body;
+
+    if (!codigo || !tipo || valor == null)
+      return res.status(400).json({ error: 'codigo, tipo y valor son requeridos' });
+    if (!['porcentaje', 'fijo'].includes(tipo))
+      return res.status(400).json({ error: 'tipo debe ser "porcentaje" o "fijo"' });
+    if (parseFloat(valor) <= 0)
+      return res.status(400).json({ error: 'valor debe ser mayor que 0' });
+    if (tipo === 'porcentaje' && parseFloat(valor) > 100)
+      return res.status(400).json({ error: 'el porcentaje no puede superar 100' });
+
+    const { data, error } = await supabase.from('cupones').insert([{
+      codigo:               codigo.toUpperCase().trim(),
+      tipo,
+      valor:                parseFloat(valor),
+      uso_maximo:           parseInt(uso_maximo) || 1,
+      uso_por_usuario:      parseInt(uso_por_usuario) || 1,
+      usos_actuales:        0,
+      activo:               activo !== false,
+      fecha_vencimiento:    fecha_vencimiento || null,
+      usuario_id_exclusivo: usuario_id_exclusivo || null,
+    }]).select().single();
+
+    if (error) return res.status(400).json({ error: error.message });
+    res.status(201).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/cupones/:id
+router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const {
+      codigo, tipo, valor, uso_maximo, uso_por_usuario,
+      fecha_vencimiento, usuario_id_exclusivo, activo,
+    } = req.body;
+
+    const campos = {};
+    if (codigo            !== undefined) campos.codigo               = codigo.toUpperCase().trim();
+    if (tipo              !== undefined) campos.tipo                  = tipo;
+    if (valor             !== undefined) campos.valor                 = parseFloat(valor);
+    if (uso_maximo        !== undefined) campos.uso_maximo            = parseInt(uso_maximo);
+    if (uso_por_usuario   !== undefined) campos.uso_por_usuario       = parseInt(uso_por_usuario);
+    if (fecha_vencimiento !== undefined) campos.fecha_vencimiento     = fecha_vencimiento || null;
+    if (usuario_id_exclusivo !== undefined) campos.usuario_id_exclusivo = usuario_id_exclusivo || null;
+    if (activo            !== undefined) campos.activo                = activo;
+
+    const { data, error } = await supabase
+      .from('cupones').update(campos).eq('id', req.params.id).select().single();
+    if (error) return res.status(400).json({ error: error.message });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/cupones/:id
+router.delete('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { error } = await supabase.from('cupones').delete().eq('id', req.params.id);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/admin/cubo-status — diagnóstico de integración Cubo Pago (nunca expone keys ni fragmentos)
 router.get('/cubo-status', authMiddleware, adminOnly, (req, res) => {
   const apiUrl = process.env.CUBO_API_URL || '';
