@@ -192,7 +192,10 @@ export const adminAPI = {
   cupones: () => api.get('/admin/cupones'),
   crearCupon: (data: any) => api.post('/admin/cupones', data),
   actualizarCupon: (id: string, data: any) => api.put(`/admin/cupones/${id}`, data),
+  patchEstadoCupon: (id: string, activo: boolean) => api.patch(`/admin/cupones/${id}/estado`, { activo }),
   eliminarCupon: (id: string) => api.delete(`/admin/cupones/${id}`),
+  usosCupon: (id: string) => api.get(`/admin/cupones/${id}/usos`),
+  reservasCupon: (id: string) => api.get(`/admin/cupones/${id}/reservas`),
 };
 
 export const promocionesAPI = {

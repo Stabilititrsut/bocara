@@ -838,6 +838,8 @@ router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req
 
 // ── Cupones (CRUD admin) ──────────────────────────────────────────────────────
 
+const TIPOS_CUPON = ['porcentaje', 'monto_fijo', 'referido'];
+
 // GET /api/admin/cupones
 router.get('/cupones', authMiddleware, adminOnly, async (req, res) => {
   try {
@@ -846,7 +848,20 @@ router.get('/cupones', authMiddleware, adminOnly, async (req, res) => {
       .select('*')
       .order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
-    res.json(data || []);
+
+    const cupones = data || [];
+    const exclusivoIds = [...new Set(cupones.filter(c => c.usuario_id_exclusivo).map(c => c.usuario_id_exclusivo))];
+    let userMap = {};
+    if (exclusivoIds.length > 0) {
+      const { data: users } = await supabase
+        .from('usuarios').select('id,email,nombre,apellido').in('id', exclusivoIds);
+      userMap = Object.fromEntries((users || []).map(u => [u.id, u]));
+    }
+
+    res.json(cupones.map(c => ({
+      ...c,
+      usuario_exclusivo: c.usuario_id_exclusivo ? (userMap[c.usuario_id_exclusivo] || null) : null,
+    })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -857,31 +872,40 @@ router.post('/cupones', authMiddleware, adminOnly, async (req, res) => {
   try {
     const {
       codigo, tipo, valor, uso_maximo, uso_por_usuario,
-      fecha_vencimiento, usuario_id_exclusivo, activo,
+      fecha_vencimiento, usuario_id_exclusivo, activo, descripcion,
     } = req.body;
 
     if (!codigo || !tipo || valor == null)
       return res.status(400).json({ error: 'codigo, tipo y valor son requeridos' });
-    if (!['porcentaje', 'fijo'].includes(tipo))
-      return res.status(400).json({ error: 'tipo debe ser "porcentaje" o "fijo"' });
+    if (!TIPOS_CUPON.includes(tipo))
+      return res.status(400).json({ error: `tipo debe ser uno de: ${TIPOS_CUPON.join(', ')}` });
     if (parseFloat(valor) <= 0)
       return res.status(400).json({ error: 'valor debe ser mayor que 0' });
     if (tipo === 'porcentaje' && parseFloat(valor) > 100)
       return res.status(400).json({ error: 'el porcentaje no puede superar 100' });
+    if (fecha_vencimiento && new Date(fecha_vencimiento) <= new Date())
+      return res.status(400).json({ error: 'la fecha de vencimiento debe ser futura' });
+    const usoMaxNum = parseInt(uso_maximo) || 1;
+    if (usoMaxNum < 1)
+      return res.status(400).json({ error: 'uso_maximo debe ser al menos 1' });
 
     const { data, error } = await supabase.from('cupones').insert([{
       codigo:               codigo.toUpperCase().trim(),
       tipo,
       valor:                parseFloat(valor),
-      uso_maximo:           parseInt(uso_maximo) || 1,
+      uso_maximo:           usoMaxNum,
       uso_por_usuario:      parseInt(uso_por_usuario) || 1,
       usos_actuales:        0,
       activo:               activo !== false,
       fecha_vencimiento:    fecha_vencimiento || null,
       usuario_id_exclusivo: usuario_id_exclusivo || null,
+      descripcion:          descripcion?.trim() || null,
     }]).select().single();
 
-    if (error) return res.status(400).json({ error: error.message });
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Ya existe un cupón con ese código' });
+      return res.status(400).json({ error: error.message });
+    }
     res.status(201).json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -893,8 +917,23 @@ router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
     const {
       codigo, tipo, valor, uso_maximo, uso_por_usuario,
-      fecha_vencimiento, usuario_id_exclusivo, activo,
+      fecha_vencimiento, usuario_id_exclusivo, activo, descripcion,
     } = req.body;
+
+    if (tipo !== undefined && !TIPOS_CUPON.includes(tipo))
+      return res.status(400).json({ error: `tipo debe ser uno de: ${TIPOS_CUPON.join(', ')}` });
+    if (valor !== undefined && parseFloat(valor) <= 0)
+      return res.status(400).json({ error: 'valor debe ser mayor que 0' });
+    if (tipo === 'porcentaje' && valor !== undefined && parseFloat(valor) > 100)
+      return res.status(400).json({ error: 'el porcentaje no puede superar 100' });
+    if (fecha_vencimiento && new Date(fecha_vencimiento) <= new Date())
+      return res.status(400).json({ error: 'la fecha de vencimiento debe ser futura' });
+
+    if (uso_maximo !== undefined) {
+      const cupon = await supabase.from('cupones').select('usos_actuales').eq('id', req.params.id).single();
+      if (parseInt(uso_maximo) < (cupon.data?.usos_actuales || 0))
+        return res.status(400).json({ error: 'uso_maximo no puede ser menor que los usos actuales' });
+    }
 
     const campos = {};
     if (codigo            !== undefined) campos.codigo               = codigo.toUpperCase().trim();
@@ -905,9 +944,27 @@ router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
     if (fecha_vencimiento !== undefined) campos.fecha_vencimiento     = fecha_vencimiento || null;
     if (usuario_id_exclusivo !== undefined) campos.usuario_id_exclusivo = usuario_id_exclusivo || null;
     if (activo            !== undefined) campos.activo                = activo;
+    if (descripcion       !== undefined) campos.descripcion           = descripcion?.trim() || null;
 
     const { data, error } = await supabase
       .from('cupones').update(campos).eq('id', req.params.id).select().single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Ya existe un cupón con ese código' });
+      return res.status(400).json({ error: error.message });
+    }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/admin/cupones/:id/estado — solo activa o desactiva
+router.patch('/cupones/:id/estado', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { activo } = req.body;
+    if (activo === undefined) return res.status(400).json({ error: 'activo requerido' });
+    const { data, error } = await supabase
+      .from('cupones').update({ activo }).eq('id', req.params.id).select().single();
     if (error) return res.status(400).json({ error: error.message });
     res.json(data);
   } catch (err) {
@@ -918,9 +975,66 @@ router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
 // DELETE /api/admin/cupones/:id
 router.delete('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
+    const { count } = await supabase
+      .from('cupon_reservas').select('id', { count: 'exact', head: true })
+      .eq('cupon_id', req.params.id).eq('estado', 'activa');
+    if (count > 0)
+      return res.status(409).json({ error: `Este cupón tiene ${count} reserva(s) activa(s). Desactívalo primero.` });
     const { error } = await supabase.from('cupones').delete().eq('id', req.params.id);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/cupones/:id/usos — historial de usos consumidos
+router.get('/cupones/:id/usos', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('cupon_usos')
+      .select('id,usuario_id,pedido_id,descuento_aplicado,created_at')
+      .eq('cupon_id', req.params.id)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) return res.status(500).json({ error: error.message });
+
+    const usos = data || [];
+    const userIds = [...new Set(usos.map(u => u.usuario_id))];
+    let userMap = {};
+    if (userIds.length > 0) {
+      const { data: users } = await supabase
+        .from('usuarios').select('id,email,nombre,apellido').in('id', userIds);
+      userMap = Object.fromEntries((users || []).map(u => [u.id, u]));
+    }
+
+    res.json(usos.map(u => ({ ...u, usuario: userMap[u.usuario_id] || null })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/cupones/:id/reservas — reservas activas del cupón
+router.get('/cupones/:id/reservas', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('cupon_reservas')
+      .select('id,usuario_id,pedido_id,descuento_aplicado,estado,expires_at,created_at')
+      .eq('cupon_id', req.params.id)
+      .eq('estado', 'activa')
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const reservas = data || [];
+    const userIds = [...new Set(reservas.map(r => r.usuario_id))];
+    let userMap = {};
+    if (userIds.length > 0) {
+      const { data: users } = await supabase
+        .from('usuarios').select('id,email,nombre,apellido').in('id', userIds);
+      userMap = Object.fromEntries((users || []).map(u => [u.id, u]));
+    }
+
+    res.json(reservas.map(r => ({ ...r, usuario: userMap[r.usuario_id] || null })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
