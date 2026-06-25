@@ -179,6 +179,16 @@ export default function AdminCuponesScreen() {
       if (fv <= new Date()) return setErrForm('La fecha de vencimiento debe ser futura.');
     }
 
+    // UUID de usuario exclusivo: cadena vacía → null (cupón público); valor → validar formato
+    const uuidRaw = form.usuario_id_exclusivo.trim();
+    const usuarioExclusivo: string | null = uuidRaw || null;
+    if (usuarioExclusivo) {
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!UUID_RE.test(usuarioExclusivo)) {
+        return setErrForm('El UUID de usuario exclusivo no es válido. Formato esperado: 550e8400-e29b-41d4-a716-446655440000');
+      }
+    }
+
     setGuardando(true);
     setErrForm('');
     try {
@@ -190,7 +200,7 @@ export default function AdminCuponesScreen() {
         uso_maximo:           usoMax,
         uso_por_usuario:      parseInt(form.uso_por_usuario) || 1,
         fecha_vencimiento:    form.fecha_vencimiento || null,
-        usuario_id_exclusivo: form.usuario_id_exclusivo.trim() || null,
+        usuario_id_exclusivo: usuarioExclusivo,
         activo:               form.activo,
       };
       if (editando) {

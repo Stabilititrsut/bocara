@@ -20,10 +20,13 @@ function resolverCredenciales() {
 function manejarErrorAxios(err) {
   if (!err.response) throw new Error(`Cubo Pago: error de red — ${err.message}`);
   const status  = err.response.status;
+  // Log completo sin datos sensibles — ayuda a identificar el campo rechazado en 422
+  console.error('[CUBO] Error HTTP:', status, '| Body completo:', JSON.stringify(err.response.data));
   const msg     = err.response.data?.message ?? err.message;
   const detalle = Array.isArray(msg) ? msg.join(', ') : String(msg);
   if (status === 401 || status === 403) throw new Error('Cubo Pago: API key inválida o sin permisos (401/403)');
   if (status === 400) throw new Error(`Cubo Pago: solicitud inválida — ${detalle}`);
+  if (status === 422) throw new Error(`Cubo Pago error 422 (ver logs del servidor para body completo): ${detalle}`);
   throw new Error(`Cubo Pago error ${status}: ${detalle}`);
 }
 
@@ -31,6 +34,12 @@ async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedirec
   const { url: cuboApiUrl, key: cuboApiKey } = resolverCredenciales();
 
   const montoCentavos = Math.round(parseFloat(monto) * 100);
+
+  if (montoCentavos <= 0) {
+    throw new Error(`Monto inválido para Cubo: Q${monto} → ${montoCentavos} centavos. El total no puede ser cero o negativo.`);
+  }
+
+  console.log('[CUBO] monto GTQ:', parseFloat(monto).toFixed(2), '| centavos:', montoCentavos, '| moneda: GTQ');
 
   // metadata es devuelta sin cambios por Cubo en el webhook — incluir orderId (UUID del pedido)
   const body = {

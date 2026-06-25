@@ -764,14 +764,47 @@ router.post('/generar-link', authMiddleware, async (req, res) => {
       ? `Bocara - ${items[0].bolsas?.nombre || pedido.bolsas?.nombre || 'pedido'}`
       : `Bocara - ${items.length} productos`;
 
-    const cuboItems = items.map(pi => ({
-      name: pi.bolsas?.nombre || 'Producto',
-      price: pi.precio_unitario.toFixed(2),
-      quantity: pi.cantidad,
-    }));
-    if (pedido.propina > 0) {
-      cuboItems.push({ name: `Propina para ${pedido.negocios?.nombre || 'restaurante'}`, price: pedido.propina.toFixed(2), quantity: 1 });
+    const descuentoCupon   = Math.round((parseFloat(pedido.descuento_cupon)   || 0) * 100) / 100;
+    const comisionPasarela = Math.round((parseFloat(pedido.comision_pasarela) || 0) * 100) / 100;
+    const costoEnvio       = Math.round((parseFloat(pedido.costo_envio)       || 0) * 100) / 100;
+    const propina          = Math.round((parseFloat(pedido.propina)           || 0) * 100) / 100;
+    const subtotalItems    = Math.round(
+      items.reduce((s, pi) => s + parseFloat(pi.precio_unitario) * pi.cantidad, 0) * 100
+    ) / 100;
+
+    console.log('[GENERAR LINK] ─── Diagnóstico financiero ───');
+    console.log('[GENERAR LINK] pedidoId:', pedido.id);
+    console.log('[GENERAR LINK] subtotal items:', subtotalItems);
+    console.log('[GENERAR LINK] costo_envio:', costoEnvio);
+    console.log('[GENERAR LINK] propina:', propina);
+    console.log('[GENERAR LINK] comision_pasarela:', comisionPasarela);
+    console.log('[GENERAR LINK] descuento_cupon:', descuentoCupon);
+    console.log('[GENERAR LINK] total en DB (GTQ):', pedido.total);
+    console.log('[GENERAR LINK] monto a Cubo (centavos):', Math.round(pedido.total * 100));
+    console.log('[GENERAR LINK] moneda: GTQ');
+
+    // ── Items para Cubo ──────────────────────────────────────────────────────
+    // Cuando hay descuento de cupón, los items a precio original superan el amount final
+    // (descuento > comisión → amount < suma_items). Cubo rechazaría la solicitud con 422
+    // si valida amount >= sum(items). En ese caso no enviamos items para evitar el error.
+    let cuboItems;
+    if (descuentoCupon > 0) {
+      cuboItems = undefined; // Cubo recibe solo amount; items no son obligatorios
+      console.log('[GENERAR LINK] cupón activo: items omitidos para evitar mismatch con amount descontado');
+    } else {
+      cuboItems = items.map(pi => ({
+        name:     pi.bolsas?.nombre || 'Producto',
+        price:    parseFloat(pi.precio_unitario).toFixed(2),
+        quantity: pi.cantidad,
+      }));
+      if (costoEnvio > 0) {
+        cuboItems.push({ name: 'Costo de envío', price: costoEnvio.toFixed(2), quantity: 1 });
+      }
+      if (propina > 0) {
+        cuboItems.push({ name: `Propina para ${pedido.negocios?.nombre || 'restaurante'}`, price: propina.toFixed(2), quantity: 1 });
+      }
     }
+    console.log('[GENERAR LINK] items enviados a Cubo:', cuboItems ? JSON.stringify(cuboItems) : 'ninguno (cupón aplicado)');
 
     const { url: visaLinkUrl, token: paymentIntentToken } = await generarLinkPago({
       referencia: pedido.payu_reference_code,

@@ -839,6 +839,15 @@ router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req
 // ── Cupones (CRUD admin) ──────────────────────────────────────────────────────
 
 const TIPOS_CUPON = ['porcentaje', 'monto_fijo', 'referido'];
+const UUID_REGEX  = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validarUUID(valor) {
+  if (!valor) return null;
+  const v = String(valor).trim();
+  if (!v) return null;
+  if (!UUID_REGEX.test(v)) throw Object.assign(new Error('El UUID de usuario exclusivo no es válido. Debe tener el formato: 550e8400-e29b-41d4-a716-446655440000'), { statusCode: 400 });
+  return v;
+}
 
 // GET /api/admin/cupones
 router.get('/cupones', authMiddleware, adminOnly, async (req, res) => {
@@ -889,6 +898,10 @@ router.post('/cupones', authMiddleware, adminOnly, async (req, res) => {
     if (usoMaxNum < 1)
       return res.status(400).json({ error: 'uso_maximo debe ser al menos 1' });
 
+    let usuarioExclusivo;
+    try { usuarioExclusivo = validarUUID(usuario_id_exclusivo); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+
     const { data, error } = await supabase.from('cupones').insert([{
       codigo:               codigo.toUpperCase().trim(),
       tipo,
@@ -898,7 +911,7 @@ router.post('/cupones', authMiddleware, adminOnly, async (req, res) => {
       usos_actuales:        0,
       activo:               activo !== false,
       fecha_vencimiento:    fecha_vencimiento || null,
-      usuario_id_exclusivo: usuario_id_exclusivo || null,
+      usuario_id_exclusivo: usuarioExclusivo,
       descripcion:          descripcion?.trim() || null,
     }]).select().single();
 
@@ -935,6 +948,11 @@ router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
         return res.status(400).json({ error: 'uso_maximo no puede ser menor que los usos actuales' });
     }
 
+    if (usuario_id_exclusivo !== undefined) {
+      try { validarUUID(usuario_id_exclusivo); }
+      catch (e) { return res.status(400).json({ error: e.message }); }
+    }
+
     const campos = {};
     if (codigo            !== undefined) campos.codigo               = codigo.toUpperCase().trim();
     if (tipo              !== undefined) campos.tipo                  = tipo;
@@ -942,7 +960,10 @@ router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
     if (uso_maximo        !== undefined) campos.uso_maximo            = parseInt(uso_maximo);
     if (uso_por_usuario   !== undefined) campos.uso_por_usuario       = parseInt(uso_por_usuario);
     if (fecha_vencimiento !== undefined) campos.fecha_vencimiento     = fecha_vencimiento || null;
-    if (usuario_id_exclusivo !== undefined) campos.usuario_id_exclusivo = usuario_id_exclusivo || null;
+    if (usuario_id_exclusivo !== undefined) {
+      const v = typeof usuario_id_exclusivo === 'string' ? usuario_id_exclusivo.trim() : '';
+      campos.usuario_id_exclusivo = v || null;
+    }
     if (activo            !== undefined) campos.activo                = activo;
     if (descripcion       !== undefined) campos.descripcion           = descripcion?.trim() || null;
 
