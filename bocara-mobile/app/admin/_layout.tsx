@@ -8,10 +8,13 @@ const WHITE    = '#FFFFFF';
 const BORDER   = '#E5E7EB';
 const DARK_GREEN = '#0A2A2A';
 
+// Orden por frecuencia de uso: los primeros 7 siempre son visibles en móvil.
+// cupones está en posición 4 para garantizar visibilidad en pantallas estrechas.
 const TABS = [
   { name: 'index',             label: 'Dashboard',  icon: 'stats-chart'       },
   { name: 'verificacion',      label: 'Verificar',  icon: 'checkmark-circle'  },
   { name: 'contenido',         label: 'Contenido',  icon: 'document-text'     },
+  { name: 'cupones',           label: 'Cupones',    icon: 'ticket-outline'    },
   { name: 'cambios-perfil',    label: 'Perfiles',   icon: 'person-circle'     },
   { name: 'liquidaciones',     label: 'Pagos',      icon: 'cash'              },
   { name: 'negocios',          label: 'Negocios',   icon: 'storefront'        },
@@ -19,7 +22,6 @@ const TABS = [
   { name: 'usuarios',          label: 'Usuarios',   icon: 'people'            },
   { name: 'config',            label: 'Config',     icon: 'settings'          },
   { name: 'cubo-status',       label: 'Cubo Pago',  icon: 'card'              },
-  { name: 'cupones',           label: 'Cupones',    icon: 'ticket'            },
 ] as const;
 
 export default function AdminLayout() {
