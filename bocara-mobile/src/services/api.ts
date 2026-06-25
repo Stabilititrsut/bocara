@@ -94,6 +94,7 @@ export const pedidosAPI = {
     api.post('/pedidos/crear', data),
   factura: (pedidoId: string, data: { tipo: 'cf' | 'nit'; nit?: string; nombre_fiscal?: string }) =>
     api.post(`/pedidos/${pedidoId}/factura`, data),
+  getResumenCliente: () => api.get('/pedidos/resumen-cliente'),
 };
 
 export const pagosAPI = {

@@ -6,7 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
-import { authAPI } from '@/src/services/api';
+import { authAPI, pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
 function calcularNivel(puntos: number) {
@@ -29,9 +29,11 @@ const MENU_ITEMS = [
 export default function PerfilScreen() {
   const { usuario, logout, actualizarUsuario } = useAuth();
   const router = useRouter();
+  const [resumen, setResumen] = useState({ bolsas_rescatadas: 0, total_ahorrado: 0 });
 
   useEffect(() => {
     authAPI.perfil().then((res) => actualizarUsuario(res.data)).catch(() => {});
+    pedidosAPI.getResumenCliente().then(({ data }) => setResumen(data)).catch(() => {});
   }, []);
 
   async function handleLogout() {
@@ -98,8 +100,8 @@ export default function PerfilScreen() {
         <Text style={s.sectionTitle}>Mi actividad</Text>
         <View style={s.statsRow}>
           {[
-            { icon: 'bag-outline', val: usuario.total_bolsas_salvadas || 0, label: 'Bolsas\nrescatadas', color: Colors.primary },
-            { icon: 'wallet-outline', val: `Q${(usuario.total_ahorrado || 0).toFixed(0)}`, label: 'Total\nahorrado', color: Colors.textSecondary },
+            { icon: 'bag-outline', val: resumen.bolsas_rescatadas, label: 'Bolsas\nrescatadas', color: Colors.primary },
+            { icon: 'wallet-outline', val: `Q${resumen.total_ahorrado.toFixed(2)}`, label: 'Total\nahorrado', color: Colors.textSecondary },
           ].map((stat) => (
             <View key={stat.label} style={s.statCard}>
               <Ionicons name={stat.icon as any} size={22} color={stat.color} />

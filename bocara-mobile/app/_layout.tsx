@@ -171,7 +171,7 @@ function AuthGuard() {
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
         (usuario.rol === 'admin'       && segments[0] === 'admin');
 
-      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios', 'tienda', 'negocio'];
+      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios', 'tienda', 'negocio', 'cupones', 'referidos'];
 
       if (!inCorrectSection && !allowedSections.includes(segments[0] as string)) {
         let rutaDestino = '/(tabs)/';
@@ -208,6 +208,8 @@ function AuthGuard() {
         <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
         <Stack.Screen name="soporte"       options={{ headerShown: true, headerTitle: 'Ayuda y soporte', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
         <Stack.Screen name="socios"        options={{ headerShown: false }} />
+        <Stack.Screen name="cupones"       options={{ headerShown: false }} />
+        <Stack.Screen name="referidos"     options={{ headerShown: false }} />
       </Stack>
 
       {!splashDone && (

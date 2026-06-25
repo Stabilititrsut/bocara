@@ -27,7 +27,7 @@ router.post('/validar', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Este cupón ya alcanzó su límite de usos' });
 
     // Cupón exclusivo para otro usuario
-    if (cupon.usuario_id_exclusivo && cupon.usuario_id_exclusivo !== usuario_id)
+    if (cupon.usuario_id_exclusivo && cupon.usuario_id_exclusivo !== req.usuario.id)
       return res.status(400).json({ error: 'Este cupón no está disponible para tu cuenta' });
 
     // Límite por usuario: contar usos confirmados
@@ -35,7 +35,7 @@ router.post('/validar', authMiddleware, async (req, res) => {
       .from('cupon_usos')
       .select('*', { count: 'exact', head: true })
       .eq('cupon_id', cupon.id)
-      .eq('usuario_id', usuario_id);
+      .eq('usuario_id', req.usuario.id);
 
     if ((usosConfirmados || 0) >= cupon.uso_por_usuario)
       return res.status(400).json({ error: 'Ya usaste este cupón anteriormente' });

@@ -142,6 +142,49 @@ router.get('/previos/:negocioId', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/pedidos/resumen-cliente — estadísticas del cliente autenticado
+router.get('/resumen-cliente', authMiddleware, async (req, res) => {
+  try {
+    const usuario_id = req.usuario.id;
+
+    const { data: pedidos } = await supabase
+      .from('pedidos')
+      .select('id')
+      .eq('usuario_id', usuario_id)
+      .eq('estado', 'completado');
+
+    if (!pedidos || pedidos.length === 0) {
+      return res.json({ bolsas_rescatadas: 0, total_ahorrado: 0 });
+    }
+
+    const pedidoIds = pedidos.map(p => p.id);
+
+    const { data: items } = await supabase
+      .from('pedido_items')
+      .select('cantidad, precio_unitario, bolsas(precio_original)')
+      .in('pedido_id', pedidoIds);
+
+    let bolsas_rescatadas = 0;
+    let total_ahorrado = 0;
+
+    for (const item of (items || [])) {
+      const cant = item.cantidad || 0;
+      const precioOriginal = parseFloat(item.bolsas?.precio_original || 0);
+      const precioPagado   = parseFloat(item.precio_unitario || 0);
+      bolsas_rescatadas += cant;
+      total_ahorrado    += (precioOriginal - precioPagado) * cant;
+    }
+
+    res.json({
+      bolsas_rescatadas,
+      total_ahorrado: parseFloat(Math.max(0, total_ahorrado).toFixed(2)),
+    });
+  } catch (err) {
+    console.error('[PEDIDOS] resumen-cliente error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/pedidos/:id — detalle de pedido
 router.get('/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase
