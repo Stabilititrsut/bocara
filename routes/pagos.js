@@ -802,6 +802,89 @@ router.post('/generar-link', authMiddleware, async (req, res) => {
   }
 });
 
+// PATCH /api/pagos/borrador/:id/cupon — aplica o retira cupón en el borrador SIN crear un pedido nuevo
+router.patch('/borrador/:id/cupon', authMiddleware, async (req, res) => {
+  try {
+    const { cupon_id } = req.body; // null/undefined = quitar cupón
+    const pedidoId = req.params.id;
+
+    const { data: pedido, error: pedidoErr } = await supabase
+      .from('pedidos').select('*').eq('id', pedidoId).single();
+    if (pedidoErr || !pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.usuario_id !== req.usuario.id) return res.status(403).json({ error: 'No autorizado' });
+    if (pedido.estado !== 'borrador') return res.status(400).json({ error: 'El pedido ya no está en borrador' });
+
+    // Liberar cualquier reserva activa de cupón para este pedido
+    await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedidoId })
+      .catch(err => console.error('[CUPON PATCH] liberar_reserva_cupon error:', err.message));
+
+    const { data: pedidoItems } = await supabase
+      .from('pedido_items').select('precio_unitario, cantidad').eq('pedido_id', pedidoId);
+
+    const subtotalProductos = Math.round(
+      (pedidoItems || []).reduce((sum, pi) => sum + pi.precio_unitario * pi.cantidad, 0) * 100
+    ) / 100;
+    const propina = Math.round((parseFloat(pedido.propina) || 0) * 100) / 100;
+    const COMISION_CUBO = 0.035;
+    const subtotal = subtotalProductos + pedido.costo_envio + propina;
+    const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const totalBase = Math.round((subtotal + comisionPasarela) * 100) / 100;
+
+    let descuentoCupon = 0;
+    let cuponMensaje = '';
+
+    if (cupon_id) {
+      const ERRORES_CUPON = {
+        cupon_no_encontrado:      'Cupón no válido o expirado',
+        cupon_inactivo:           'Este cupón no está disponible',
+        cupon_vencido:            'Este cupón ha vencido',
+        cupon_exclusivo:          'Este cupón no está disponible para tu cuenta',
+        limite_global_alcanzado:  'Este cupón ya alcanzó su límite de usos',
+        limite_usuario_alcanzado: 'Ya usaste este cupón anteriormente',
+      };
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('reservar_cupon', {
+        p_cupon_id:     cupon_id,
+        p_usuario_id:   req.usuario.id,
+        p_pedido_id:    pedidoId,
+        p_monto_pedido: totalBase,
+      });
+      if (rpcErr || !rpcRes?.ok) {
+        const msg = ERRORES_CUPON[rpcRes?.resultado] || rpcErr?.message || 'Error al aplicar el cupón';
+        console.error('[CUPON PATCH] reservar_cupon fallo:', rpcRes?.resultado || rpcErr?.message);
+        return res.status(400).json({ error: msg });
+      }
+      descuentoCupon = Math.round((parseFloat(String(rpcRes.descuento)) || 0) * 100) / 100;
+
+      const { data: cuponData } = await supabase.from('cupones').select('tipo,valor').eq('id', cupon_id).single();
+      if (cuponData) {
+        cuponMensaje = cuponData.tipo === 'porcentaje'
+          ? `${cuponData.valor}% de descuento — ahorras Q${descuentoCupon.toFixed(2)}`
+          : `Descuento de Q${cuponData.valor.toFixed(2)} aplicado`;
+      }
+    }
+
+    const total = Math.round(Math.max(0, totalBase - descuentoCupon) * 100) / 100;
+    const montoNetoRestaurante = Math.round(
+      (subtotalProductos - pedido.comision_bocara - comisionPasarela + propina) * 100
+    ) / 100;
+
+    const { error: updateErr } = await supabase.from('pedidos').update({
+      descuento_cupon:        descuentoCupon,
+      total,
+      comision_pasarela:      comisionPasarela,
+      monto_neto_restaurante: montoNetoRestaurante,
+    }).eq('id', pedidoId);
+
+    if (updateErr) return res.status(400).json({ error: updateErr.message });
+
+    console.log('[CUPON PATCH] pedido:', pedidoId, '| descuento: Q' + descuentoCupon, '| total:', total);
+    res.json({ pedidoId, descuentoCupon, comisionPasarela, total, mensaje: cuponMensaje });
+  } catch (err) {
+    console.error('borrador cupon patch error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // PATCH /api/pagos/borrador/:id — actualiza propina en borrador y recalcula totales
 router.patch('/borrador/:id', authMiddleware, async (req, res) => {
   try {

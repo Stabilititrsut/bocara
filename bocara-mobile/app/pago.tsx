@@ -203,9 +203,6 @@ export default function PagoScreen() {
   }
 
   // ── Preparar pedido borrador ─────────────────────────────────────────────
-  // Acepta un cupón explícito para evitar dependencias de estado async.
-  // Al re-llamar (cambio de cupón), el backend cancela el borrador anterior
-  // y libera su reserva antes de crear uno nuevo.
   async function prepararPedido(cupon: CuponAplicado | null) {
     setFase('preparando');
     setErrorMsg('');
@@ -274,17 +271,23 @@ export default function PagoScreen() {
   }
 
   async function aplicarCupon() {
-    if (!codigoCupon.trim()) return;
+    if (!codigoCupon.trim() || !pedidoId) return;
     setLoadingCupon(true);
     setErrorCupon('');
     try {
-      // Paso 1: validación rápida sin efectos secundarios → obtiene cupon_id
+      // Paso 1: validación rápida sin efectos secundarios → obtiene cupon_id y metadata
       const validRes = await cuponesAPI.validar(codigoCupon.trim(), total + comisionServicio + propina);
       const cuponData: CuponAplicado = validRes.data;
-      // Paso 2: re-preparar el borrador con el cupón — reserva atómica en el servidor
-      // Esto cancela el borrador anterior y crea uno nuevo con el descuento correcto.
-      await prepararPedido(cuponData);
-      setCuponAplicado(cuponData);
+      // Paso 2: aplicar cupón en el borrador existente — reserva atómica, mismo pedidoId
+      const patchRes = await pagosAPI.actualizarCuponBorrador(pedidoId, { cupon_id: cuponData.cupon_id });
+      const { descuentoCupon: srvDescuento, comisionPasarela: srvComision, total: srvTotal, mensaje } = patchRes.data;
+      setCuponAplicado({
+        ...cuponData,
+        descuento_aplicado: srvDescuento ?? cuponData.descuento_aplicado,
+        mensaje: mensaje || cuponData.mensaje,
+      });
+      if (srvTotal !== undefined) setServerTotal(srvTotal);
+      if (srvComision !== undefined) setServerComision(srvComision);
     } catch (e: any) {
       setErrorCupon(e.message || 'Cupón no válido');
     } finally {
@@ -296,7 +299,13 @@ export default function PagoScreen() {
     setCuponAplicado(null);
     setCodigoCupon('');
     setErrorCupon('');
-    prepararPedido(null);
+    if (!pedidoId) return;
+    pagosAPI.actualizarCuponBorrador(pedidoId, { cupon_id: null })
+      .then(r => {
+        if (r.data?.total !== undefined) setServerTotal(r.data.total);
+        if (r.data?.comisionPasarela !== undefined) setServerComision(r.data.comisionPasarela);
+      })
+      .catch(() => {});
   }
 
   // ── Error ─────────────────────────────────────────────────────────────────

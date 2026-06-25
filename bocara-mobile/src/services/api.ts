@@ -120,6 +120,8 @@ export const pagosAPI = {
     api.post('/pagos/generar-link', data),
   actualizarBorrador: (id: string, data: { propina: number }) =>
     api.patch(`/pagos/borrador/${id}`, data),
+  actualizarCuponBorrador: (id: string, data: { cupon_id: string | null }) =>
+    api.patch(`/pagos/borrador/${id}/cupon`, data),
   estado: (id: string) => api.get(`/pagos/estado/${id}`),
 };
 
