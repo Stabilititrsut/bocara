@@ -8,7 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { pagosAPI, pedidosAPI } from '@/src/services/api';
+import { pagosAPI, pedidosAPI, cuponesAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import { Colors } from '@/constants/Colors';
 
@@ -21,6 +21,15 @@ interface TarjetaGuardada {
   banco: string;
   token?: string; // CuboPago paymentIntentToken para pagos futuros
   guardadaEn: string;
+}
+
+interface CuponAplicado {
+  cupon_id: string;
+  codigo: string;
+  tipo: string;
+  valor: number;
+  descuento_aplicado: number;
+  mensaje: string;
 }
 
 type TipoTarjeta = 'VISA' | 'Mastercard' | 'AmEx' | 'Otro';
@@ -48,6 +57,13 @@ export default function PagoScreen() {
   const [fase, setFase] = useState<'preparando' | 'listo' | 'generando_link' | 'error'>('preparando');
   const [errorMsg, setErrorMsg] = useState('');
   const [errorFase, setErrorFase] = useState<'preparar' | 'generar'>('preparar');
+
+  // Cupón
+  const [codigoCupon, setCodigoCupon] = useState('');
+  const [cuponAplicado, setCuponAplicado] = useState<CuponAplicado | null>(null);
+  const [errorCupon, setErrorCupon] = useState('');
+  const [loadingCupon, setLoadingCupon] = useState(false);
+
   const pedidoDataRef = useRef<{ pedidoId: string; codigoRecogida: string; token?: string } | null>(null);
 
   // Propina
@@ -82,8 +98,9 @@ export default function PagoScreen() {
   const propina = propinaMode === 'otro'
     ? Math.max(0, parseFloat(propinaCustom) || 0)
     : (propinaMode as number);
+  const descuentoCupon = cuponAplicado?.descuento_aplicado || 0;
   const comisionServicio = Math.round(total * 0.035 * 100) / 100;
-  const totalFinal = total + comisionServicio + propina;
+  const totalFinal = Math.max(0, total + comisionServicio + propina - descuentoCupon);
 
   // Al montar: preparar pedido borrador
   useEffect(() => {
@@ -180,6 +197,7 @@ export default function PagoScreen() {
         items: cuboItems,
         tipo_entrega: 'recogida',
         propina: propina > 0 ? propina : undefined,
+        cupon_id: cuponAplicado?.cupon_id,
       });
       const { pedidoId: id, codigoRecogida } = res.data;
       setPedidoId(id);
@@ -218,6 +236,20 @@ export default function PagoScreen() {
     } else {
       setFase('listo');
       setErrorMsg('');
+    }
+  }
+
+  async function aplicarCupon() {
+    if (!codigoCupon.trim()) return;
+    setLoadingCupon(true);
+    setErrorCupon('');
+    try {
+      const res = await cuponesAPI.validar(codigoCupon.trim(), total + comisionServicio + propina);
+      setCuponAplicado(res.data);
+    } catch (e: any) {
+      setErrorCupon(e.message || 'Cupón no válido');
+    } finally {
+      setLoadingCupon(false);
     }
   }
 
@@ -480,6 +512,49 @@ export default function PagoScreen() {
           )}
         </View>
 
+        {/* ── Cupón ── */}
+        <View style={s.sectionCard}>
+          <Text style={s.sectionCardTitle}>¿Tienes un cupón?</Text>
+          <View style={s.cuponRow}>
+            <TextInput
+              style={[s.cuponInput, cuponAplicado ? s.cuponInputOk : null]}
+              placeholder="Ej. BOCARA-BIENVENIDA"
+              placeholderTextColor={Colors.textLight}
+              value={codigoCupon}
+              onChangeText={v => { setCodigoCupon(v.toUpperCase()); setErrorCupon(''); }}
+              autoCapitalize="characters"
+              editable={!cuponAplicado}
+            />
+            {cuponAplicado ? (
+              <TouchableOpacity style={s.cuponBtnRemove} onPress={() => { setCuponAplicado(null); setCodigoCupon(''); setErrorCupon(''); }}>
+                <Ionicons name="close-circle" size={24} color="#C0392B" />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[s.cuponBtn, (!codigoCupon.trim() || loadingCupon) && s.cuponBtnOff]}
+                onPress={aplicarCupon}
+                disabled={!codigoCupon.trim() || loadingCupon}
+              >
+                {loadingCupon
+                  ? <ActivityIndicator size="small" color="#FFFFFF" />
+                  : <Text style={s.cuponBtnText}>Aplicar</Text>
+                }
+              </TouchableOpacity>
+            )}
+          </View>
+          {cuponAplicado ? (
+            <View style={s.cuponMsgOk}>
+              <Ionicons name="checkmark-circle" size={15} color="#1A5C5C" />
+              <Text style={s.cuponMsgOkText}>{cuponAplicado.mensaje}</Text>
+            </View>
+          ) : errorCupon ? (
+            <View style={s.cuponMsgErr}>
+              <Ionicons name="close-circle" size={15} color="#C0392B" />
+              <Text style={s.cuponMsgErrText}>{errorCupon}</Text>
+            </View>
+          ) : null}
+        </View>
+
         {/* ── Resumen ── */}
         <View style={s.totalCard}>
           <Text style={s.sectionTitle}>Resumen de pago</Text>
@@ -496,6 +571,12 @@ export default function PagoScreen() {
               <View style={s.totalLine}>
                 <Text style={s.totalKey}>Propina al restaurante</Text>
                 <Text style={[s.totalVal, { color: Colors.accent }]}>+Q{propina.toFixed(2)}</Text>
+              </View>
+            )}
+            {cuponAplicado && (
+              <View style={s.totalLine}>
+                <Text style={s.totalKey}>Cupón {cuponAplicado.codigo}</Text>
+                <Text style={[s.totalVal, { color: '#1A5C5C' }]}>−Q{cuponAplicado.descuento_aplicado.toFixed(2)}</Text>
               </View>
             )}
           </View>
@@ -617,6 +698,19 @@ const s = StyleSheet.create({
   btnReintentar:     { backgroundColor: Colors.primary, borderRadius: 50, paddingVertical: 14, paddingHorizontal: 32, alignItems: 'center' as const, marginBottom: 12 },
   btnReintentarText: { color: Colors.white, fontWeight: '900', fontSize: 15 },
   linkVolver:        { fontSize: 14, color: Colors.textSecondary, fontWeight: '700', paddingVertical: 8 },
+
+  // Cupón
+  cuponRow:        { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10 },
+  cuponInput:      { flex: 1, backgroundColor: Colors.surface, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, fontSize: 14, fontWeight: '700', color: Colors.primary, borderWidth: 1.5, borderColor: 'transparent' },
+  cuponInputOk:    { borderColor: '#1A5C5C', backgroundColor: '#F4F7F7' },
+  cuponBtn:        { backgroundColor: '#1A5C5C', borderRadius: 14, paddingHorizontal: 18, paddingVertical: 13, alignItems: 'center' as const, justifyContent: 'center' as const },
+  cuponBtnOff:     { backgroundColor: Colors.textLight },
+  cuponBtnText:    { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
+  cuponBtnRemove:  { padding: 8 },
+  cuponMsgOk:      { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  cuponMsgOkText:  { fontSize: 13, fontWeight: '600', color: '#1A5C5C', flex: 1 },
+  cuponMsgErr:     { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+  cuponMsgErrText: { fontSize: 13, fontWeight: '600', color: '#C0392B', flex: 1 },
 
   // Footer
   footer:       { backgroundColor: Colors.white, padding: 16, paddingBottom: 28, borderTopWidth: 1, borderTopColor: Colors.border },

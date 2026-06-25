@@ -113,6 +113,7 @@ export const pagosAPI = {
     cantidad?: number;
     tipo_entrega: string;
     propina?: number;
+    cupon_id?: string;
   }) => api.post('/pagos/preparar', data),
   generarLink: (data: { pedidoId: string }) =>
     api.post('/pagos/generar-link', data),
@@ -189,6 +190,13 @@ export const adminAPI = {
 
 export const promocionesAPI = {
   listar: (params?: any) => api.get('/bolsas', { params: { tipo: 'cupon', activo: true, ...params } }),
+};
+
+export const cuponesAPI = {
+  validar: (codigo: string, montoTotal: number) =>
+    api.post('/cupones/validar', { codigo, monto_total: montoTotal }),
+  misCupones: () => api.get('/cupones/mis-cupones'),
+  miReferido: () => api.get('/cupones/mi-referido'),
 };
 
 export default api;

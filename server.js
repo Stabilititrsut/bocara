@@ -94,6 +94,7 @@ app.use('/api/resenas',        require('./routes/resenas'));
 app.use('/api/admin',          require('./routes/admin'));
 app.use('/api/favoritos',      require('./routes/favoritos'));
 app.use('/api/uploads',        require('./routes/uploads'));
+app.use('/api/cupones',        require('./routes/cupones'));
 
 app.get('/', (req, res) => {
   res.json({ status: '✅ Bocara API funcionando', version: '2.0.2', ambiente: process.env.NODE_ENV });
@@ -139,6 +140,44 @@ async function enviarRecordatoriosRecogida() {
   } catch (err) {
     console.error('Cron recordatorio error:', err.message);
   }
+}
+
+if (!process.env.CUPONES_MIGRADO) {
+  console.log(`
+[BOCARA — MIGRACIÓN CUPONES PENDIENTE]
+Ejecuta este SQL en Supabase Dashboard → SQL Editor:
+------------------------------------------------------
+CREATE TABLE IF NOT EXISTS cupones (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  codigo text UNIQUE NOT NULL,
+  tipo text CHECK (tipo IN ('porcentaje','monto_fijo','referido')) NOT NULL,
+  valor numeric NOT NULL,
+  uso_maximo integer DEFAULT 1,
+  usos_actuales integer DEFAULT 0,
+  uso_por_usuario integer DEFAULT 1,
+  activo boolean DEFAULT true,
+  fecha_vencimiento timestamp,
+  created_at timestamp DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS cupones_usuarios (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  cupon_id uuid REFERENCES cupones(id),
+  usuario_id uuid NOT NULL,
+  pedido_id uuid,
+  descuento_aplicado numeric NOT NULL,
+  created_at timestamp DEFAULT now(),
+  UNIQUE(cupon_id, usuario_id)
+);
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS codigo_referido text UNIQUE;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS referido_por uuid REFERENCES usuarios(id);
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS credito_referido numeric DEFAULT 0;
+CREATE OR REPLACE FUNCTION incrementar_credito(usuario_id uuid, monto numeric)
+RETURNS void AS $$ BEGIN
+  UPDATE usuarios SET credito_referido = COALESCE(credito_referido,0) + monto WHERE id = usuario_id;
+END; $$ LANGUAGE plpgsql;
+------------------------------------------------------
+Luego agrega CUPONES_MIGRADO=true en las variables de entorno para silenciar este aviso.
+`);
 }
 
 app.listen(PORT, () => {

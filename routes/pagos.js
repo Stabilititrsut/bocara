@@ -555,7 +555,7 @@ router.post('/cubo-webhook', async (req, res) => {
 // POST /api/pagos/preparar — crea pedido en estado 'borrador' sin generar link de pago
 router.post('/preparar', authMiddleware, async (req, res) => {
   try {
-    const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
+    const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq, cupon_id } = req.body;
     const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
 
     if (process.env.CUBO_PAYMENTS_ENABLED !== 'true') {
@@ -607,6 +607,23 @@ router.post('/preparar', authMiddleware, async (req, res) => {
       }
     }
 
+    // Validar cupón antes de calcular totales
+    let cupon = null;
+    let descuentoCupon = 0;
+    if (cupon_id) {
+      const { data: cuponData } = await supabase
+        .from('cupones').select('*').eq('id', cupon_id).eq('activo', true).maybeSingle();
+      if (!cuponData) return res.status(400).json({ error: 'Cupón no válido o expirado' });
+      if (cuponData.fecha_vencimiento && new Date(cuponData.fecha_vencimiento) < new Date())
+        return res.status(400).json({ error: 'Este cupón ha vencido' });
+      if (cuponData.usos_actuales >= cuponData.uso_maximo)
+        return res.status(400).json({ error: 'Este cupón ya alcanzó su límite de usos' });
+      const { data: usoExistente } = await supabase
+        .from('cupones_usuarios').select('id').eq('cupon_id', cupon_id).eq('usuario_id', req.usuario.id).maybeSingle();
+      if (usoExistente) return res.status(400).json({ error: 'Ya usaste este cupón anteriormente' });
+      cupon = cuponData;
+    }
+
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
     const subtotalProductos = Math.round(
       cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
@@ -615,7 +632,13 @@ router.post('/preparar', authMiddleware, async (req, res) => {
     const COMISION_CUBO = 0.035;
     const comisionBocara = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
     const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
-    const total = Math.round((subtotal + comisionPasarela) * 100) / 100;
+    if (cupon) {
+      descuentoCupon = cupon.tipo === 'porcentaje'
+        ? Math.round(subtotal * cupon.valor / 100 * 100) / 100
+        : Math.min(cupon.valor, subtotal);
+      descuentoCupon = Math.round(descuentoCupon * 100) / 100;
+    }
+    const total = Math.round(Math.max(0, subtotal + comisionPasarela - descuentoCupon) * 100) / 100;
     const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela + propina) * 100) / 100;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -673,8 +696,16 @@ router.post('/preparar', authMiddleware, async (req, res) => {
       return res.status(500).json({ error: 'Error al registrar los items del pedido.' });
     }
 
-    console.log('[PREPARAR] borrador creado:', pedido.id, '| total:', total);
-    res.json({ pedidoId: pedido.id, codigoRecogida, total, costoEnvio, comisionPasarela, montoNetoRestaurante });
+    if (cupon) {
+      await supabase.from('cupones_usuarios').insert({
+        cupon_id: cupon.id, usuario_id: req.usuario.id, pedido_id: pedido.id, descuento_aplicado: descuentoCupon,
+      }).catch(err => console.error('[PREPARAR] cupones_usuarios error:', err.message));
+      await supabase.from('cupones').update({ usos_actuales: cupon.usos_actuales + 1 }).eq('id', cupon.id)
+        .catch(err => console.error('[PREPARAR] cupones usos error:', err.message));
+    }
+
+    console.log('[PREPARAR] borrador creado:', pedido.id, '| total:', total, cupon ? `| cupón: Q${descuentoCupon}` : '');
+    res.json({ pedidoId: pedido.id, codigoRecogida, total, costoEnvio, comisionPasarela, montoNetoRestaurante, descuentoCupon });
   } catch (err) {
     console.error('preparar error:', err.message);
     res.status(500).json({ error: err.message });

@@ -8,6 +8,31 @@ const { enviarEmail, templateOlvidoContrasena, templateBienvenidaRestaurante, te
 const { geocodeAddress } = require('../utils/geo');
 const router = express.Router();
 
+async function generarCodigoReferido(usuarioId) {
+  try {
+    const codigo = 'BOC-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+    await supabase.from('usuarios').update({ codigo_referido: codigo }).eq('id', usuarioId);
+  } catch { }
+}
+
+async function procesarReferido(nuevoUsuarioId, codigoReferidoDe) {
+  if (!codigoReferidoDe) return;
+  try {
+    const { data: referidor } = await supabase
+      .from('usuarios').select('id')
+      .eq('codigo_referido', codigoReferidoDe.toUpperCase().trim())
+      .maybeSingle();
+    if (!referidor) return;
+    await supabase.from('usuarios').update({ referido_por: referidor.id }).eq('id', nuevoUsuarioId);
+    await supabase.rpc('incrementar_credito', { usuario_id: referidor.id, monto: 10 }).catch(() => {});
+    const codigoCupon = 'REF-' + nuevoUsuarioId.substring(0, 8).toUpperCase();
+    await supabase.from('cupones').insert({
+      codigo: codigoCupon, tipo: 'monto_fijo', valor: 10,
+      uso_maximo: 1, uso_por_usuario: 1, activo: true,
+    }).catch(() => {});
+  } catch { }
+}
+
 // Twilio client — solo si las vars de entorno están configuradas
 const twilio = (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
   ? require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
@@ -126,6 +151,8 @@ router.post('/registro', async (req, res) => {
       try {
         await supabase.rpc('sumar_puntos', { user_id: usuario.id, puntos: 10 });
       } catch { }
+      generarCodigoReferido(usuario.id);
+      procesarReferido(usuario.id, req.body.codigo_referido_de);
     }
 
     const resolvedRol = usuario.rol || rol || 'cliente';
@@ -179,6 +206,8 @@ router.post('/registro-completo', async (req, res) => {
     }
 
     try { await supabase.rpc('sumar_puntos', { user_id: usuario.id, puntos: 10 }); } catch { }
+    generarCodigoReferido(usuario.id);
+    procesarReferido(usuario.id, req.body.codigo_referido_de);
 
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: 'cliente' },
@@ -252,6 +281,8 @@ router.post('/verificar-otp-email', async (req, res) => {
     }
 
     try { await supabase.rpc('sumar_puntos', { user_id: usuario.id, puntos: 10 }); } catch { }
+    generarCodigoReferido(usuario.id);
+    procesarReferido(usuario.id, req.body.codigo_referido_de);
 
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: 'cliente' },
@@ -348,6 +379,8 @@ router.post('/verify-phone-otp', async (req, res) => {
       if (createErr) return res.status(400).json({ error: createErr.message });
       usuario = newUser;
       try { await supabase.rpc('sumar_puntos', { user_id: usuario.id, puntos: 10 }); } catch { }
+      generarCodigoReferido(usuario.id);
+      procesarReferido(usuario.id, req.body.codigo_referido_de);
     }
 
     if (usuario.rol === 'suspendido')
@@ -398,6 +431,7 @@ router.post('/oauth-complete', async (req, res) => {
       if (createErr) return res.status(400).json({ error: createErr.message });
       usuario = newUser;
       try { await supabase.rpc('sumar_puntos', { user_id: usuario.id, puntos: 10 }); } catch { }
+      generarCodigoReferido(usuario.id);
     } else if (avatar_url && !usuario.avatar_url) {
       await supabase.from('usuarios').update({ avatar_url }).eq('id', usuario.id);
       usuario.avatar_url = avatar_url;
