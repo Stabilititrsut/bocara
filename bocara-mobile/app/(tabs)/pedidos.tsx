@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   RefreshControl, ActivityIndicator, SafeAreaView, Alert,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
+  Modal, TextInput, KeyboardAvoidingView, Platform, Linking,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
@@ -93,9 +93,21 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido
           <Text style={s.resenaEnviadaText}>Reseña enviada</Text>
         </View>
       )}
-      {(pedido.estado === 'confirmado' || pedido.estado === 'pendiente') && (
+      {/* Cancelar: solo pedidos pendientes no pagados (pago aún no procesado) */}
+      {pedido.estado === 'pendiente' && pedido.estado_pago === 'pendiente' && (
         <TouchableOpacity style={s.btnCancelarPedido} onPress={() => onCancelar(pedido.id)}>
           <Text style={s.btnCancelarPedidoText}>Cancelar pedido</Text>
+        </TouchableOpacity>
+      )}
+      {/* Pedido ya pagado: derivar a soporte (no hay API de reembolso automático) */}
+      {pedido.estado_pago === 'pagado' && ['pendiente', 'confirmado'].includes(pedido.estado) && (
+        <TouchableOpacity
+          style={s.btnSoporte}
+          onPress={() => Linking.openURL('https://wa.me/50251077949?text=Hola%20Bocara%2C%20necesito%20cancelar%20mi%20pedido%20' + pedido.codigo_recogida)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+          <Text style={s.btnSoporteText}>¿Cancelar? Escríbenos al +502 5107-7949</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -184,9 +196,9 @@ export default function PedidosScreen() {
   }, [pedidos, cargar]);
 
   function confirmarCancelacion(pedidoId: string) {
-    const msg = '¿Estás seguro de que deseas cancelar este pedido?\n\nSi ya realizaste el pago, contáctanos por WhatsApp al +502 5107-7949.';
+    const msg = '¿Cancelar este pedido? El pago aún no fue procesado y no se realizará ningún cargo.';
     if (Platform.OS === 'web') {
-      if ((window as any).confirm(msg.replace('\n\n', ' '))) cancelarPedido(pedidoId);
+      if ((window as any).confirm(msg)) cancelarPedido(pedidoId);
     } else {
       Alert.alert('Cancelar pedido', msg, [
         { text: 'No, mantener', style: 'cancel' },
@@ -197,10 +209,26 @@ export default function PedidosScreen() {
 
   async function cancelarPedido(pedidoId: string) {
     try {
-      await pedidosAPI.cancelar(pedidoId);
+      const res = await pedidosAPI.cancelar(pedidoId);
+      if (res.data?.tipo === 'ya_cancelado') {
+        cargar();
+        return;
+      }
       cargar();
-    } catch {
-      Alert.alert('Error', 'No se pudo cancelar. Contáctanos por WhatsApp al +502 5107-7949.');
+    } catch (e: any) {
+      const data = e?.responseData;
+      if (data?.tipo === 'requiere_soporte') {
+        Alert.alert(
+          'Cancelación no disponible',
+          'Tu pedido ya fue pagado. Comunícate con soporte para solicitar la cancelación y devolución.',
+          [
+            { text: 'Cerrar', style: 'cancel' },
+            { text: 'WhatsApp', onPress: () => Linking.openURL('https://wa.me/50251077949') },
+          ]
+        );
+      } else {
+        Alert.alert('Error', e.message || 'No se pudo cancelar. Contáctanos al +502 5107-7949.');
+      }
     }
   }
 
@@ -342,6 +370,8 @@ const s = StyleSheet.create({
 
   btnCancelarPedido: { marginTop: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#C0392B', alignItems: 'center' },
   btnCancelarPedidoText: { color: '#C0392B', fontSize: 13, fontWeight: '500' },
+  btnSoporte: { marginTop: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#25D366', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  btnSoporteText: { color: '#25D366', fontSize: 12, fontWeight: '600' },
   btnResena: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1.5, borderColor: Colors.primary, borderRadius: 50, paddingVertical: 12, marginTop: 12 },
   btnResenaText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
   resenaEnviada: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: Colors.accentLight, borderRadius: 50, paddingVertical: 12, marginTop: 12 },

@@ -27,7 +27,10 @@ api.interceptors.response.use(
       return Promise.reject(new Error('Sin conexión a internet. Verifica tu red e intenta de nuevo.'));
     }
     const msg = err.response?.data?.error || err.message || 'Error del servidor';
-    return Promise.reject(new Error(msg));
+    const error = new Error(msg) as any;
+    error.responseData = err.response.data;
+    error.status = err.response.status;
+    return Promise.reject(error);
   }
 );
 
