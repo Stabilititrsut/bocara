@@ -94,9 +94,9 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido
           <Text style={s.resenaEnviadaText}>Reseña enviada</Text>
         </View>
       )}
-      {['pendiente', 'confirmado'].includes(pedido.estado) && (
+      {['confirmado', 'en_preparacion', 'listo'].includes(pedido.estado) && (
         <TouchableOpacity style={s.btnCancelarLink} onPress={() => onCancelar(pedido.id)}>
-          <Text style={s.btnCancelarTexto}>💬 ¿Cancelar? Escríbenos al +502 5107-7949</Text>
+          <Text style={s.btnCancelarTexto}>💬 ¿Necesitas cancelar? Contacta a soporte</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -174,7 +174,7 @@ export default function PedidosScreen() {
   useEffect(() => { cargar(); }, [cargar]);
 
   useEffect(() => {
-    const tieneActivos = pedidos.some(p => ['confirmado','en_preparacion','listo','pendiente'].includes(p.estado));
+    const tieneActivos = pedidos.some(p => ['confirmado','en_preparacion','listo'].includes(p.estado));
     if (tieneActivos) {
       pollingRef.current = setInterval(cargar, 10000);
     } else {
@@ -185,7 +185,7 @@ export default function PedidosScreen() {
 
   async function confirmarCancelacion(pedidoId: string) {
     const mensajeWA = encodeURIComponent(
-      `Hola Bocara, quiero cancelar mi pedido #${pedidoId.substring(0, 8).toUpperCase()}. Por favor ayúdenme con el proceso.`
+      `Hola Bocara, necesito ayuda con mi pedido #${pedidoId.substring(0, 8).toUpperCase()}. ¿Pueden apoyarme?`
     );
     const urlWA = `https://wa.me/50251077949?text=${mensajeWA}`;
     if (Platform.OS === 'web') {
@@ -223,8 +223,8 @@ export default function PedidosScreen() {
     </SafeAreaView>
   );
 
-  const activos = pedidos.filter(p => ['pendiente', 'confirmado', 'en_preparacion', 'listo'].includes(p.estado));
-  const historial = pedidos.filter(p => ['recogido', 'completado', 'cancelado'].includes(p.estado));
+  const activos = pedidos.filter(p => ['confirmado', 'en_preparacion', 'listo'].includes(p.estado));
+  const historial = pedidos.filter(p => ['completado', 'recogido', 'cancelado'].includes(p.estado));
 
   return (
     <SafeAreaView style={s.root}>

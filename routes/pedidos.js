@@ -69,6 +69,11 @@ router.post('/crear', authMiddleware, async (req, res) => {
   }
 });
 
+// Estados que se muestran al cliente — borrador y pendiente son registros técnicos
+// internos y nunca deben aparecer en la app. Un pedido solo existe para el cliente
+// una vez que el pago fue confirmado y el estado es 'confirmado' o superior.
+const ESTADOS_VISIBLES_CLIENTE = ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido', 'cancelado'];
+
 // GET /api/pedidos — pedidos del cliente autenticado
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -76,10 +81,13 @@ router.get('/', authMiddleware, async (req, res) => {
       .from('pedidos')
       .select('*, bolsas!bolsa_id(id,nombre), negocios!negocio_id(id,nombre,zona)')
       .eq('usuario_id', req.usuario.id)
+      .in('estado', ESTADOS_VISIBLES_CLIENTE)
       .order('created_at', { ascending: false });
     if (error) {
       console.warn('[PEDIDOS API] join failed, fallback:', error.message);
-      const r = await supabase.from('pedidos').select('*').eq('usuario_id', req.usuario.id);
+      const r = await supabase.from('pedidos').select('*')
+        .eq('usuario_id', req.usuario.id)
+        .in('estado', ESTADOS_VISIBLES_CLIENTE);
       data = r.data; error = r.error;
     }
     if (error) return res.status(500).json({ error: error.message });
@@ -299,18 +307,18 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// PATCH /api/pedidos/:id/cancelar — cancela un pedido propio
-//
-// Política:
-//   · ya cancelado                         → 200 idempotente (ya_cancelado)
-//   · estado_pago = 'pagado'               → 409 requiere_soporte (sin reembolso automático)
-//   · estado ∈ {confirmado, en_preparacion,
-//               listo, completado, recogido} → 409 requiere_soporte
-//   · estado = 'pendiente' + no pagado     → cancela, libera cupón, auditoría
-//
-// El frontend abre WhatsApp directamente y ya no llama este endpoint.
-// El endpoint permanece activo como autoridad de backend y para uso admin.
+// PATCH /api/pedidos/:id/cancelar — solo uso admin
+// El frontend no llama este endpoint (muestra botón WhatsApp al cliente).
+// Las cancelaciones y devoluciones de pedidos pagados son manuales.
 router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
+  if (req.usuario.rol !== 'admin') {
+    return res.status(403).json({
+      ok: false,
+      error: 'Las cancelaciones se gestionan a través de soporte. Escríbenos al +502 5107-7949.',
+      whatsapp: '+502 5107-7949',
+      url_whatsapp: 'https://wa.me/50251077949',
+    });
+  }
   try {
     const usuario_id = req.usuario.id;
 
