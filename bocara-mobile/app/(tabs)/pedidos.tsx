@@ -29,7 +29,7 @@ interface ResenaState {
   enviando: boolean;
 }
 
-function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void }) {
+function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string) => void }) {
   const estado = ESTADO_CONFIG[pedido.estado] || ESTADO_CONFIG.pendiente;
   const activo = ['confirmado','en_preparacion','listo'].includes(pedido.estado);
 
@@ -92,6 +92,11 @@ function PedidoCard({ pedido, yaReseno, onResena }: { pedido: Pedido; yaReseno: 
           <Ionicons name="checkmark-circle" size={15} color={Colors.primary} />
           <Text style={s.resenaEnviadaText}>Reseña enviada</Text>
         </View>
+      )}
+      {(pedido.estado === 'confirmado' || pedido.estado === 'pendiente') && (
+        <TouchableOpacity style={s.btnCancelarPedido} onPress={() => onCancelar(pedido.id)}>
+          <Text style={s.btnCancelarPedidoText}>Cancelar pedido</Text>
+        </TouchableOpacity>
       )}
     </View>
   );
@@ -158,7 +163,8 @@ export default function PedidosScreen() {
       const res = await pedidosAPI.listar();
       const data: Pedido[] = res.data || [];
       console.log('[PEDIDOS] backend rows:', data.length, 'ids:', data.map(p => p.id));
-      const dedup = Array.from(new Map(data.map(p => [String(p.id), p])).values());
+      const dedup = Array.from(new Map(data.map(p => [String(p.id), p])).values())
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       console.log('[PEDIDOS] after dedup:', dedup.length, 'ids:', dedup.map(p => p.id));
       setPedidos(dedup);
     } catch { setPedidos([]); }
@@ -176,6 +182,27 @@ export default function PedidosScreen() {
     }
     return () => clearInterval(pollingRef.current);
   }, [pedidos, cargar]);
+
+  function confirmarCancelacion(pedidoId: string) {
+    const msg = '¿Estás seguro de que deseas cancelar este pedido?\n\nSi ya realizaste el pago, contáctanos por WhatsApp al +502 5107-7949.';
+    if (Platform.OS === 'web') {
+      if ((window as any).confirm(msg.replace('\n\n', ' '))) cancelarPedido(pedidoId);
+    } else {
+      Alert.alert('Cancelar pedido', msg, [
+        { text: 'No, mantener', style: 'cancel' },
+        { text: 'Sí, cancelar', style: 'destructive', onPress: () => cancelarPedido(pedidoId) },
+      ]);
+    }
+  }
+
+  async function cancelarPedido(pedidoId: string) {
+    try {
+      await pedidosAPI.cancelar(pedidoId);
+      cargar();
+    } catch {
+      Alert.alert('Error', 'No se pudo cancelar. Contáctanos por WhatsApp al +502 5107-7949.');
+    }
+  }
 
   async function enviarResena() {
     if (!resena.pedido) return;
@@ -239,19 +266,19 @@ export default function PedidosScreen() {
           {activos.length > 0 && (
             <>
               <Text style={s.seccionLabel}>En curso</Text>
-              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} />)}
+              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           {pendientes.length > 0 && (
             <>
               <Text style={s.seccionLabel}>Pendientes</Text>
-              {pendientes.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} />)}
+              {pendientes.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           {historial.length > 0 && (
             <>
               <Text style={s.seccionLabel}>Historial</Text>
-              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} />)}
+              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           {cancelados.length > 0 && (
@@ -260,7 +287,7 @@ export default function PedidosScreen() {
                 <Text style={s.seccionLabel}>Cancelados ({cancelados.length})</Text>
                 <Ionicons name={showCancelados ? 'chevron-up-outline' : 'chevron-down-outline'} size={14} color={Colors.textSecondary} />
               </TouchableOpacity>
-              {showCancelados && cancelados.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} />)}
+              {showCancelados && cancelados.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           <View style={{ height: 30 }} />
@@ -313,6 +340,8 @@ const s = StyleSheet.create({
   codigoHoraRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
   codigoHora: { fontSize: 12, color: Colors.textSecondary },
 
+  btnCancelarPedido: { marginTop: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#C0392B', alignItems: 'center' },
+  btnCancelarPedidoText: { color: '#C0392B', fontSize: 13, fontWeight: '500' },
   btnResena: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1.5, borderColor: Colors.primary, borderRadius: 50, paddingVertical: 12, marginTop: 12 },
   btnResenaText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
   resenaEnviada: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: Colors.accentLight, borderRadius: 50, paddingVertical: 12, marginTop: 12 },

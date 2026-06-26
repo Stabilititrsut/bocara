@@ -195,7 +195,7 @@ export default function HomeScreen() {
           <View style={s.heroContent}>
             <Text style={s.heroTag}>Guatemala · Rescata comida</Text>
             <Text style={s.heroTitle}>Descubre más.{'\n'}Ahorra mejor.</Text>
-            <TouchableOpacity style={s.heroCTA} onPress={() => setCatSelected('Todos')}>
+            <TouchableOpacity style={s.heroCTA} onPress={() => router.push('/(tabs)/tiendas' as any)}>
               <Text style={s.heroCTAText}>Ver negocios</Text>
               <Ionicons name="arrow-forward" size={13} color={Colors.primary} />
             </TouchableOpacity>

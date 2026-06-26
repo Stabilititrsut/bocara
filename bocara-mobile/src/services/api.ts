@@ -95,6 +95,7 @@ export const pedidosAPI = {
   factura: (pedidoId: string, data: { tipo: 'cf' | 'nit'; nit?: string; nombre_fiscal?: string }) =>
     api.post(`/pedidos/${pedidoId}/factura`, data),
   getResumenCliente: () => api.get('/pedidos/resumen-cliente'),
+  cancelar: (id: string) => api.patch(`/pedidos/${id}/cancelar`, {}),
 };
 
 export const pagosAPI = {

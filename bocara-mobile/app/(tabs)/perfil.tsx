@@ -20,8 +20,8 @@ const MENU_ITEMS = [
   { icon: 'receipt-outline',    label: 'Mis pedidos',        route: '/(tabs)/pedidos' },
   { icon: 'ticket-outline',     label: 'Cupones',            route: '/cupones' },
   { icon: 'people-outline',     label: 'Referidos',          route: '/referidos' },
-  { icon: 'heart-outline',      label: 'Mis favoritos',      route: '/(tabs)/explore' },
-  { icon: 'notifications-outline', label: 'Notificaciones', route: '/(tabs)/explore' },
+  { icon: 'heart-outline',      label: 'Mis favoritos',      route: '/(tabs)/favoritos' },
+  { icon: 'notifications-outline', label: 'Notificaciones', route: '/(tabs)/notificaciones' },
   { icon: 'headset-outline',    label: 'Contacto y soporte', route: '/soporte' },
   { icon: 'settings-outline',   label: 'Configuración',      route: '/configuracion' },
 ];

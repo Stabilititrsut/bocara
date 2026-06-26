@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, Linking, Alert,
+  SafeAreaView, Linking,
 } from 'react-native';
 import { Colors } from '@/constants/Colors';
 
@@ -16,7 +16,7 @@ const FAQS = [
   },
   {
     pregunta: '¿Puedo cancelar mi pedido?',
-    respuesta: 'Los pedidos confirmados no pueden cancelarse directamente. Si tienes un problema, contáctanos vía WhatsApp o correo y lo resolveremos a la brevedad.',
+    respuesta: 'Sí, puedes cancelar pedidos en estado pendiente o confirmado directamente desde la sección "Mis pedidos". Una vez en preparación, ya no es posible cancelar. Si tuviste algún problema con el pago, escríbenos al +502 5107-7949.',
   },
   {
     pregunta: '¿Qué hago si el restaurante está cerrado?',
@@ -47,13 +47,7 @@ function FaqItem({ item }: { item: typeof FAQS[0] }) {
 
 export default function SoporteScreen() {
   function abrirWhatsApp() {
-    const numero = '50200000000';
-    const mensaje = 'Hola, necesito ayuda con Bocara Food.';
-    const url = `whatsapp://send?phone=${numero}&text=${encodeURIComponent(mensaje)}`;
-    Linking.canOpenURL(url).then((ok) => {
-      if (ok) Linking.openURL(url);
-      else Alert.alert('WhatsApp no disponible', 'Instala WhatsApp o contáctanos por email.');
-    });
+    Linking.openURL('https://wa.me/50251077949?text=Hola%20Bocara%2C%20necesito%20ayuda%20con%20mi%20pedido');
   }
 
   function abrirEmail() {

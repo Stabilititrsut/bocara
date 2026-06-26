@@ -298,6 +298,46 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
+// PATCH /api/pedidos/:id/cancelar — cancela un pedido propio en estado confirmado o pendiente
+router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
+  try {
+    const usuario_id = req.usuario.id;
+
+    const { data: pedido } = await supabase
+      .from('pedidos')
+      .select('id, estado, negocio_id, codigo_recogida, negocios(propietario_id)')
+      .eq('id', req.params.id)
+      .eq('usuario_id', usuario_id)
+      .single();
+
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+    if (!['confirmado', 'pendiente'].includes(pedido.estado)) {
+      return res.status(400).json({
+        error: 'Este pedido no se puede cancelar. Contáctanos por WhatsApp al +502 5107-7949.',
+      });
+    }
+
+    await supabase.from('pedidos').update({ estado: 'cancelado' }).eq('id', pedido.id);
+
+    const propietario_id = pedido.negocios?.propietario_id;
+    if (propietario_id) {
+      await guardarNotificacion(
+        supabase,
+        propietario_id,
+        'pedido_cancelado',
+        '❌ Pedido cancelado',
+        `El cliente canceló el pedido ${pedido.codigo_recogida}`,
+        { pedidoId: pedido.id }
+      );
+    }
+
+    res.json({ ok: true, mensaje: 'Pedido cancelado correctamente' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/pedidos/:id/factura — guarda datos de facturación (NIT o CF)
 router.post('/:id/factura', authMiddleware, async (req, res) => {
   try {

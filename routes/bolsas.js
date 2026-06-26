@@ -134,7 +134,7 @@ router.get('/:id', async (req, res) => {
 
   let { data, error } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url)')
     .eq('id', req.params.id)
     .single();
 
@@ -143,7 +143,7 @@ router.get('/:id', async (req, res) => {
     console.warn('[BOLSAS DETAIL] join falló, reintentando sin negocios join:', error.message);
     const r2 = await supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
+      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url)')
       .eq('id', req.params.id)
       .single();
     data = r2.data;

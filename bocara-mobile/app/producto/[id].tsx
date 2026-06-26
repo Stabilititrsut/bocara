@@ -314,8 +314,20 @@ export default function ProductoScreen() {
         {/* ── NEGOCIO ROW ── */}
         <View style={s.negocioCard}>
           <View style={s.negocioRow}>
-            <View style={s.negocioLogo}>
-              <Text style={{ fontSize: 24 }}>{emoji}</Text>
+            <View style={[s.negocioLogo, { overflow: 'hidden' }]}>
+              {bolsa.negocios?.imagen_url ? (
+                <Image
+                  source={{ uri: bolsa.negocios.imagen_url }}
+                  style={StyleSheet.absoluteFill}
+                  contentFit="cover"
+                />
+              ) : (
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' }]}>
+                  <Text style={{ fontSize: 20, fontWeight: '900', color: Colors.white }}>
+                    {(bolsa.negocios?.nombre || '?')[0].toUpperCase()}
+                  </Text>
+                </View>
+              )}
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.negocioNombre} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
