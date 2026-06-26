@@ -30,7 +30,7 @@ interface ResenaState {
   enviando: boolean;
 }
 
-function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string) => void }) {
+function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void }) {
   const estado = ESTADO_CONFIG[pedido.estado] || ESTADO_CONFIG.pendiente;
   const activo = ['confirmado','en_preparacion','listo'].includes(pedido.estado);
 
@@ -94,10 +94,13 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido
           <Text style={s.resenaEnviadaText}>Reseña enviada</Text>
         </View>
       )}
-      {['confirmado', 'en_preparacion', 'listo'].includes(pedido.estado) && (
-        <TouchableOpacity style={s.btnCancelarLink} onPress={() => onCancelar(pedido.id)}>
-          <Text style={s.btnCancelarTexto}>💬 ¿Necesitas cancelar? Contacta a soporte</Text>
+      {['confirmado', 'en_preparacion'].includes(pedido.estado) && (
+        <TouchableOpacity style={s.btnCancelarLink} onPress={() => onCancelar(pedido.id, pedido.estado)}>
+          <Text style={s.btnCancelarTexto}>💬 Solicitar cancelación y devolución</Text>
         </TouchableOpacity>
+      )}
+      {pedido.estado === 'listo' && (
+        <Text style={s.txtListoInfo}>Tu pedido ya está terminado y no puede cancelarse.</Text>
       )}
     </View>
   );
@@ -183,9 +186,10 @@ export default function PedidosScreen() {
     return () => clearInterval(pollingRef.current);
   }, [pedidos, cargar]);
 
-  async function confirmarCancelacion(pedidoId: string) {
+  async function confirmarCancelacion(pedidoId: string, estadoPedido: string) {
+    const estadoLabel = estadoPedido === 'en_preparacion' ? 'en preparación' : 'confirmado';
     const mensajeWA = encodeURIComponent(
-      `Hola Bocara, necesito ayuda con mi pedido #${pedidoId.substring(0, 8).toUpperCase()}. ¿Pueden apoyarme?`
+      `Hola Bocara, solicito cancelar y recibir la devolución de mi pedido #${pedidoId.substring(0, 8).toUpperCase()}. El pedido todavía aparece como ${estadoLabel}. ¿Pueden ayudarme?`
     );
     const urlWA = `https://wa.me/50251077949?text=${mensajeWA}`;
     if (Platform.OS === 'web') {
@@ -315,6 +319,7 @@ const s = StyleSheet.create({
 
   btnCancelarLink: { marginTop: 8, borderWidth: 1, borderColor: '#1A5C5C', borderRadius: 10, padding: 12, alignItems: 'center', backgroundColor: '#FFFFFF' },
   btnCancelarTexto: { color: '#1A5C5C', fontSize: 13, fontWeight: '500' },
+  txtListoInfo: { marginTop: 8, fontSize: 12, color: Colors.textSecondary, textAlign: 'center', fontStyle: 'italic' },
   btnResena: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1.5, borderColor: Colors.primary, borderRadius: 50, paddingVertical: 12, marginTop: 12 },
   btnResenaText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
   resenaEnviada: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: Colors.accentLight, borderRadius: 50, paddingVertical: 12, marginTop: 12 },
