@@ -300,56 +300,97 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
 });
 
 // PATCH /api/pedidos/:id/cancelar — cancela un pedido propio
-// Solo permite cancelar pedidos en estado 'pendiente' o 'confirmado'.
-// El frontend ya no llama este endpoint directamente (usa WhatsApp), pero
-// queda disponible para uso admin y futuros integraciones.
+//
+// Política:
+//   · ya cancelado                         → 200 idempotente (ya_cancelado)
+//   · estado_pago = 'pagado'               → 409 requiere_soporte (sin reembolso automático)
+//   · estado ∈ {confirmado, en_preparacion,
+//               listo, completado, recogido} → 409 requiere_soporte
+//   · estado = 'pendiente' + no pagado     → cancela, libera cupón, auditoría
+//
+// El frontend abre WhatsApp directamente y ya no llama este endpoint.
+// El endpoint permanece activo como autoridad de backend y para uso admin.
 router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
   try {
     const usuario_id = req.usuario.id;
 
     const { data: pedido } = await supabase
       .from('pedidos')
-      .select('id, estado, negocio_id, codigo_recogida, negocios(propietario_id)')
+      .select('id, estado, estado_pago, negocio_id, codigo_recogida, negocios(propietario_id)')
       .eq('id', req.params.id)
       .eq('usuario_id', usuario_id)
       .single();
 
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
 
+    // ── Idempotencia ──────────────────────────────────────────────────────────
     if (pedido.estado === 'cancelado')
       return res.json({ ok: true, tipo: 'ya_cancelado' });
 
-    if (!['pendiente', 'confirmado'].includes(pedido.estado)) {
+    // ── Pedido pagado: requiere intervención manual (no hay API de reembolso) ─
+    // Cubo Pago Guatemala solo expone generarLinkPago y consultarTransaccionCubo.
+    // No existe endpoint de anulación/reembolso: la devolución es manual.
+    if (pedido.estado_pago === 'pagado') {
+      return res.status(409).json({
+        ok: false,
+        tipo: 'requiere_soporte',
+        error: 'El pedido ya fue pagado. Comunícate con soporte para solicitar cancelación y devolución.',
+        whatsapp: '+502 5107-7949',
+        url_whatsapp: 'https://wa.me/50251077949',
+      });
+    }
+
+    // ── Estados no cancelables automáticamente ────────────────────────────────
+    const estadosNoPermitidos = ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido'];
+    if (estadosNoPermitidos.includes(pedido.estado)) {
+      return res.status(409).json({
+        ok: false,
+        tipo: 'requiere_soporte',
+        error: 'El pedido ya no puede cancelarse desde la app. Comunícate con soporte al +502 5107-7949.',
+        whatsapp: '+502 5107-7949',
+        url_whatsapp: 'https://wa.me/50251077949',
+      });
+    }
+
+    // ── Solo llega aquí: estado = 'pendiente' + estado_pago ≠ 'pagado' ────────
+    if (pedido.estado !== 'pendiente') {
       return res.status(400).json({
         ok: false,
-        error: `No es posible cancelar este pedido en su estado actual. Contáctanos por WhatsApp al +502 5107-7949.`,
+        error: `Estado inesperado "${pedido.estado}". Contáctanos al +502 5107-7949.`,
       });
     }
 
     const ahora = new Date().toISOString();
+
+    // Doble guard a nivel DB: solo cancela si sigue pendiente y no pagado
     let cancelErr;
     ({ error: cancelErr } = await supabase.from('pedidos')
       .update({ estado: 'cancelado', cancelado_por: 'cliente', cancelado_at: ahora })
       .eq('id', pedido.id)
-      .in('estado', ['pendiente', 'confirmado']));
+      .eq('estado', 'pendiente')
+      .neq('estado_pago', 'pagado'));
 
     if (cancelErr) {
+      // Fallback sin columnas de auditoría (migración aún no ejecutada)
       const { error: cancelErr2 } = await supabase.from('pedidos')
         .update({ estado: 'cancelado' })
         .eq('id', pedido.id)
-        .in('estado', ['pendiente', 'confirmado']);
+        .eq('estado', 'pendiente')
+        .neq('estado_pago', 'pagado');
       if (cancelErr2) return res.status(500).json({ error: cancelErr2.message });
     }
 
+    // Liberar cupón — best-effort, idempotente
     supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedido.id })
-      .then(({ error: rpcErr }) => { if (rpcErr) console.warn('[CANCELAR] liberar_reserva_cupon error:', rpcErr.message); })
-      .catch(err => console.warn('[CANCELAR] liberar_reserva_cupon network error:', err.message));
+      .then(({ error: rpcErr }) => { if (rpcErr) console.warn('[CANCELAR] liberar_reserva_cupon:', rpcErr.message); })
+      .catch(err => console.warn('[CANCELAR] liberar_reserva_cupon network:', err.message));
 
+    // Notificar al restaurante — best-effort
     const propietario_id = pedido.negocios?.propietario_id;
     if (propietario_id) {
       guardarNotificacion(supabase, propietario_id, 'pedido_cancelado', '❌ Pedido cancelado',
-        `El cliente canceló el pedido ${pedido.codigo_recogida}`, { pedidoId: pedido.id })
-        .catch(err => console.warn('[CANCELAR] guardarNotificacion error:', err.message));
+        `El cliente canceló el pedido ${pedido.codigo_recogida} (pendiente de pago)`, { pedidoId: pedido.id })
+        .catch(err => console.warn('[CANCELAR] guardarNotificacion:', err.message));
     }
 
     res.json({ ok: true, tipo: 'cancelado_automaticamente', mensaje: 'Pedido cancelado correctamente' });
