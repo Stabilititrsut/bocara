@@ -362,30 +362,48 @@ router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
 
     const ahora = new Date().toISOString();
 
-    // Doble guard a nivel DB: solo cancela si sigue pendiente y no pagado
-    let cancelErr;
-    ({ error: cancelErr } = await supabase.from('pedidos')
+    // .maybeSingle() devuelve null cuando 0 filas coinciden — Supabase no genera
+    // error en ese caso, por lo que es la única forma de detectar el race condition
+    // en que el webhook de pago confirma el pedido entre el SELECT y este UPDATE.
+    const { data: cancelado, error: cancelErr } = await supabase.from('pedidos')
       .update({ estado: 'cancelado', cancelado_por: 'cliente', cancelado_at: ahora })
       .eq('id', pedido.id)
       .eq('estado', 'pendiente')
-      .neq('estado_pago', 'pagado'));
+      .neq('estado_pago', 'pagado')
+      .select('id')
+      .maybeSingle();
+
+    let cancelConfirmado = cancelado;
 
     if (cancelErr) {
-      // Fallback sin columnas de auditoría (migración aún no ejecutada)
-      const { error: cancelErr2 } = await supabase.from('pedidos')
+      // Las columnas de auditoría aún no existen — fallback sin ellas, igual con .maybeSingle()
+      const { data: cancelado2, error: cancelErr2 } = await supabase.from('pedidos')
         .update({ estado: 'cancelado' })
         .eq('id', pedido.id)
         .eq('estado', 'pendiente')
-        .neq('estado_pago', 'pagado');
+        .neq('estado_pago', 'pagado')
+        .select('id')
+        .maybeSingle();
       if (cancelErr2) return res.status(500).json({ error: cancelErr2.message });
+      cancelConfirmado = cancelado2;
     }
 
-    // Liberar cupón — best-effort, idempotente
+    // 0 filas coincidieron: el pedido fue pagado o modificado justo antes del UPDATE
+    if (!cancelConfirmado) {
+      return res.status(409).json({
+        ok: false,
+        tipo: 'requiere_soporte',
+        error: 'El pedido cambió de estado o ya fue pagado. Comunícate con soporte al +502 5107-7949.',
+        whatsapp: '+502 5107-7949',
+        url_whatsapp: 'https://wa.me/50251077949',
+      });
+    }
+
+    // Fila confirmada como cancelada — ahora liberamos recursos
     supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedido.id })
       .then(({ error: rpcErr }) => { if (rpcErr) console.warn('[CANCELAR] liberar_reserva_cupon:', rpcErr.message); })
       .catch(err => console.warn('[CANCELAR] liberar_reserva_cupon network:', err.message));
 
-    // Notificar al restaurante — best-effort
     const propietario_id = pedido.negocios?.propietario_id;
     if (propietario_id) {
       guardarNotificacion(supabase, propietario_id, 'pedido_cancelado', '❌ Pedido cancelado',
