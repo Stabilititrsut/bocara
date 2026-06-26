@@ -16,6 +16,7 @@ const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; 
   en_preparacion:  { label: 'En preparación',      color: '#7C3AED',            bg: '#F5F3FF',       icon: 'restaurant-outline' },
   listo:           { label: 'Listo para recoger',  color: Colors.accent,        bg: Colors.accentLight, icon: 'storefront-outline' },
   recogido:        { label: 'Recogido',             color: Colors.textSecondary, bg: Colors.surface,  icon: 'bag-check-outline' },
+  completado:      { label: 'Recogido',             color: Colors.textSecondary, bg: Colors.surface,  icon: 'bag-check-outline' },
   cancelado:       { label: 'Cancelado',            color: Colors.error,         bg: Colors.errorLight, icon: 'close-circle-outline' },
 };
 
@@ -81,33 +82,21 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido
         <Text style={s.refCode}>{pedido.codigo_recogida}</Text>
       )}
 
-      {pedido.estado === 'recogido' && !yaReseno && (
+      {(pedido.estado === 'recogido' || pedido.estado === 'completado') && !yaReseno && (
         <TouchableOpacity style={s.btnResena} onPress={() => onResena(pedido)}>
           <Ionicons name="star-outline" size={15} color={Colors.primary} />
           <Text style={s.btnResenaText}>Dejar reseña</Text>
         </TouchableOpacity>
       )}
-      {pedido.estado === 'recogido' && yaReseno && (
+      {(pedido.estado === 'recogido' || pedido.estado === 'completado') && yaReseno && (
         <View style={s.resenaEnviada}>
           <Ionicons name="checkmark-circle" size={15} color={Colors.primary} />
           <Text style={s.resenaEnviadaText}>Reseña enviada</Text>
         </View>
       )}
-      {/* Cancelar: solo pedidos pendientes no pagados (pago aún no procesado) */}
-      {pedido.estado === 'pendiente' && pedido.estado_pago === 'pendiente' && (
-        <TouchableOpacity style={s.btnCancelarPedido} onPress={() => onCancelar(pedido.id)}>
-          <Text style={s.btnCancelarPedidoText}>Cancelar pedido</Text>
-        </TouchableOpacity>
-      )}
-      {/* Pedido ya pagado: derivar a soporte (no hay API de reembolso automático) */}
-      {pedido.estado_pago === 'pagado' && ['pendiente', 'confirmado'].includes(pedido.estado) && (
-        <TouchableOpacity
-          style={s.btnSoporte}
-          onPress={() => Linking.openURL('https://wa.me/50251077949?text=Hola%20Bocara%2C%20necesito%20cancelar%20mi%20pedido%20' + pedido.codigo_recogida)}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
-          <Text style={s.btnSoporteText}>¿Cancelar? Escríbenos al +502 5107-7949</Text>
+      {['pendiente', 'confirmado'].includes(pedido.estado) && (
+        <TouchableOpacity style={s.btnCancelarLink} onPress={() => onCancelar(pedido.id)}>
+          <Text style={s.btnCancelarTexto}>💬 ¿Cancelar? Escríbenos al +502 5107-7949</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -161,7 +150,6 @@ export default function PedidosScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [resenasEnviadas, setResenasEnviadas] = useState<Set<string>>(new Set());
   const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false });
-  const [showCancelados, setShowCancelados] = useState(false);
   const pollingRef = useRef<any>(null);
 
   useEffect(() => {
@@ -195,40 +183,15 @@ export default function PedidosScreen() {
     return () => clearInterval(pollingRef.current);
   }, [pedidos, cargar]);
 
-  function confirmarCancelacion(pedidoId: string) {
-    const msg = '¿Cancelar este pedido? El pago aún no fue procesado y no se realizará ningún cargo.';
+  async function confirmarCancelacion(pedidoId: string) {
+    const mensajeWA = encodeURIComponent(
+      `Hola Bocara, quiero cancelar mi pedido #${pedidoId.substring(0, 8).toUpperCase()}. Por favor ayúdenme con el proceso.`
+    );
+    const urlWA = `https://wa.me/50251077949?text=${mensajeWA}`;
     if (Platform.OS === 'web') {
-      if ((window as any).confirm(msg)) cancelarPedido(pedidoId);
+      (window as any).open(urlWA, '_blank');
     } else {
-      Alert.alert('Cancelar pedido', msg, [
-        { text: 'No, mantener', style: 'cancel' },
-        { text: 'Sí, cancelar', style: 'destructive', onPress: () => cancelarPedido(pedidoId) },
-      ]);
-    }
-  }
-
-  async function cancelarPedido(pedidoId: string) {
-    try {
-      const res = await pedidosAPI.cancelar(pedidoId);
-      if (res.data?.tipo === 'ya_cancelado') {
-        cargar();
-        return;
-      }
-      cargar();
-    } catch (e: any) {
-      const data = e?.responseData;
-      if (data?.tipo === 'requiere_soporte') {
-        Alert.alert(
-          'Cancelación no disponible',
-          'Tu pedido ya fue pagado. Comunícate con soporte para solicitar la cancelación y devolución.',
-          [
-            { text: 'Cerrar', style: 'cancel' },
-            { text: 'WhatsApp', onPress: () => Linking.openURL('https://wa.me/50251077949') },
-          ]
-        );
-      } else {
-        Alert.alert('Error', e.message || 'No se pudo cancelar. Contáctanos al +502 5107-7949.');
-      }
+      await Linking.openURL(urlWA);
     }
   }
 
@@ -260,10 +223,8 @@ export default function PedidosScreen() {
     </SafeAreaView>
   );
 
-  const activos = pedidos.filter(p => ['confirmado','en_preparacion','listo'].includes(p.estado));
-  const pendientes = pedidos.filter(p => p.estado === 'pendiente');
-  const historial = pedidos.filter(p => p.estado === 'recogido');
-  const cancelados = pedidos.filter(p => p.estado === 'cancelado');
+  const activos = pedidos.filter(p => ['pendiente', 'confirmado', 'en_preparacion', 'listo'].includes(p.estado));
+  const historial = pedidos.filter(p => ['recogido', 'completado', 'cancelado'].includes(p.estado));
 
   return (
     <SafeAreaView style={s.root}>
@@ -297,25 +258,10 @@ export default function PedidosScreen() {
               {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
-          {pendientes.length > 0 && (
-            <>
-              <Text style={s.seccionLabel}>Pendientes</Text>
-              {pendientes.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
-            </>
-          )}
           {historial.length > 0 && (
             <>
               <Text style={s.seccionLabel}>Historial</Text>
               {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
-            </>
-          )}
-          {cancelados.length > 0 && (
-            <>
-              <TouchableOpacity style={s.canceladosToggle} onPress={() => setShowCancelados(v => !v)}>
-                <Text style={s.seccionLabel}>Cancelados ({cancelados.length})</Text>
-                <Ionicons name={showCancelados ? 'chevron-up-outline' : 'chevron-down-outline'} size={14} color={Colors.textSecondary} />
-              </TouchableOpacity>
-              {showCancelados && cancelados.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={false} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           <View style={{ height: 30 }} />
@@ -344,7 +290,6 @@ const s = StyleSheet.create({
 
   scroll: { padding: 16, paddingTop: 20 },
   seccionLabel: { fontSize: 12, fontWeight: '800', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 14, marginTop: 4 },
-  canceladosToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
 
   card: { backgroundColor: Colors.white, borderRadius: 24, padding: 18, marginBottom: 16, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.09, shadowRadius: 14 },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
@@ -368,10 +313,8 @@ const s = StyleSheet.create({
   codigoHoraRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
   codigoHora: { fontSize: 12, color: Colors.textSecondary },
 
-  btnCancelarPedido: { marginTop: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#C0392B', alignItems: 'center' },
-  btnCancelarPedidoText: { color: '#C0392B', fontSize: 13, fontWeight: '500' },
-  btnSoporte: { marginTop: 8, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: '#25D366', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
-  btnSoporteText: { color: '#25D366', fontSize: 12, fontWeight: '600' },
+  btnCancelarLink: { marginTop: 8, borderWidth: 1, borderColor: '#1A5C5C', borderRadius: 10, padding: 12, alignItems: 'center', backgroundColor: '#FFFFFF' },
+  btnCancelarTexto: { color: '#1A5C5C', fontSize: 13, fontWeight: '500' },
   btnResena: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1.5, borderColor: Colors.primary, borderRadius: 50, paddingVertical: 12, marginTop: 12 },
   btnResenaText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
   resenaEnviada: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, backgroundColor: Colors.accentLight, borderRadius: 50, paddingVertical: 12, marginTop: 12 },

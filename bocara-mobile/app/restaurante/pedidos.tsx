@@ -17,15 +17,15 @@ if (Platform.OS !== 'web') {
   } catch {}
 }
 
-const ESTADOS = ['todos', 'confirmado', 'en_preparacion', 'listo', 'recogido', 'cancelado'];
+const ESTADOS = ['todos', 'confirmado', 'en_preparacion', 'listo', 'completado', 'cancelado'];
 const ESTADO_LABELS: Record<string, string> = {
   confirmado: 'Confirmado', en_preparacion: 'En preparación',
-  listo: 'Listo', recogido: 'Recogido', cancelado: 'Cancelado', pendiente: 'Pendiente',
+  listo: 'Listo', completado: 'Recogido', recogido: 'Recogido', cancelado: 'Cancelado', pendiente: 'Pendiente',
 };
 const ESTADO_COLORS: Record<string, string> = {
   pendiente: Colors.textLight, confirmado: Colors.orange,
   en_preparacion: '#7C3AED', listo: Colors.green,
-  recogido: Colors.textSecondary, cancelado: Colors.error,
+  completado: Colors.textSecondary, recogido: Colors.textSecondary, cancelado: Colors.error,
 };
 
 function QRScannerModal({ visible, onClose, onScanned }: {
@@ -152,7 +152,7 @@ export default function PedidosRestauranteScreen() {
     if (!pedido) {
       return Alert.alert('No encontrado', `No se encontró ningún pedido con el código "${normalizado}"`);
     }
-    if (pedido.estado === 'recogido') {
+    if (pedido.estado === 'completado' || pedido.estado === 'recogido') {
       return Alert.alert('Ya recogido', `Este pedido ya fue marcado como recogido.`);
     }
     if (pedido.estado === 'cancelado') {
@@ -164,7 +164,7 @@ export default function PedidosRestauranteScreen() {
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar entrega', onPress: () => cambiarEstado(pedido.id, 'recogido'),
+          text: 'Confirmar entrega', onPress: () => cambiarEstado(pedido.id, 'completado'),
         },
       ]
     );
@@ -253,7 +253,7 @@ export default function PedidosRestauranteScreen() {
               </View>
             )}
             {p.estado === 'listo' && (
-              <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.brown }]} onPress={() => cambiarEstado(p.id, 'recogido')}>
+              <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.brown }]} onPress={() => cambiarEstado(p.id, 'completado')}>
                 <Text style={s.btnListoText}>✓ Confirmar recogida</Text>
               </TouchableOpacity>
             )}
