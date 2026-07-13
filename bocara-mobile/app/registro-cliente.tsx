@@ -26,6 +26,15 @@ function validateEmail(value: string): string | null {
   return null;
 }
 
+function validatePassword(value: string): string | null {
+  if (!value) return 'La contraseña es requerida';
+  if (value.length < 6) return 'La contraseña debe tener al menos 6 caracteres';
+  if (!/[A-Z]/.test(value)) return 'La contraseña debe incluir al menos una letra mayúscula';
+  if (!/[a-z]/.test(value)) return 'La contraseña debe incluir al menos una letra minúscula';
+  if (!/[0-9]/.test(value)) return 'La contraseña debe incluir al menos un número';
+  return null;
+}
+
 export default function RegistroClienteScreen() {
   const [form, setForm] = useState({ nombre: '', apellido: '', email: '', password: '', confirmPassword: '', telefono: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -50,11 +59,8 @@ export default function RegistroClienteScreen() {
       if (phoneErr) next.telefono = phoneErr;
     }
 
-    if (!form.password) {
-      next.password = 'La contraseña es requerida';
-    } else if (form.password.length < 6) {
-      next.password = 'La contraseña debe tener al menos 6 caracteres';
-    }
+    const passwordErr = validatePassword(form.password);
+    if (passwordErr) next.password = passwordErr;
 
     if (!form.confirmPassword) {
       next.confirmPassword = 'Confirma tu contraseña';
@@ -97,7 +103,7 @@ export default function RegistroClienteScreen() {
     { key: 'apellido', label: 'Apellido', placeholder: 'García' },
     { key: 'email', label: 'Correo electrónico *', placeholder: 'juan@dominio.com', keyboard: 'email-address' as any },
     { key: 'telefono', label: 'Teléfono', placeholder: '55555555', keyboard: 'phone-pad' as any },
-    { key: 'password', label: 'Contraseña *', placeholder: 'Mínimo 6 caracteres', secure: true },
+    { key: 'password', label: 'Contraseña *', placeholder: 'Mínimo 6, con mayúscula, minúscula y número', secure: true },
     { key: 'confirmPassword', label: 'Confirmar contraseña *', placeholder: 'Repite tu contraseña', secure: true },
   ];
 
@@ -124,7 +130,7 @@ export default function RegistroClienteScreen() {
               placeholder={placeholder}
               placeholderTextColor={Colors.textLight}
               keyboardType={keyboard || 'default'}
-              autoCapitalize={key === 'email' ? 'none' : 'words'}
+              autoCapitalize={key === 'email' || secure ? 'none' : 'words'}
               secureTextEntry={secure}
               value={(form as any)[key]}
               onChangeText={set(key)}
