@@ -109,15 +109,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUsuario(u);
   }
 
-  async function logout() {
+ async function logout() {
     try {
       await Promise.all([
         AsyncStorage.removeItem('bocara_token'),
         AsyncStorage.removeItem(PERFIL_KEY),
       ]);
+    } catch (error) {
+      console.warn('logout: fallo al limpiar AsyncStorage', error);
     } finally {
       setToken(null);
       setUsuario(null);
+
+      if (typeof window !== 'undefined' && typeof window.location !== 'undefined') {
+        window.location.replace('/login');
+      }
     }
   }
 
