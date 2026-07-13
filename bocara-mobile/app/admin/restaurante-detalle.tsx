@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, Alert, Modal, TextInput,
-  Image,
+  Image, Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { adminAPI, negociosAPI } from '@/src/services/api';
@@ -170,6 +170,23 @@ export default function RestauranteDetalleScreen() {
               <Row label="DPI" val={negocio.dpi} />
             </Section>
 
+            <Section title="Ubicación">
+              {negocio.latitud && negocio.longitud ? (
+                <>
+                  <Row label="Latitud" val={negocio.latitud} />
+                  <Row label="Longitud" val={negocio.longitud} />
+                  <TouchableOpacity
+                    style={s.mapBtn}
+                    onPress={() => Linking.openURL(`https://www.google.com/maps?q=${negocio.latitud},${negocio.longitud}`)}
+                  >
+                    <Text style={s.mapBtnText}>📍 Ver en Google Maps</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <Text style={s.noData}>Sin coordenadas registradas</Text>
+              )}
+            </Section>
+
             <Section title="Descripción">
               <Text style={s.desc}>{negocio.descripcion || 'Sin descripción'}</Text>
             </Section>
@@ -180,6 +197,16 @@ export default function RestauranteDetalleScreen() {
               <Row label="Estado" val={estadoLabel} valColor={estadoColor} />
               {negocio.motivo_rechazo && <Row label="Motivo rechazo" val={negocio.motivo_rechazo} valColor="#F87171" />}
             </Section>
+
+            {negocio.imagen_url ? (
+              <Section title="Foto del negocio">
+                <Image source={{ uri: negocio.imagen_url }} style={s.dpiImg} resizeMode="cover" />
+              </Section>
+            ) : (
+              <Section title="Foto del negocio">
+                <Text style={s.noData}>Sin foto del negocio cargada</Text>
+              </Section>
+            )}
 
             {dpiUrl ? (
               <Section title="Foto DPI">
@@ -333,6 +360,8 @@ const s = StyleSheet.create({
   desc:         { fontSize: 13, color: '#94A3B8', padding: 12, lineHeight: 20 },
   noData:       { fontSize: 13, color: '#475569', padding: 12 },
   dpiImg:       { width: '100%', height: 200, borderRadius: 12 },
+  mapBtn:       { margin: 12, marginTop: 4, borderWidth: 1.5, borderColor: '#2563EB', borderRadius: 10, padding: 12, alignItems: 'center' },
+  mapBtnText:   { color: '#60A5FA', fontWeight: '700', fontSize: 13 },
   emptySection: { alignItems: 'center', paddingVertical: 40, gap: 10 },
   emptyText:    { fontSize: 14, color: '#64748B', textAlign: 'center' },
   actions:      { flexDirection: 'row', gap: 10, padding: 16, backgroundColor: DARK, borderTopWidth: 1, borderTopColor: '#334155' },
