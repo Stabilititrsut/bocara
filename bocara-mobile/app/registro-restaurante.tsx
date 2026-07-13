@@ -31,6 +31,19 @@ const ZONAS_GT = [
   'Zona 9','Zona 10','Zona 11','Zona 12','Zona 13','Zona 14','Zona 15','Mixco','Villa Nueva',
 ];
 
+const PASSWORD_MIN_LENGTH = 8;
+
+function validatePassword(password: string): string | null {
+  if (!password) return 'La contraseña es obligatoria';
+  if (password.length < PASSWORD_MIN_LENGTH)
+    return `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`;
+  if (!/[a-z]/.test(password)) return 'Debe incluir al menos una letra minúscula';
+  if (!/[A-Z]/.test(password)) return 'Debe incluir al menos una letra mayúscula';
+  if (!/[0-9]/.test(password)) return 'Debe incluir al menos un número';
+  if (!/[^A-Za-z0-9]/.test(password)) return 'Debe incluir al menos un símbolo especial (ej. !@#$%)';
+  return null;
+}
+
 type Step = 1 | 2 | 3 | 4;
 
 type FormState = {
@@ -178,8 +191,8 @@ export default function RegistroRestauranteScreen() {
       if (!form.apellido.trim()) e.apellido  = 'El apellido es obligatorio';
       if (!form.email.trim())    e.email     = 'El correo electrónico es obligatorio';
       else if (!/\S+@\S+\.\S+/.test(form.email)) e.email = 'Ingresa un correo electrónico válido';
-      if (!form.password)        e.password  = 'La contraseña es obligatoria';
-      else if (form.password.length < 6) e.password = 'La contraseña debe tener al menos 6 caracteres';
+      const passwordErr = validatePassword(form.password);
+      if (passwordErr) e.password = passwordErr;
       if (!form.confirmPassword) e.confirmPassword = 'Confirma tu contraseña';
       else if (form.password !== form.confirmPassword) e.confirmPassword = 'Las contraseñas no coinciden';
       if (!form.telefono.trim()) e.telefono  = 'El teléfono es obligatorio';
@@ -405,7 +418,7 @@ export default function RegistroRestauranteScreen() {
             <Field label="Nombre *"              value={form.nombre}          onChange={set('nombre')}          placeholder="María"              error={errors.nombre} />
             <Field label="Apellido *"            value={form.apellido}        onChange={set('apellido')}        placeholder="González"           error={errors.apellido} />
             <Field label="Correo electrónico *"  value={form.email}           onChange={set('email')}           placeholder="maria@negocio.com"  keyboard="email-address" lower error={errors.email} />
-            <Field label="Contraseña *"          value={form.password}        onChange={set('password')}        placeholder="Mínimo 6 caracteres" secure error={errors.password} />
+            <Field label="Contraseña *"          value={form.password}        onChange={set('password')}        placeholder="Mínimo 8 caracteres" secure error={errors.password} hint="Debe incluir mayúscula, minúscula, número y símbolo (ej. !@#$%)" />
             <Field label="Confirmar contraseña *" value={form.confirmPassword} onChange={set('confirmPassword')} placeholder="Repite tu contraseña" secure error={errors.confirmPassword} />
             <Field label="Teléfono *"            value={form.telefono}        onChange={set('telefono')}        placeholder="5555-1234"          keyboard="phone-pad" error={errors.telefono} />
           </>
@@ -640,10 +653,10 @@ export default function RegistroRestauranteScreen() {
 }
 
 // ── Field helper ──────────────────────────────────────────────────────────────
-function Field({ label, value, onChange, placeholder, multi, keyboard, secure, lower, error, highlighted }: {
+function Field({ label, value, onChange, placeholder, multi, keyboard, secure, lower, error, highlighted, hint }: {
   label: string; value: string; onChange: (v: string) => void;
   placeholder: string; multi?: boolean; keyboard?: any;
-  secure?: boolean; lower?: boolean; error?: string; highlighted?: boolean;
+  secure?: boolean; lower?: boolean; error?: string; highlighted?: boolean; hint?: string;
 }) {
   return (
     <View>
@@ -655,6 +668,7 @@ function Field({ label, value, onChange, placeholder, multi, keyboard, secure, l
         secureTextEntry={secure} value={value} onChangeText={onChange}
         multiline={multi} textAlignVertical={multi ? 'top' : 'center'}
       />
+      {hint && !error ? <Text style={sf.hint}>{hint}</Text> : null}
       {error ? <Text style={sf.error}>{error}</Text> : null}
     </View>
   );
@@ -666,6 +680,7 @@ const sf = StyleSheet.create({
   inputError:       { borderColor: Colors.error },
   inputHighlighted: { borderColor: '#F59E0B', borderWidth: 2 },
   error:            { fontSize: 12, color: Colors.error, marginBottom: 12, marginTop: 2 },
+  hint:             { fontSize: 11, color: Colors.textLight, marginBottom: 12, marginTop: 2 },
 });
 
 const s = StyleSheet.create({
@@ -772,3 +787,4 @@ const sc = StyleSheet.create({
   btn:          { backgroundColor: Colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', width: '100%', marginBottom: 20 },
   btnText:      { color: Colors.white, fontWeight: '900', fontSize: 16 },
 });
+
