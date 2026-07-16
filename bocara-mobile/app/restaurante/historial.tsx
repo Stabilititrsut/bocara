@@ -48,7 +48,7 @@ export default function HistorialRestauranteScreen() {
   const cargar = useCallback(async () => {
     try {
       const res = await pedidosAPI.restaurante();
-      const completados = (res.data || []).filter((p: any) => p.estado === 'recogido');
+      const completados = (res.data || []).filter((p: any) => p.estado === 'completado' || p.estado === 'recogido');
       setPedidos(completados);
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
