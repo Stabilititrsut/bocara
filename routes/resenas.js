@@ -61,7 +61,7 @@ router.post('/', authMiddleware, async (req, res) => {
     .eq('id', pedido_id)
     .eq('usuario_id', req.usuario.id)
     .eq('negocio_id', negocio_id)
-    .eq('estado', 'recogido')
+    .in('estado', ['completado', 'recogido'])
     .single();
 
   if (!pedido)
