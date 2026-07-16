@@ -101,7 +101,7 @@ router.get('/:id/detalle', async (req, res) => {
   if (bolsas.length > 0) {
     const ids = bolsas.map((b) => b.id);
     const { data: peds } = await supabase
-      .from('pedidos').select('bolsa_id').in('bolsa_id', ids).eq('estado', 'recogido');
+      .from('pedidos').select('bolsa_id').in('bolsa_id', ids).in('estado', ['completado', 'recogido']);
     for (const p of (peds || [])) {
       vecesPedidoMap[p.bolsa_id] = (vecesPedidoMap[p.bolsa_id] || 0) + 1;
     }
@@ -124,7 +124,7 @@ router.get('/:id/impacto', async (req, res) => {
       .from('pedidos')
       .select('precio_bolsa, bolsas!bolsa_id(peso_kg)')
       .eq('negocio_id', req.params.id)
-      .eq('estado', 'recogido');
+      .in('estado', ['completado', 'recogido']);
     if (error) return res.status(500).json({ error: error.message });
     const rows = pedidos || [];
     const pedidos_completados = rows.length;
@@ -214,7 +214,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
     .from('pedidos')
     .select('id,total,precio_bolsa,comision_bocara,monto_neto_restaurante,estado,created_at')
     .eq('negocio_id', negocio.id)
-    .eq('estado', 'recogido')
+    .in('estado', ['completado', 'recogido'])
     .gte('created_at', desde.toISOString());
 
   const ventas = pedidos || [];
@@ -441,3 +441,4 @@ router.get('/mi-negocio/cambios-pendientes', authMiddleware, async (req, res) =>
 });
 
 module.exports = router;
+
