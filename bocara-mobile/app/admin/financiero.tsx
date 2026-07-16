@@ -48,7 +48,7 @@ export default function AdminFinancieroScreen() {
       ]);
       setDatos(finRes.data);
       // Solo pedidos realmente completados (recogidos por el cliente)
-      setPedidos((pedRes.data || []).filter((p: any) => p.estado === 'recogido'));
+      setPedidos((pedRes.data || []).filter((p: any) => p.estado === 'completado' || p.estado === 'recogido'));
     } catch {} finally { setLoading(false); setRefreshing(false); }
   }, [periodo]);
 
