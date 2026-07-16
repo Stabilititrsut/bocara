@@ -33,7 +33,7 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
     negocios_activos: negocios.filter(n => n.activo !== false).length,
     negocios_sin_verificar: negocios_pendientes,
     total_pedidos: pedidos.length,
-    pedidos_completados: pedidos.filter(p => p.estado === 'recogido').length,
+    pedidos_completados: pedidos.filter(p => p.estado === 'completado' || p.estado === 'recogido').length,
     ingresos_totales: ingresos,
     comision_generada: comision,
   });
@@ -277,7 +277,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   let query = supabase
     .from('pedidos')
     .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,negocios(id,nombre,zona)')
-    .eq('estado', 'recogido');
+    .in('estado', ['completado', 'recogido']);
 
   if (periodo === '7d') {
     const desde = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -289,7 +289,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id').eq('estado', 'recogido');
+    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id').in('estado', ['completado', 'recogido']);
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
@@ -428,7 +428,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   const { data: pedidos } = await supabase
     .from('pedidos')
     .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
-    .eq('estado', 'recogido')
+    .in('estado', ['completado', 'recogido'])
     .is('liquidacion_id', null);
 
   // Liquidaciones ya pagadas
@@ -489,7 +489,7 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     .from('pedidos')
     .select('id,precio_bolsa,total,monto_neto_restaurante')
     .eq('negocio_id', restaurante_id)
-    .eq('estado', 'recogido')
+    .in('estado', ['completado', 'recogido'])
     .is('liquidacion_id', null);
 
   const bruto = (pedidosPend || []).reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
