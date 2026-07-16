@@ -6,6 +6,10 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarEmail, templateOlvidoContrasena, templateBienvenidaRestaurante, templateVerificacionOTP } = require('../services/email');
 const { geocodeAddress } = require('../utils/geo');
+const {
+  registroLimiter, loginLimiter, otpSendLimiter,
+  otpVerifyLimiter, setupLimiter, checkEmailLimiter,
+} = require('../middleware/rateLimit');
 const router = express.Router();
 
 async function generarCodigoReferido(usuarioId) {
@@ -55,6 +59,19 @@ async function procesarReferido(nuevoUsuarioId, codigoReferidoDe) {
   }
 }
 
+// Compara secretos en tiempo constante para evitar timing attacks
+function compararSecreto(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+if (!process.env.ADMIN_SETUP_SECRET) {
+  console.warn('[AUTH] ADMIN_SETUP_SECRET no está configurado — /setup-demo y /setup-admin quedarán deshabilitados hasta configurarlo.');
+}
+
 // Twilio client — solo si las vars de entorno están configuradas
 const twilio = (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN)
   ? require('twilio')(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
@@ -77,7 +94,7 @@ function cleanExpiredOtps() {
 }
 
 // POST /api/auth/registro
-router.post('/registro', async (req, res) => {
+router.post('/registro', registroLimiter, async (req, res) => {
   const {
   email, password, nombre, apellido, rol, telefono,
   nombre_negocio, direccion_negocio, categoria, zona, ciudad, descripcion,
@@ -191,7 +208,7 @@ router.post('/registro', async (req, res) => {
 });
 
 // POST /api/auth/registro-completo — crea cuenta de cliente después de verificar email con Supabase OTP
-router.post('/registro-completo', async (req, res) => {
+router.post('/registro-completo', registroLimiter, async (req, res) => {
   const { email, password, nombre, apellido, telefono, supabase_access_token } = req.body;
   if (!email || !password || !nombre || !supabase_access_token)
     return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -244,7 +261,7 @@ router.post('/registro-completo', async (req, res) => {
 });
 
 // POST /api/auth/enviar-otp-email — genera y envía código OTP de 6 dígitos con branding Bocara
-router.post('/enviar-otp-email', async (req, res) => {
+router.post('/enviar-otp-email', otpSendLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email requerido' });
   const emailNorm = email.toLowerCase().trim();
@@ -271,7 +288,7 @@ router.post('/enviar-otp-email', async (req, res) => {
 });
 
 // POST /api/auth/verificar-otp-email — valida OTP y crea la cuenta cliente
-router.post('/verificar-otp-email', async (req, res) => {
+router.post('/verificar-otp-email', otpVerifyLimiter, async (req, res) => {
   const { email, codigo, nombre, apellido, password, telefono } = req.body;
   if (!email || !codigo || !nombre || !password)
     return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -319,7 +336,7 @@ router.post('/verificar-otp-email', async (req, res) => {
 });
 
 // POST /api/auth/send-phone-otp — envía SMS de verificación vía Twilio
-router.post('/send-phone-otp', async (req, res) => {
+router.post('/send-phone-otp', otpSendLimiter, async (req, res) => {
   const { telefono } = req.body;
   if (!telefono) return res.status(400).json({ error: 'Teléfono requerido' });
 
@@ -362,7 +379,7 @@ router.post('/send-phone-otp', async (req, res) => {
 });
 
 // POST /api/auth/verify-phone-otp — verifica código SMS y crea/busca usuario
-router.post('/verify-phone-otp', async (req, res) => {
+router.post('/verify-phone-otp', otpVerifyLimiter, async (req, res) => {
   const { telefono, codigo, nombre, apellido } = req.body;
   if (!telefono || !codigo) return res.status(400).json({ error: 'Teléfono y código requeridos' });
 
@@ -479,7 +496,7 @@ router.post('/oauth-complete', async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'email y password requeridos' });
   try {
@@ -535,7 +552,7 @@ router.get('/perfil', authMiddleware, async (req, res) => {
         .from('pedidos')
         .select('bolsas(precio_original,precio_descuento)')
         .eq('usuario_id', req.usuario.id)
-        .eq('estado', 'recogido');
+        .in('estado', ['completado', 'recogido']);
       if (pedidos?.length) {
         total_bolsas_salvadas = pedidos.length;
         total_ahorrado = pedidos.reduce((s, p) => s + ((p.bolsas?.precio_original || 0) - (p.bolsas?.precio_descuento || 0)), 0);
@@ -577,10 +594,12 @@ router.put('/perfil', authMiddleware, async (req, res) => {
 });
 
 // POST /api/auth/setup-demo — crea o resetea el usuario demo@bocara.gt (rol: cliente)
-router.post('/setup-demo', async (req, res) => {
+router.post('/setup-demo', setupLimiter, async (req, res) => {
   const { secret } = req.body;
-  const expectedSecret = process.env.ADMIN_SETUP_SECRET || 'bocara-setup-2025';
-  if (secret !== expectedSecret) return res.status(403).json({ error: 'Secret incorrecto' });
+  if (!process.env.ADMIN_SETUP_SECRET)
+    return res.status(503).json({ error: 'Endpoint deshabilitado: ADMIN_SETUP_SECRET no está configurado en el servidor.' });
+  if (!compararSecreto(secret, process.env.ADMIN_SETUP_SECRET))
+    return res.status(403).json({ error: 'Secret incorrecto' });
 
   const demoEmail = 'demo@bocara.gt';
   const demoPassword = 'Demo1234!';
@@ -617,14 +636,17 @@ router.post('/setup-demo', async (req, res) => {
 });
 
 // POST /api/auth/setup-admin
-router.post('/setup-admin', async (req, res) => {
+router.post('/setup-admin', setupLimiter, async (req, res) => {
   const { secret, email, password } = req.body;
-  const expectedSecret = process.env.ADMIN_SETUP_SECRET || 'bocara-setup-2025';
-  if (secret !== expectedSecret) {
+  if (!process.env.ADMIN_SETUP_SECRET)
+    return res.status(503).json({ error: 'Endpoint deshabilitado: ADMIN_SETUP_SECRET no está configurado en el servidor.' });
+  if (!compararSecreto(secret, process.env.ADMIN_SETUP_SECRET)) {
     return res.status(403).json({ error: 'Secret incorrecto' });
   }
-  const adminEmail = (email || 'admin@bocarafood.com').toLowerCase().trim();
-  const adminPassword = password || 'Admin1234';
+  if (!email || !password)
+    return res.status(400).json({ error: 'email y password son requeridos' });
+  const adminEmail = email.toLowerCase().trim();
+  const adminPassword = password;
 
   try {
     const hash = await bcrypt.hash(adminPassword, 10);
@@ -659,7 +681,7 @@ router.post('/setup-admin', async (req, res) => {
 });
 
 // GET /api/auth/check-email?email=... — verifica si un correo ya está registrado
-router.get('/check-email', async (req, res) => {
+router.get('/check-email', checkEmailLimiter, async (req, res) => {
   const { email } = req.query;
   if (!email) return res.status(400).json({ error: 'email requerido' });
   const { data } = await supabase
@@ -671,7 +693,7 @@ router.get('/check-email', async (req, res) => {
 });
 
 // POST /api/auth/forgot-password — genera y envía código OTP por email
-router.post('/forgot-password', async (req, res) => {
+router.post('/forgot-password', otpSendLimiter, async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'El correo es requerido' });
   const emailLower = email.toLowerCase().trim();
@@ -701,7 +723,7 @@ router.post('/forgot-password', async (req, res) => {
 });
 
 // POST /api/auth/reset-password — verifica código OTP y actualiza contraseña
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', otpVerifyLimiter, async (req, res) => {
   const { email, codigo, new_password } = req.body;
   if (!email || !codigo || !new_password)
     return res.status(400).json({ error: 'Faltan campos requeridos' });
