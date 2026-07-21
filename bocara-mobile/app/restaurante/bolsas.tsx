@@ -164,6 +164,19 @@ export default function BolsasRestauranteScreen() {
     Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Error', msg);
   }
 
+  function avisar(msg: string) {
+    Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Listo', msg);
+  }
+
+  function mensajeGuardado(data: any, esEdicion: boolean) {
+    if (data?.estado_aprobacion === 'pendiente') {
+      return esEdicion
+        ? 'Cambios guardados. Tu publicación fue enviada a revisión y no será visible hasta que el administrador la apruebe.'
+        : 'Publicación creada y enviada a revisión del administrador.';
+    }
+    return esEdicion ? 'Publicación actualizada correctamente.' : 'Publicación creada correctamente.';
+  }
+
   async function guardar() {
     if (saving) return;
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
@@ -223,12 +236,14 @@ export default function BolsasRestauranteScreen() {
     }
     if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
 
+    const esEdicion = !!editId;
     try {
-      const res = editId
+      const res = esEdicion
         ? await bolsasAPI.actualizar(editId, payload)
         : await bolsasAPI.crear(payload);
       setModal(false);
       cargar();
+      avisar(mensajeGuardado(res.data, esEdicion));
     } catch (e: any) {
       alertar(e.message || 'Error al guardar');
     } finally {
@@ -348,7 +363,7 @@ export default function BolsasRestauranteScreen() {
             <View style={s.cardActions}>
               <Switch
                 value={!!b.activo}
-                onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar)}
+                onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'))}
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />

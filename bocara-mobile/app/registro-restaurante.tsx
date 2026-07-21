@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Alert,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/src/context/AuthContext';
 import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
@@ -30,6 +31,55 @@ const ZONAS_GT = [
   'Zona 1','Zona 2','Zona 3','Zona 4','Zona 5','Zona 6','Zona 7','Zona 8',
   'Zona 9','Zona 10','Zona 11','Zona 12','Zona 13','Zona 14','Zona 15','Mixco','Villa Nueva',
 ];
+
+const DRAFT_KEY = 'bocara_registro_restaurante_draft';
+
+// Longitud de dígitos aceptada por tipo de cuenta (bancos GT: 8-20 dígitos según tipo)
+const LONGITUD_CUENTA: Record<string, { min: number; max: number }> = {
+  Monetaria: { min: 10, max: 16 },
+  Ahorro: { min: 10, max: 16 },
+  Empresarial: { min: 10, max: 20 },
+};
+
+function validarNumeroCuenta(numero: string, tipoCuenta: string): string | null {
+  const limpio = numero.replace(/[\s-]/g, '');
+  if (!limpio) return 'El número de cuenta es obligatorio';
+  if (!/^\d+$/.test(limpio)) return 'El número de cuenta solo debe contener dígitos';
+  const rango = LONGITUD_CUENTA[tipoCuenta] || LONGITUD_CUENTA.Monetaria;
+  if (limpio.length < rango.min || limpio.length > rango.max) {
+    return `Para cuenta ${tipoCuenta.toLowerCase()} debe tener entre ${rango.min} y ${rango.max} dígitos (ingresaste ${limpio.length})`;
+  }
+  return null;
+}
+
+// Intenta resolver la "Zona" a partir de coordenadas GPS usando geocodificación inversa
+async function reverseGeocodeZona(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1&zoom=16`,
+      { headers: { 'Accept-Language': 'es' } }
+    );
+    const data = await res.json();
+    const addr = data?.address || {};
+    const candidatos: string[] = [
+      addr.suburb, addr.city_district, addr.borough, addr.quarter,
+      addr.neighbourhood, addr.city, addr.town, addr.village,
+    ].filter(Boolean);
+    for (const c of candidatos) {
+      const norm = String(c).toLowerCase().trim();
+      const m = norm.match(/zona\s*0*(\d{1,2})/);
+      if (m) {
+        const z = `Zona ${parseInt(m[1], 10)}`;
+        if (ZONAS_GT.includes(z)) return z;
+      }
+      const directo = ZONAS_GT.find(z => z.toLowerCase() === norm);
+      if (directo) return directo;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 const PASSWORD_MIN_LENGTH = 8;
 
@@ -76,6 +126,7 @@ export default function RegistroRestauranteScreen() {
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
+  const draftCargado = useRef(false);
 
   const { registroRestaurante } = useAuth();
   const router = useRouter();
@@ -95,6 +146,28 @@ export default function RegistroRestauranteScreen() {
       })
       .catch(() => {});
   }, []);
+
+  // ── Restaurar borrador guardado localmente (si el usuario salió sin terminar) ──
+  useEffect(() => {
+    AsyncStorage.getItem(DRAFT_KEY)
+      .then(raw => {
+        if (!raw) return;
+        const draft = JSON.parse(raw);
+        if (draft?.form) {
+          setForm(f => ({ ...f, ...draft.form, password: '', confirmPassword: '' }));
+        }
+        if (draft?.step) setStep(draft.step);
+      })
+      .catch(() => {})
+      .finally(() => { draftCargado.current = true; });
+  }, []);
+
+  // ── Guardar borrador ante cada cambio (no persiste password ni fotos base64) ──
+  useEffect(() => {
+    if (!draftCargado.current || submitted) return;
+    const { password, confirmPassword, dpi_foto_base64, foto_negocio_base64, ...persistible } = form;
+    AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ form: persistible, step })).catch(() => {});
+  }, [form, step, submitted]);
 
   const set = (k: keyof FormState) => (v: string) => {
     setForm(f => ({ ...f, [k]: v }));
@@ -145,6 +218,15 @@ export default function RegistroRestauranteScreen() {
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude, longitude } = pos.coords;
       setForm(f => ({ ...f, latitud: String(latitude), longitud: String(longitude) }));
+
+      const zonaDetectada = await reverseGeocodeZona(latitude, longitude);
+      if (zonaDetectada) {
+        setForm(f => ({ ...f, zona: zonaDetectada }));
+        setErrors(e => ({ ...e, zona: '' }));
+        Alert.alert('📍 Ubicación detectada', `Zona seleccionada automáticamente: ${zonaDetectada}`);
+      } else {
+        Alert.alert('📍 Ubicación capturada', 'No pudimos detectar la zona automáticamente. Selecciónala manualmente.');
+      }
     } catch {
       Alert.alert('Error de GPS', 'No se pudo obtener la ubicación. Puedes agregarla manualmente después.');
     } finally {
@@ -218,7 +300,8 @@ export default function RegistroRestauranteScreen() {
       if (!form.banco)                    e.banco            = 'Selecciona un banco';
       else if (form.banco === 'Otro' && !form.banco_otro.trim())
         e.banco_otro = 'Escribe el nombre de tu banco';
-      if (!form.numero_cuenta.trim())     e.numero_cuenta    = 'El número de cuenta es obligatorio';
+      const cuentaErr = validarNumeroCuenta(form.numero_cuenta, form.tipo_cuenta);
+      if (cuentaErr) e.numero_cuenta = cuentaErr;
       if (!form.titular_cuenta.trim())    e.titular_cuenta   = 'El titular de la cuenta es obligatorio';
     }
     if (step === 4) {
@@ -296,6 +379,7 @@ export default function RegistroRestauranteScreen() {
           try { await negociosAPI.actualizar(negocioId, updates); } catch {}
         }
       }
+      AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
       setSubmitted(true);
     } catch (e: any) {
       setSubmitError(e.message || 'Ocurrió un error inesperado. Intenta de nuevo.');

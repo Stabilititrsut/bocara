@@ -149,12 +149,22 @@ router.get('/:id', async (req, res) => {
     .eq('id', req.params.id)
     .single();
   if (error || !negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
-  const { data: bolsas } = await supabase
+  let { data: bolsas, error: bErr } = await supabase
     .from('bolsas')
     .select('*')
     .eq('negocio_id', req.params.id)
     .eq('activo', true)
-    .gt('cantidad_disponible', 0);
+    .gt('cantidad_disponible', 0)
+    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
+  if (bErr) {
+    const r = await supabase
+      .from('bolsas')
+      .select('*')
+      .eq('negocio_id', req.params.id)
+      .eq('activo', true)
+      .gt('cantidad_disponible', 0);
+    bolsas = r.data;
+  }
   res.json({ ...negocio, bolsas: bolsas || [] });
 });
 

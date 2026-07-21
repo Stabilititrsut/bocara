@@ -12,6 +12,19 @@ async function getNegocioIdParaUsuario(usuarioId) {
   return data?.id || null;
 }
 
+// Detecta si un error de Supabase/PostgREST es por una columna que no existe en la
+// tabla real, para poder dejar de enviarla y reintentar SIN inventar el campo.
+function extraerColumnaFaltante(error) {
+  if (!error) return null;
+  // PostgREST: "Could not find the 'peso_kg' column of 'bolsas' in the schema cache"
+  let m = /Could not find the '([a-zA-Z0-9_]+)' column/.exec(error.message || '');
+  if (m) return m[1];
+  // Postgres: column "peso_kg" of relation "bolsas" does not exist (42703)
+  m = /column "([a-zA-Z0-9_]+)" of relation/.exec(error.message || '');
+  if (m) return m[1];
+  return null;
+}
+
 // GET /api/bolsas — listar bolsas disponibles con distancia opcional
 router.get('/', async (req, res) => {
   const { tipo, negocio_id, zona, categoria, mi_negocio, lat, lng, max_distancia } = req.query;
@@ -242,7 +255,10 @@ router.post('/', authMiddleware, async (req, res) => {
     .single();
 
   if (error) {
-    // Fallback: columnas nuevas pueden no existir aún
+    // Fallback: solo omite las columnas de metadata más recientes (fecha_caducidad,
+    // categoria_menu) que pueden faltar en despliegues antiguos. peso_kg y los
+    // flags es_tiempo_limitado/es_promocion/es_descuento se preservan siempre:
+    // son los que definen el tipo real de la publicación y no deben perderse.
     const r = await supabase
       .from('bolsas')
       .insert([{
@@ -254,8 +270,15 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_inicio: hora_recogida_inicio || '18:00',
         hora_recogida_fin: hora_recogida_fin || '20:00',
         permite_envio: permite_envio || false,
+        peso_kg: pesoKg,
         imagen_url: imagen_url || null,
         estado_aprobacion: estadoAprobacion,
+        es_tiempo_limitado: es_tiempo_limitado ?? false,
+        es_promocion: es_promocion ?? false,
+        es_descuento: es_descuento ?? false,
+        es_destacado: es_destacado ?? false,
+        es_mas_vendido: es_mas_vendido ?? false,
+        es_precio_bajo: es_precio_bajo ?? false,
       }])
       .select()
       .single();
@@ -300,11 +323,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
+  // Un cambio que solo toca "activo" es un toggle de visibilidad del restaurante,
+  // no una edición de contenido — no debe mandar la publicación de vuelta a revisión.
+  const soloVisibilidad = Object.keys(updates).length > 0 &&
+    Object.keys(updates).every(k => k === 'activo');
+
   // BUG 2: Restaurantes nunca pueden aprobar directamente — strip any estado_aprobacion del body
   if (req.usuario.rol !== 'admin') {
     delete updates.estado_aprobacion;
-    // Si editó una bolsa aprobada o rechazada, vuelve a revisión del admin
-    if (bolsa.estado_aprobacion === 'aprobado' || bolsa.estado_aprobacion === 'rechazado') {
+    // Si editó el contenido de una bolsa aprobada o rechazada, vuelve a revisión del admin
+    if (!soloVisibilidad && (bolsa.estado_aprobacion === 'aprobado' || bolsa.estado_aprobacion === 'rechazado')) {
       updates.estado_aprobacion = 'pendiente';
       updates.motivo_rechazo = null;
     }
@@ -312,15 +340,24 @@ router.put('/:id', authMiddleware, async (req, res) => {
     updates.estado_aprobacion = req.body.estado_aprobacion;
   }
 
-  let { data, error } = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();
-  if (error) {
-    // Fallback: columna estado_aprobacion puede no existir aún — reintentar sin ella
-    delete updates.estado_aprobacion;
-    delete updates.motivo_rechazo;
+  // Reintenta quitando, una por una, las columnas que el propio error de la BD
+  // reporte como inexistentes — nunca se inventa/crea el campo, solo se deja de
+  // enviar el que realmente falta y se sigue trabajando con los campos reales.
+  let data, error;
+  const columnasOmitidas = [];
+  for (let intento = 0; intento <= campos.length; intento++) {
     const r = await supabase.from('bolsas').update(updates).eq('id', req.params.id).select().single();
     data = r.data; error = r.error;
+    if (!error) break;
+    const columnaFaltante = extraerColumnaFaltante(error);
+    if (!columnaFaltante || !(columnaFaltante in updates)) break;
+    delete updates[columnaFaltante];
+    columnasOmitidas.push(columnaFaltante);
   }
   if (error) return res.status(400).json({ error: error.message });
+  if (columnasOmitidas.length) {
+    console.warn('[PUT /bolsas/:id] columnas omitidas por no existir en la BD:', columnasOmitidas.join(', '));
+  }
   res.json(data);
 });
 

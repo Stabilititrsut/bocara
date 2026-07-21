@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, SafeAreaView, ActivityIndicator, Platform,
+  StyleSheet, SafeAreaView, ActivityIndicator, Platform, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
+import { useFocusEffect } from 'expo-router';
 import { negociosAPI, uploadsAPI, adminAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
@@ -30,6 +31,7 @@ export default function PerfilRestauranteScreen() {
   const [dpiError, setDpiError] = useState('');
   const [geoLoading, setGeoLoading] = useState(false);
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
+  const [refrescando, setRefrescando] = useState(false);
   const set = (k: string) => (v: string) => {
     setForm((f: any) => ({ ...f, [k]: v }));
     setCamposPendientes(prev => {
@@ -44,16 +46,16 @@ export default function PerfilRestauranteScreen() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  useEffect(() => {
-    // Cargar solicitudes de cambio pendientes para mostrar su estado
+  const cargarSolicitud = useCallback(() => {
+    // Cargar solicitud de cambios más reciente para mostrar su estado real (pendiente/aprobado/rechazado)
     negociosAPI.cambiosPendientes().then(res => {
       const lista = res.data || [];
-      if (lista.length > 0) setSolicitudPendiente(lista[0]);
+      setSolicitudPendiente(lista.length > 0 ? lista[0] : null);
     }).catch(() => {});
   }, []);
 
-  useEffect(() => {
-    negociosAPI.miNegocio().then((res) => {
+  const cargarNegocio = useCallback((opts?: { preservarEdicion?: boolean }) => {
+    return negociosAPI.miNegocio().then((res) => {
       setNegocio(res.data);
       const loaded = {
         nombre: res.data.nombre || '',
@@ -69,9 +71,12 @@ export default function PerfilRestauranteScreen() {
         google_maps_url: res.data.google_maps_url || '',
         waze_url: res.data.waze_url || '',
       };
-      setForm(loaded);
-      setOriginalForm(loaded);
-      setCamposPendientes(new Set());
+      // Si el usuario tiene cambios sin enviar en pantalla, no los sobrescribas al refrescar en segundo plano
+      if (!opts?.preservarEdicion || camposPendientes.size === 0) {
+        setForm(loaded);
+        setOriginalForm(loaded);
+        setCamposPendientes(new Set());
+      }
       setDpiUrl(res.data.dpi_foto_url || res.data.datos_bancarios?.dpi_foto_url || '');
       if (res.data.estado_verificacion === 'rechazado' && res.data.motivo_rechazo) {
         try {
@@ -80,9 +85,29 @@ export default function PerfilRestauranteScreen() {
         } catch {
           setRechazoInfo({ texto: res.data.motivo_rechazo, campos: [] });
         }
+      } else {
+        setRechazoInfo(null);
       }
     }).catch(() => {}).finally(() => setLoading(false));
-  }, []);
+  }, [camposPendientes]);
+
+  // Carga inicial
+  useEffect(() => { cargarNegocio(); cargarSolicitud(); }, []);
+
+  // Re-sincronizar con el servidor cada vez que la pantalla recupera el foco
+  // (evita que un cambio aprobado/rechazado por el admin siga viéndose como pendiente)
+  useFocusEffect(
+    useCallback(() => {
+      cargarSolicitud();
+      cargarNegocio({ preservarEdicion: true });
+    }, [cargarSolicitud, cargarNegocio])
+  );
+
+  function refrescarManual() {
+    setRefrescando(true);
+    Promise.all([cargarSolicitud(), cargarNegocio({ preservarEdicion: true })])
+      .finally(() => setRefrescando(false));
+  }
 
   // Web: leer el archivo seleccionado y subirlo
   function handleWebFileChange(e: any) {
@@ -286,7 +311,17 @@ export default function PerfilRestauranteScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={s.scroll}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refrescando}
+            onRefresh={refrescarManual}
+            tintColor={Colors.orange}
+          />
+        }
+      >
         {toast && (
           <View style={[s.toast, toast.ok ? s.toastOk : s.toastErr]}>
             <Text style={s.toastText}>{toast.msg}</Text>

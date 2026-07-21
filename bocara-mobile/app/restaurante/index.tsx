@@ -62,12 +62,15 @@ export default function DashboardRestauranteScreen() {
       });
       setPedidos(allPedidos);
 
+      // Solo pedidos realmente pagados cuentan para las métricas de ventas/ganancias del día
+      const todayPagados = today.filter((p: any) => p.estado_pago === 'pagado');
+
       const bolsas = bolRes.status === 'fulfilled' ? (bolRes.value?.data || []) : [];
-      const activas = bolsas.filter((b: any) => b.activo).length;
+      const activas = bolsas.filter((b: any) => b.activo && (b.estado_aprobacion == null || b.estado_aprobacion === 'aprobado')).length;
 
       setStats({
-        hoy:     today.length,
-        ingresos: today.reduce((s: number, p: any) => s + (p.total || 0), 0),
+        hoy:     todayPagados.length,
+        ingresos: todayPagados.reduce((s: number, p: any) => s + (p.total || 0), 0),
         activas,
       });
     } catch { } finally {

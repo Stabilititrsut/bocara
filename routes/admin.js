@@ -627,15 +627,18 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
-  // Intentar con estado_aprobacion; si la columna no existe, activar con activo=true
+  // Aprobar solo cambia el estado de revisión — nunca fuerza "activo": la visibilidad
+  // la controla el restaurante con su propio switch, y aprobar una bolsa que el
+  // restaurante ya había ocultado no debe hacerla reaparecer sin que él lo decida.
   let { data, error } = await supabase
     .from('bolsas')
-    .update({ estado_aprobacion: 'aprobado', activo: true, motivo_rechazo: null })
+    .update({ estado_aprobacion: 'aprobado', motivo_rechazo: null })
     .eq('id', req.params.id)
     .select()
     .single();
   if (error) {
-    // Fallback: solo activar la bolsa
+    // Fallback legado: columna estado_aprobacion no existe en este despliegue —
+    // sin ella no hay forma de "aprobar" salvo activar la bolsa directamente.
     const r = await supabase.from('bolsas').update({ activo: true }).eq('id', req.params.id).select().single();
     if (r.error) return res.status(400).json({ error: r.error.message });
     data = r.data;
