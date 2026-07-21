@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
+const { obtenerComisionFraccion, obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
 // POST /api/pedidos/crear — confirmar pedido directamente (sin pasarela de pago)
@@ -23,10 +24,11 @@ router.post('/crear', authMiddleware, async (req, res) => {
       chars[Math.floor(Math.random() * chars.length)]
     ).join('');
 
-    const costoEnvio = tipo_entrega === 'envio' ? 25 : 0;
+    const costoEnvio = tipo_entrega === 'envio' ? await obtenerConfigNumerica('costo_envio_fijo') : 0;
     const precioBolsa = bolsa.precio_descuento;
     const total = precioBolsa + costoEnvio;
-    const comisionBocara = Math.round(precioBolsa * 0.25 * 100) / 100;
+    const comisionFraccion = await obtenerComisionFraccion();
+    const comisionBocara = Math.round(precioBolsa * comisionFraccion * 100) / 100;
     const montoNetoRestaurante = Math.round((precioBolsa - comisionBocara) * 100) / 100;
 
     const insertData = {

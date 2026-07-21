@@ -5,7 +5,7 @@ import {
   Image, Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { adminAPI, negociosAPI } from '@/src/services/api';
+import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
 const DARK  = '#1E293B';
@@ -33,14 +33,18 @@ export default function RestauranteDetalleScreen() {
   async function cargar() {
     setLoading(true);
     try {
-      const negRes = await negociosAPI.detalle(id!);
-      const neg    = negRes.data?.negocio || negRes.data;
+      // Usa el listado admin (autenticado, adminOnly) en vez del endpoint público
+      // GET /negocios/:id — ese es sin auth y expone DPI/datos bancarios a
+      // cualquiera que conozca el id del negocio.
+      const [negRes, usersRes] = await Promise.all([adminAPI.negocios(), adminAPI.usuarios()]);
+      const negocios = negRes.data || [];
+      const neg = negocios.find((n: any) => n.id === id);
+      if (!neg) { Alert.alert('Error', 'No se encontró el negocio'); return; }
       setNegocio(neg);
 
-      if (neg?.propietario_id) {
-        const usersRes = await adminAPI.usuarios();
-        const users    = usersRes.data || [];
-        const prop     = users.find((u: any) => u.id === neg.propietario_id);
+      if (neg.propietario_id) {
+        const users = usersRes.data || [];
+        const prop  = users.find((u: any) => u.id === neg.propietario_id);
         setPropietario(prop || null);
       }
     } catch (e: any) {

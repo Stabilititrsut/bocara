@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
 const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
 const { getReservadoPendiente, getReservasMap } = require('../services/stock');
+const { obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
 async function getNegocioIdParaUsuario(usuarioId) {
@@ -220,8 +221,20 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(409).json({
       error: `Ya existe una publicación activa con el nombre "${nombre.trim()}". Si necesitas editarla, usa la opción de editar.`,
       duplicado: true,
-      existente: existentes[0],
     });
+  }
+
+  // Límite de bolsas activas por restaurante (configuracion.max_bolsas_por_restaurante)
+  if (req.usuario.rol !== 'admin') {
+    const { count: activasCount } = await supabase
+      .from('bolsas').select('id', { count: 'exact', head: true })
+      .eq('negocio_id', nId).eq('activo', true);
+    const maxBolsas = await obtenerConfigNumerica('max_bolsas_por_restaurante');
+    if ((activasCount || 0) >= maxBolsas) {
+      return res.status(409).json({
+        error: `Alcanzaste el máximo de ${maxBolsas} publicaciones activas. Desactiva alguna antes de crear una nueva.`,
+      });
+    }
   }
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';

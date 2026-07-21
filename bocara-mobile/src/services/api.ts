@@ -24,7 +24,18 @@ api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (!err.response) {
-      return Promise.reject(new Error('Sin conexión a internet. Verifica tu red e intenta de nuevo.'));
+      // Sin respuesta del servidor puede ser falta de red real, pero también
+      // timeout o bloqueo CORS — no asumir "sin internet" para todos los casos,
+      // porque eso oculta el error real (ej. al aprobar/rechazar en el panel admin).
+      let msg = 'Sin conexión a internet. Verifica tu red e intenta de nuevo.';
+      if (err.code === 'ECONNABORTED' || /timeout/i.test(err.message || '')) {
+        msg = 'El servidor tardó demasiado en responder. Intenta de nuevo.';
+      } else if (err.message && !/network error/i.test(err.message)) {
+        msg = err.message;
+      }
+      const error = new Error(msg) as any;
+      error.status = null;
+      return Promise.reject(error);
     }
     const msg = err.response?.data?.error || err.message || 'Error del servidor';
     const error = new Error(msg) as any;
@@ -177,6 +188,7 @@ export const adminAPI = {
   pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),
   getConfig: () => api.get('/admin/config'),
   updateConfig: (data: any) => api.put('/admin/config', data),
+  datosPrueba: () => api.get('/admin/datos-prueba'),
   geocodificarNegociosCount: () => api.get('/admin/geocodificar-negocios/count'),
   geocodificarNegocios: () => api.post('/admin/geocodificar-negocios', {}, { timeout: 600000 }),
   liquidaciones: () => api.get('/admin/liquidaciones'),

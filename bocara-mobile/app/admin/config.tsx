@@ -4,6 +4,7 @@ import {
   SafeAreaView, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI, API_BASE_URL } from '@/src/services/api';
 
@@ -23,10 +24,11 @@ const CAMPOS: Array<{
 }> = [
   { clave: 'comision_porcentaje',        label: 'Comisión Bocara',       descripcion: 'Porcentaje que Bocara retiene de cada venta',              icon: 'trending-up',     unidad: '%'  },
   { clave: 'puntos_por_pedido',           label: 'Puntos por pedido',     descripcion: 'Puntos otorgados al cliente al completar un pedido',      icon: 'star',            unidad: 'pts' },
-  { clave: 'min_puntos_canje',            label: 'Mínimo para canjear',   descripcion: 'Puntos mínimos requeridos para hacer un canje',           icon: 'lock-open',       unidad: 'pts' },
-  { clave: 'puntos_a_quetzales',          label: 'Valor del punto',       descripcion: 'Cuánto vale cada punto en quetzales al canjear',          icon: 'cash',            unidad: 'Q'   },
   { clave: 'costo_envio_fijo',            label: 'Costo de envío',        descripcion: 'Costo fijo de envío a domicilio (0 = gratuito)',          icon: 'bicycle',         unidad: 'Q'   },
   { clave: 'max_bolsas_por_restaurante',  label: 'Bolsas máximas',        descripcion: 'Número máximo de bolsas activas por restaurante',         icon: 'bag',             unidad: ''    },
+  // min_puntos_canje / puntos_a_quetzales se quitaron de la interfaz: no existe
+  // ninguna función de canje de puntos conectada a ellos (ver perfil del cliente).
+  // Las filas ya guardadas en `configuracion` no se tocan.
 ];
 
 const DEFAULTS: Record<string, number> = {
@@ -49,6 +51,7 @@ function card(extra?: any) {
 }
 
 export default function AdminConfigScreen() {
+  const router = useRouter();
   const [config,      setConfig]      = useState<Record<string, string>>({});
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
@@ -175,18 +178,13 @@ export default function AdminConfigScreen() {
         )}
 
         {/* Secciones de configuración */}
-        <Text style={s.sectionTitle}>Comisiones y pagos</Text>
+        <Text style={s.sectionTitle}>Comisiones y puntos</Text>
         {CAMPOS.slice(0, 2).map((campo) => (
           <ConfigCard key={campo.clave} campo={campo} config={config} setConfig={setConfig} />
         ))}
 
-        <Text style={s.sectionTitle}>Sistema de puntos</Text>
-        {CAMPOS.slice(2, 4).map((campo) => (
-          <ConfigCard key={campo.clave} campo={campo} config={config} setConfig={setConfig} />
-        ))}
-
         <Text style={s.sectionTitle}>Operaciones</Text>
-        {CAMPOS.slice(4).map((campo) => (
+        {CAMPOS.slice(2).map((campo) => (
           <ConfigCard key={campo.clave} campo={campo} config={config} setConfig={setConfig} />
         ))}
 
@@ -266,6 +264,20 @@ export default function AdminConfigScreen() {
               </Text>
             </View>
           )}
+        </View>
+
+        <View style={[card(), s.geoCard]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <Ionicons name="flask-outline" size={20} color={GOLD} />
+            <Text style={s.geoTitle}>Datos de prueba</Text>
+          </View>
+          <Text style={s.geoDesc}>
+            Identifica registros creados por el flujo de demo (demo@bocara.gt). Solo lectura — nada se borra automáticamente.
+          </Text>
+          <TouchableOpacity style={s.geoBtn} onPress={() => router.push('/admin/datos-prueba' as any)}>
+            <Ionicons name="list" size={16} color="#fff" />
+            <Text style={s.geoBtnText}>Ver datos de prueba</Text>
+          </TouchableOpacity>
         </View>
 
         <View style={{ height: 40 }} />

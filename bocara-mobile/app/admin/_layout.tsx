@@ -65,6 +65,7 @@ export default function AdminLayout() {
         />
       ))}
       <Tabs.Screen name="restaurante-detalle" options={{ href: null }} />
+      <Tabs.Screen name="datos-prueba" options={{ href: null }} />
     </Tabs>
   );
 }

@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario } = require('../services/email');
+const { obtenerConfig, obtenerComisionFraccion } = require('../services/configuracion');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -22,7 +23,7 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const pagados = pedidos.filter(p => p.estado_pago === 'pagado');
   const ingresos = pagados.reduce((s, p) => s + (p.total || 0), 0);
   const negocios = negociosRes.data || [];
-  const comision = ingresos * 0.25;
+  const comision = ingresos * (await obtenerComisionFraccion());
   // Contar pendientes: estado_verificacion='pendiente' o activo=false y no verificado (legacy)
   const negocios_pendientes = negocios.filter(n =>
     n.estado_verificacion === 'pendiente' || (!n.verificado && n.activo === false && n.estado_verificacion !== 'rechazado')
@@ -78,6 +79,17 @@ router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res
   const { data, error } = await supabase.from('usuarios').update({ rol: 'suspendido' }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
 
+  // Cascada: si el usuario suspendido es dueño de un restaurante, apagar también
+  // su negocio (mismo campo `activo` que ya usa el toggle de negocios) — de lo
+  // contrario el negocio sigue visible y recibiendo pedidos con el dueño bloqueado.
+  if (u.rol === 'restaurante') {
+    const { data: negocio } = await supabase
+      .from('negocios').select('id,activo').eq('propietario_id', req.params.id).maybeSingle();
+    if (negocio && negocio.activo !== false) {
+      await supabase.from('negocios').update({ activo: false }).eq('id', negocio.id);
+    }
+  }
+
   // Enviar email de notificación
   if (u.email && motivo) {
     const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
@@ -95,7 +107,14 @@ router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res
 // PUT /api/admin/usuarios/:id/rehabilitar
 router.put('/usuarios/:id/rehabilitar', authMiddleware, adminOnly, async (req, res) => {
   const { rol_restaurar } = req.body;
-  const rolFinal = rol_restaurar || 'cliente';
+
+  // No confiar ciegamente en lo que mande el cliente: si el usuario tiene un
+  // negocio asociado (dueño de restaurante), el rol correcto es 'restaurante'
+  // sin importar qué llegue en rol_restaurar — evita que un dueño suspendido
+  // se reactive como 'cliente' y pierda acceso a su negocio.
+  const { data: negocioPropio } = await supabase
+    .from('negocios').select('id').eq('propietario_id', req.params.id).maybeSingle();
+  const rolFinal = negocioPropio ? 'restaurante' : (rol_restaurar || 'cliente');
 
   const { data: u } = await supabase.from('usuarios').select('email,nombre,apellido').eq('id', req.params.id).single();
 
@@ -277,7 +296,8 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   let query = supabase
     .from('pedidos')
     .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,negocios(id,nombre,zona)')
-    .in('estado', ['completado', 'recogido']);
+    .in('estado', ['completado', 'recogido'])
+    .eq('estado_pago', 'pagado');
 
   if (periodo === '7d') {
     const desde = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -289,10 +309,14 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id').in('estado', ['completado', 'recogido']);
+    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id').in('estado', ['completado', 'recogido']);
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
+
+  // Filtro defensivo en JS: solo pedidos realmente pagados cuentan para finanzas,
+  // sin importar si vino del camino principal o del fallback.
+  data = (data || []).filter(p => p.estado_pago === 'pagado');
 
   // Agrupar por negocio
   const map = {};
@@ -312,10 +336,11 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
     map[nid].pedidos += 1;
     map[nid].bruto += p.total || 0;
   }
+  const comisionFraccion = await obtenerComisionFraccion();
   const resumen = Object.values(map).map(r => ({
     ...r,
-    comision: r.bruto * 0.25,
-    neto: r.bruto * 0.75,
+    comision: r.bruto * comisionFraccion,
+    neto: r.bruto * (1 - comisionFraccion),
   })).sort((a, b) => b.bruto - a.bruto);
 
   const totalBruto = resumen.reduce((s, r) => s + r.bruto, 0);
@@ -323,8 +348,8 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
     resumen,
     totales: {
       bruto: totalBruto,
-      comision: totalBruto * 0.25,
-      neto: totalBruto * 0.75,
+      comision: totalBruto * comisionFraccion,
+      neto: totalBruto * (1 - comisionFraccion),
       pedidos: resumen.reduce((s, r) => s + r.pedidos, 0),
     },
   });
@@ -429,6 +454,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     .from('pedidos')
     .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
     .in('estado', ['completado', 'recogido'])
+    .eq('estado_pago', 'pagado')
     .is('liquidacion_id', null);
 
   // Liquidaciones ya pagadas
@@ -440,6 +466,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   if (!liquidaciones) liquidaciones = [];
 
   // Agrupar pedidos por negocio
+  const comisionFraccion = await obtenerComisionFraccion();
   const mapa = {};
   for (const p of (pedidos || [])) {
     const nid = p.negocio_id;
@@ -457,7 +484,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     const bruto = p.precio_bolsa || p.total || 0;
     mapa[nid].pedidos += 1;
     mapa[nid].bruto += bruto;
-    mapa[nid].neto += p.monto_neto_restaurante || bruto * 0.75;
+    mapa[nid].neto += p.monto_neto_restaurante || bruto * (1 - comisionFraccion);
   }
 
   // Enriquecer con push token del propietario
@@ -490,10 +517,12 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     .select('id,precio_bolsa,total,monto_neto_restaurante')
     .eq('negocio_id', restaurante_id)
     .in('estado', ['completado', 'recogido'])
+    .eq('estado_pago', 'pagado')
     .is('liquidacion_id', null);
 
+  const comisionFraccion = await obtenerComisionFraccion();
   const bruto = (pedidosPend || []).reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
-  const neto = monto || parseFloat(((pedidosPend || []).reduce((s, p) => s + (p.monto_neto_restaurante || (p.precio_bolsa || p.total || 0) * 0.75), 0)).toFixed(2));
+  const neto = monto || parseFloat(((pedidosPend || []).reduce((s, p) => s + (p.monto_neto_restaurante || (p.precio_bolsa || p.total || 0) * (1 - comisionFraccion)), 0)).toFixed(2));
 
   // Crear liquidacion
   const { data: liq, error: liqErr } = await supabase
@@ -502,7 +531,7 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
       negocio_id: restaurante_id,
       monto: neto,
       ventas_brutas: parseFloat(bruto.toFixed(2)),
-      comision_bocara: parseFloat((bruto * 0.25).toFixed(2)),
+      comision_bocara: parseFloat((bruto * comisionFraccion).toFixed(2)),
       estado: 'pagado',
       datos_transferencia: datos_transferencia || null,
       total_pedidos: (pedidosPend || []).length,
@@ -768,11 +797,13 @@ router.put('/bolsas/:id/pedir-cambios', authMiddleware, adminOnly, async (req, r
 
 // GET /api/admin/cambios-perfil — solicitudes de cambio de perfil de restaurantes
 router.get('/cambios-perfil', authMiddleware, adminOnly, async (req, res) => {
-  let { data, error } = await supabase
+  let query = supabase
     .from('negocio_cambios_pendientes')
     .select('*, negocios(id,nombre,propietario_id,usuarios:propietario_id(nombre,apellido,email))')
     .order('created_at', { ascending: false })
     .limit(50);
+  if (req.query.estado) query = query.eq('estado', req.query.estado);
+  let { data, error } = await query;
   if (error) return res.json([]); // tabla puede no existir aún
   res.json(data || []);
 });
@@ -1076,6 +1107,48 @@ router.get('/cubo-status', authMiddleware, adminOnly, (req, res) => {
     webhook_url:                    'https://bocara.onrender.com/api/webhooks/cubo',
     verificacion_webhook_disponible: false,
   });
+});
+
+// GET /api/admin/datos-prueba — identifica registros de prueba conocidos SIN
+// borrar nada. Único marcador determinístico en el código: el usuario demo
+// que crea/resetea POST /auth/setup-demo (demo@bocara.gt). Sirve para que el
+// admin revise manualmente qué borrar en Supabase — esta ruta nunca elimina.
+router.get('/datos-prueba', authMiddleware, adminOnly, async (req, res) => {
+  const DEMO_EMAIL = 'demo@bocara.gt';
+  const candidatos = [];
+
+  const { data: demoUser } = await supabase
+    .from('usuarios').select('id,email,nombre,rol,created_at').eq('email', DEMO_EMAIL).maybeSingle();
+
+  if (!demoUser) return res.json({ candidatos: [] });
+
+  candidatos.push({
+    tabla: 'usuarios', id: demoUser.id, motivo: `Usuario demo creado por /auth/setup-demo (${DEMO_EMAIL})`,
+    detalle: { email: demoUser.email, nombre: demoUser.nombre, rol: demoUser.rol, created_at: demoUser.created_at },
+  });
+
+  const { data: negocios } = await supabase
+    .from('negocios').select('id,nombre,created_at').eq('propietario_id', demoUser.id);
+  for (const n of (negocios || [])) {
+    candidatos.push({ tabla: 'negocios', id: n.id, motivo: 'Negocio del usuario demo', detalle: { nombre: n.nombre, created_at: n.created_at } });
+  }
+
+  const { data: pedidos } = await supabase
+    .from('pedidos').select('id,total,estado,created_at').eq('usuario_id', demoUser.id);
+  for (const p of (pedidos || [])) {
+    candidatos.push({ tabla: 'pedidos', id: p.id, motivo: 'Pedido hecho por el usuario demo', detalle: { total: p.total, estado: p.estado, created_at: p.created_at } });
+  }
+
+  if ((negocios || []).length > 0) {
+    const negocioIds = negocios.map(n => n.id);
+    const { data: bolsas } = await supabase
+      .from('bolsas').select('id,nombre,negocio_id,created_at').in('negocio_id', negocioIds);
+    for (const b of (bolsas || [])) {
+      candidatos.push({ tabla: 'bolsas', id: b.id, motivo: 'Publicación del negocio demo', detalle: { nombre: b.nombre, created_at: b.created_at } });
+    }
+  }
+
+  res.json({ candidatos, nota: 'Ningún registro fue eliminado. Revisa la lista y borra manualmente en Supabase si corresponde.' });
 });
 
 module.exports = router;

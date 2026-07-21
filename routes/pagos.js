@@ -7,6 +7,7 @@ const { enviarNotificacionPush, guardarNotificacion } = require('../services/not
 const { generarLinkPago } = require('../services/visaLink');
 const { getReservadoPendiente } = require('../services/stock');
 const { procesarWebhookCubo } = require('./webhooks');
+const { obtenerComisionFraccion, obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
 const SANDBOX = process.env.PAYU_SANDBOX !== 'false';
@@ -14,19 +15,18 @@ const PAYU_CHECKOUT = SANDBOX
   ? 'https://sandbox.checkout.payulatam.com/ppp-web-gateway-payu/'
   : 'https://checkout.payulatam.com/ppp-web-gateway-payu/';
 
-const COMISION_BOCARA = 0.25;
-const COMISION_PAYU   = 0.036; // ≈ 3.6% tarifa PayU Guatemala
+const COMISION_PAYU = 0.036; // ≈ 3.6% tarifa PayU Guatemala
 
 function payuSign(apiKey, merchantId, refCode, amount, currency) {
   const str = `${apiKey}~${merchantId}~${refCode}~${amount.toFixed(2)}~${currency}`;
   return crypto.createHash('md5').update(str).digest('hex');
 }
 
+// Comisión y costo de envío se leen de `configuracion` (services/configuracion.js)
+// en vez de estar escritos a mano — así coinciden con lo que ve el admin en el
+// panel de Configuración y con el resto de endpoints que calculan liquidaciones.
 async function getCostoEnvio() {
-  try {
-    const { data } = await supabase.from('configuracion').select('valor').eq('clave', 'costo_envio_fijo').single();
-    return data ? parseFloat(data.valor) : 25;
-  } catch { return 25; }
+  return obtenerConfigNumerica('costo_envio_fijo');
 }
 
 // POST /api/pagos/crear-intent — crea pedido pendiente y retorna URL de checkout PayU
@@ -70,7 +70,8 @@ router.post('/crear-intent', authMiddleware, async (req, res) => {
     const total = precioBolsa + costoEnvio;
 
     // Snapshot financiero — se guarda para siempre en el pedido
-    const comisionBocara       = Math.round(precioBolsa * COMISION_BOCARA * 100) / 100;
+    const comisionFraccion     = await obtenerComisionFraccion();
+    const comisionBocara       = Math.round(precioBolsa * comisionFraccion * 100) / 100;
     const comisionPasarela     = Math.round(total * COMISION_PAYU * 100) / 100;
     const montoNetoRestaurante = Math.round((precioBolsa - comisionBocara - comisionPasarela) * 100) / 100;
 
@@ -343,7 +344,8 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
     const subtotal = subtotalProductos + costoEnvio + propina;
 
     const COMISION_CUBO        = 0.035;
-    const comisionBocara       = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
+    const comisionFraccion     = await obtenerComisionFraccion();
+    const comisionBocara       = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
     const comisionPasarela     = Math.round(subtotal * COMISION_CUBO * 100) / 100;
     const total                = Math.round((subtotal + comisionPasarela) * 100) / 100;
     // Propina va 100% al restaurante (solo se descuenta comisión pasarela)
@@ -618,7 +620,8 @@ router.post('/preparar', authMiddleware, async (req, res) => {
     ) / 100;
     const subtotal = subtotalProductos + costoEnvio + propina;
     const COMISION_CUBO = 0.035;
-    const comisionBocara = Math.round(subtotalProductos * COMISION_BOCARA * 100) / 100;
+    const comisionFraccion = await obtenerComisionFraccion();
+    const comisionBocara = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
     const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
     // Total sin descuento — se actualiza después de la reserva atómica del cupón
     let total = Math.round((subtotal + comisionPasarela) * 100) / 100;

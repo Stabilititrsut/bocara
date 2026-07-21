@@ -84,9 +84,6 @@ export default function PerfilScreen() {
               <Text style={s.puntosVal}>{puntos}</Text>
               <Text style={s.puntosLabel}>Puntos Bocara</Text>
             </View>
-            <TouchableOpacity style={s.canjeBtn}>
-              <Text style={s.canjeBtnText}>Canjear</Text>
-            </TouchableOpacity>
           </View>
           <View style={s.progresoBg}>
             <View style={[s.progresoFill, { width: `${pct}%` as any }]} />
@@ -155,8 +152,6 @@ const s = StyleSheet.create({
   puntosRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   puntosVal: { fontSize: 34, fontWeight: '900', color: Colors.white },
   puntosLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  canjeBtn: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 50, paddingHorizontal: 18, paddingVertical: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
-  canjeBtnText: { color: Colors.white, fontWeight: '800', fontSize: 13 },
   progresoBg: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 10, height: 8, marginBottom: 8 },
   progresoFill: { borderRadius: 10, height: 8, backgroundColor: Colors.accent },
   progresoText: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },

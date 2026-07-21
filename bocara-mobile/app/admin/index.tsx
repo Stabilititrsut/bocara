@@ -88,6 +88,7 @@ export default function AdminDashboard() {
   const [stats,      setStats]      = useState<any>(null);
   const [financiero, setFinanciero] = useState<any>(null);
   const [pedidos,    setPedidos]    = useState<any[]>([]);
+  const [comisionPct, setComisionPct] = useState(25);
   const [skelStats,  setSkelStats]  = useState(true);
   const [skelFin,    setSkelFin]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -106,6 +107,10 @@ export default function AdminDashboard() {
     });
     loadStats();
     const t = setTimeout(loadFinanciero, 400);
+    adminAPI.getConfig().then(res => {
+      const pct = parseFloat(res.data?.comision_porcentaje);
+      if (!isNaN(pct)) setComisionPct(pct);
+    }).catch(() => {});
     pollingRef.current = setInterval(loadStats, 30000);
     return () => { clearInterval(pollingRef.current); clearTimeout(t); };
   }, []);
@@ -196,7 +201,7 @@ export default function AdminDashboard() {
             ))
           ) : [
             { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(0)}`,    sub: 'total acumulado',     color: TEXT,   icon: 'trending-up'     as any },
-            { label: 'Comisión Bocara', val: `Q${comision.toFixed(0)}`,    sub: '25% de ventas',       color: GOLD,   icon: 'wallet'          as any },
+            { label: 'Comisión Bocara', val: `Q${comision.toFixed(0)}`,    sub: `${comisionPct}% de ventas`, color: GOLD, icon: 'wallet'        as any },
             { label: 'Restaurantes',    val: stats?.negocios_activos || 0, sub: 'activos',             color: GREEN,  icon: 'storefront'      as any },
             { label: 'Pedidos totales', val: stats?.total_pedidos || 0,    sub: `${stats?.pedidos_completados || 0} completados`, color: BLUE, icon: 'bag-check' as any },
           ].map(({ label, val, sub, color, icon }) => (
@@ -227,9 +232,9 @@ export default function AdminDashboard() {
         <Text style={s.sectionTitle}>Resumen financiero</Text>
         <View style={[card(), { marginBottom: 20 }]}>
           {[
-            { label: 'Ventas brutas',           val: `Q${ingresos.toFixed(2)}`,             color: TEXT   },
-            { label: 'Comisión Bocara (25%)',    val: `Q${comision.toFixed(2)}`,             color: GOLD   },
-            { label: 'Pago restaurantes (75%)',  val: `Q${(ingresos * 0.75).toFixed(2)}`,   color: GREEN  },
+            { label: 'Ventas brutas',                       val: `Q${ingresos.toFixed(2)}`,             color: TEXT   },
+            { label: `Comisión Bocara (${comisionPct}%)`,    val: `Q${comision.toFixed(2)}`,             color: GOLD   },
+            { label: `Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${(ingresos - comision).toFixed(2)}`, color: GREEN  },
           ].map(({ label, val, color }, i, arr) => (
             <View key={label} style={[s.finRow, i < arr.length - 1 && s.finRowBorder]}>
               <Text style={s.finLabel}>{label}</Text>

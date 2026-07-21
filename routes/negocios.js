@@ -5,6 +5,13 @@ const { geocodeAddress } = require('../utils/geo');
 const { guardarNotificacion } = require('../services/notificaciones');
 const router = express.Router();
 
+// Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
+// deben incluir datos sensibles (dpi, dpi_foto_url, datos_bancarios, nit, motivo_rechazo, etc.).
+const CAMPOS_NEGOCIO_PUBLICOS = 'id,nombre,categoria,zona,ciudad,direccion,' +
+  'punto_referencia,latitud,longitud,google_maps_url,waze_url,' +
+  'imagen_url,foto_portada,foto_negocio,logo_url,' +
+  'calificacion_promedio,total_resenas';
+
 // GET /api/negocios — listar negocios activos y aprobados
 router.get('/', async (req, res) => {
   const { zona, categoria, verificado } = req.query;
@@ -81,7 +88,7 @@ router.get('/feed', async (req, res) => {
 // GET /api/negocios/:id/detalle — detalle con bolsas agrupadas + veces_pedido
 router.get('/:id/detalle', async (req, res) => {
   const { data: negocio, error } = await supabase
-    .from('negocios').select('*').eq('id', req.params.id).single();
+    .from('negocios').select(CAMPOS_NEGOCIO_PUBLICOS).eq('id', req.params.id).single();
   if (error || !negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
 
   let { data, error: bErr } = await supabase
@@ -145,7 +152,7 @@ router.get('/:id/impacto', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { data: negocio, error } = await supabase
     .from('negocios')
-    .select('*')
+    .select(CAMPOS_NEGOCIO_PUBLICOS)
     .eq('id', req.params.id)
     .single();
   if (error || !negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
