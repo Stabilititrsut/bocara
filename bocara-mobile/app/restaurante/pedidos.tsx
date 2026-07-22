@@ -185,7 +185,7 @@ export default function PedidosRestauranteScreen() {
         )}
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filtros} contentContainerStyle={{ paddingHorizontal: 14 }}>
+      <View style={s.filtros}>
         {ESTADOS.map((e) => (
           <TouchableOpacity key={e} style={[s.filtroChip, filtro === e && s.filtroActive]} onPress={() => setFiltro(e)}>
             <Text style={[s.filtroText, filtro === e && s.filtroTextActive]}>
@@ -193,7 +193,7 @@ export default function PedidosRestauranteScreen() {
             </Text>
           </TouchableOpacity>
         ))}
-      </ScrollView>
+      </View>
 
       <ScrollView
         contentContainerStyle={s.scroll}
@@ -280,8 +280,8 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown },
   scanBtn: { backgroundColor: Colors.brown, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
   scanBtnText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
-  filtros: { maxHeight: 52, marginVertical: 10 },
-  filtroChip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 7, marginRight: 8, backgroundColor: Colors.white },
+  filtros: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, marginVertical: 10 },
+  filtroChip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 7, backgroundColor: Colors.white },
   filtroActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
   filtroText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
   filtroTextActive: { color: Colors.white },
