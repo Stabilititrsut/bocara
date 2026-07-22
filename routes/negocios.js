@@ -7,9 +7,12 @@ const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
 // deben incluir datos sensibles (dpi, dpi_foto_url, datos_bancarios, nit, motivo_rechazo, etc.).
+// foto_portada/foto_negocio NO son columnas reales de la tabla (nunca se creó
+// la migración); ningún flujo de escritura las usa — la foto del negocio vive
+// en imagen_url. Incluirlas aquí rompía estos endpoints con un 42703.
 const CAMPOS_NEGOCIO_PUBLICOS = 'id,nombre,categoria,zona,ciudad,direccion,' +
   'punto_referencia,latitud,longitud,google_maps_url,waze_url,' +
-  'imagen_url,foto_portada,foto_negocio,logo_url,' +
+  'imagen_url,logo_url,' +
   'calificacion_promedio,total_resenas';
 
 // Un negocio solo debe ser visible/navegable para clientes si está activo y,
