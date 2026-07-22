@@ -148,7 +148,7 @@ router.get('/:id', async (req, res) => {
 
   let { data, error } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url)')
+    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url,activo,estado_verificacion)')
     .eq('id', req.params.id)
     .single();
 
@@ -157,7 +157,7 @@ router.get('/:id', async (req, res) => {
     console.warn('[BOLSAS DETAIL] join falló, reintentando sin negocios join:', error.message);
     const r2 = await supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url)')
+      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url,activo,estado_verificacion)')
       .eq('id', req.params.id)
       .single();
     data = r2.data;
@@ -172,6 +172,20 @@ router.get('/:id', async (req, res) => {
   }
   if (error) {
     return res.status(500).json({ error: error.message });
+  }
+
+  // Una bolsa oculta, pendiente/rechazada, o de un negocio suspendido/no aprobado
+  // no debe ser consultable directamente aunque el cliente conozca el id.
+  const negocioOk = data.negocios && data.negocios.activo !== false &&
+    (data.negocios.estado_verificacion === 'aprobado' || data.negocios.estado_verificacion == null);
+  const bolsaOk = data.activo !== false &&
+    (data.estado_aprobacion === 'aprobado' || data.estado_aprobacion == null);
+  if (!negocioOk || !bolsaOk) {
+    return res.status(404).json({ error: 'Bolsa no encontrada' });
+  }
+  if (data.negocios) {
+    delete data.negocios.activo;
+    delete data.negocios.estado_verificacion;
   }
 
   // Añadir disponibilidad real descontando reservas pendientes

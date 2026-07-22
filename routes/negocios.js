@@ -12,6 +12,13 @@ const CAMPOS_NEGOCIO_PUBLICOS = 'id,nombre,categoria,zona,ciudad,direccion,' +
   'imagen_url,foto_portada,foto_negocio,logo_url,' +
   'calificacion_promedio,total_resenas';
 
+// Un negocio solo debe ser visible/navegable para clientes si está activo y,
+// cuando el campo existe, aprobado (compat con despliegues sin estado_verificacion aún).
+function negocioDisponiblePublico(n) {
+  return !!n && n.activo !== false &&
+    (n.estado_verificacion === 'aprobado' || n.estado_verificacion == null);
+}
+
 // GET /api/negocios — listar negocios activos y aprobados
 router.get('/', async (req, res) => {
   const { zona, categoria, verificado } = req.query;
@@ -54,14 +61,14 @@ router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
   let { data: bolsas, error } = await supabase
     .from('bolsas')
-    .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio)')
+    .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)')
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
   if (error) {
     const r = await supabase
       .from('bolsas')
-      .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio)')
+      .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)')
       .eq('activo', true)
       .gt('cantidad_disponible', 0);
     bolsas = r.data; error = r.error;
@@ -72,6 +79,8 @@ router.get('/feed', async (req, res) => {
   for (const b of (bolsas || [])) {
     const n = b.negocios;
     if (!n) continue;
+    // Restaurantes suspendidos o aún no aprobados no deben aportar al feed del cliente.
+    if (!negocioDisponiblePublico(n)) continue;
     if (zona && String(n.zona) !== String(zona)) continue;
     if (categoria && n.categoria !== categoria) continue;
     const disc = b.precio_original > 0
@@ -82,14 +91,19 @@ router.get('/feed', async (req, res) => {
     if (disc > e.max_descuento) e.max_descuento = disc;
   }
 
-  res.json(Array.from(map.values()).sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
+  const resultado = Array.from(map.values()).map(({ activo, estado_verificacion, ...pub }) => pub);
+  res.json(resultado.sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
 });
 
 // GET /api/negocios/:id/detalle — detalle con bolsas agrupadas + veces_pedido
 router.get('/:id/detalle', async (req, res) => {
   const { data: negocio, error } = await supabase
-    .from('negocios').select(CAMPOS_NEGOCIO_PUBLICOS).eq('id', req.params.id).single();
+    .from('negocios').select(CAMPOS_NEGOCIO_PUBLICOS + ',activo,estado_verificacion').eq('id', req.params.id).single();
   if (error || !negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+  // Un restaurante suspendido o pendiente de aprobación no debe ser navegable por clientes.
+  if (!negocioDisponiblePublico(negocio)) return res.status(404).json({ error: 'Negocio no encontrado' });
+  delete negocio.activo;
+  delete negocio.estado_verificacion;
 
   let { data, error: bErr } = await supabase
     .from('bolsas').select('*')
@@ -152,10 +166,13 @@ router.get('/:id/impacto', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { data: negocio, error } = await supabase
     .from('negocios')
-    .select(CAMPOS_NEGOCIO_PUBLICOS)
+    .select(CAMPOS_NEGOCIO_PUBLICOS + ',activo,estado_verificacion')
     .eq('id', req.params.id)
     .single();
   if (error || !negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+  if (!negocioDisponiblePublico(negocio)) return res.status(404).json({ error: 'Negocio no encontrado' });
+  delete negocio.activo;
+  delete negocio.estado_verificacion;
   let { data: bolsas, error: bErr } = await supabase
     .from('bolsas')
     .select('*')
@@ -350,6 +367,10 @@ router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
 
 // GET /api/negocios/:id/bolsas — bolsas aprobadas vigentes agrupadas por tipo
 router.get('/:id/bolsas', async (req, res) => {
+  const { data: negocioCheck } = await supabase
+    .from('negocios').select('activo,estado_verificacion').eq('id', req.params.id).single();
+  if (!negocioDisponiblePublico(negocioCheck)) return res.status(404).json({ error: 'Negocio no encontrado' });
+
   let { data, error } = await supabase
     .from('bolsas')
     .select('*')
