@@ -65,14 +65,18 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('bolsas')
     .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)`)
-    .eq('activo', true)
     .order('created_at', { ascending: false });
 
   if (mi_negocio !== 'true') {
+    // El feed público solo debe mostrar lo que un cliente puede comprar ahora mismo.
+    query = query.eq('activo', true);
     query = query.gt('cantidad_disponible', 0);
     // Solo bolsas aprobadas en el feed público; degradar si la columna no existe
     query = query.or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
   }
+  // mi_negocio=true no filtra por activo/cantidad/aprobación: el restaurante debe
+  // ver TODAS sus publicaciones en su panel de gestión (ocultas, rechazadas,
+  // pendientes, agotadas), no solo las que un cliente vería.
   if (tipo) query = query.eq('tipo', tipo);
   // Para mi_negocio=true se usa siempre el negocio del usuario autenticado (ignora query param)
   if (nIdOwner) query = query.eq('negocio_id', nIdOwner);
