@@ -17,6 +17,7 @@ export default function AdminLiquidacionesScreen() {
   const [modalPago, setModalPago] = useState<any | null>(null);
   const [referencia, setReferencia] = useState('');
   const [tab, setTab] = useState<'pendientes' | 'historial'>('pendientes');
+  const [comisionPct, setComisionPct] = useState(25);
 
   const cargar = useCallback(async () => {
     try {
@@ -29,6 +30,15 @@ export default function AdminLiquidacionesScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  useEffect(() => {
+    adminAPI.getConfig().then(res => {
+      const pct = parseFloat(res.data?.comision_porcentaje);
+      if (!isNaN(pct)) setComisionPct(pct);
+    }).catch(() => {});
+  }, []);
+
+  const comisionFraccion = comisionPct / 100;
 
   async function confirmarPago() {
     if (!modalPago) return;
@@ -105,7 +115,7 @@ export default function AdminLiquidacionesScreen() {
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={s.cardNeto}>Q{r.neto.toFixed(2)}</Text>
-                      <Text style={s.cardNetoLabel}>75% neto</Text>
+                      <Text style={s.cardNetoLabel}>{(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% neto</Text>
                     </View>
                   </View>
 
@@ -114,8 +124,8 @@ export default function AdminLiquidacionesScreen() {
                     <Text style={s.cardFinVal}>Q{r.bruto.toFixed(2)}</Text>
                   </View>
                   <View style={s.cardFinRow}>
-                    <Text style={s.cardFinLabel}>Comisión Bocara (25%)</Text>
-                    <Text style={[s.cardFinVal, { color: Colors.orange }]}>Q{(r.bruto * 0.25).toFixed(2)}</Text>
+                    <Text style={s.cardFinLabel}>Comisión Bocara ({comisionPct}%)</Text>
+                    <Text style={[s.cardFinVal, { color: Colors.orange }]}>Q{(r.bruto * comisionFraccion).toFixed(2)}</Text>
                   </View>
 
                   {/* Datos bancarios */}
@@ -192,7 +202,7 @@ export default function AdminLiquidacionesScreen() {
 
             <View style={s.modalResumen}>
               <View style={s.modalResumenRow}>
-                <Text style={s.modalResumenLabel}>Monto a pagar (75%)</Text>
+                <Text style={s.modalResumenLabel}>Monto a pagar ({(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)</Text>
                 <Text style={s.modalResumenVal}>Q{modalPago?.neto?.toFixed(2)}</Text>
               </View>
               {modalPago?.datos_bancarios && (

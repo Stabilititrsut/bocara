@@ -15,6 +15,15 @@ const CAMPOS_NEGOCIO_PUBLICOS = 'id,nombre,categoria,zona,ciudad,direccion,' +
   'imagen_url,logo_url,' +
   'calificacion_promedio,total_resenas';
 
+// Campos públicos de una bolsa (misma whitelist que routes/bolsas.js) — motivo_rechazo
+// queda fuera a propósito, defensa en profundidad para estos endpoints sin auth.
+const CAMPOS_BOLSA_PUBLICOS = 'id,negocio_id,nombre,descripcion,contenido,precio_original,precio_descuento,' +
+  'cantidad_disponible,tipo,categoria,categoria_alimento,categoria_menu,' +
+  'hora_recogida_inicio,hora_recogida_fin,permite_envio,imagen_url,' +
+  'peso_estimado_kg,co2_salvado_kg,fecha,fecha_disponible,fecha_caducidad,' +
+  'activo,activa,estado_aprobacion,creado_en,created_at,' +
+  'es_tiempo_limitado,es_promocion,es_descuento,es_destacado,es_mas_vendido,es_precio_bajo';
+
 // Un negocio solo debe ser visible/navegable para clientes si está activo y,
 // cuando el campo existe, aprobado (compat con despliegues sin estado_verificacion aún).
 function negocioDisponiblePublico(n) {
@@ -25,9 +34,12 @@ function negocioDisponiblePublico(n) {
 // GET /api/negocios — listar negocios activos y aprobados
 router.get('/', async (req, res) => {
   const { zona, categoria, verificado } = req.query;
+  // select('*') aquí exponía dpi, datos_bancarios, nit, password_hash y
+  // motivo_rechazo sin autenticación — misma lista blanca que ya usan
+  // /:id y /:id/detalle.
   let query = supabase
     .from('negocios')
-    .select('*')
+    .select(CAMPOS_NEGOCIO_PUBLICOS)
     .eq('activo', true)
     // Mostrar solo aprobados (o los que no tienen el campo aún para backwards compat)
     .or('estado_verificacion.eq.aprobado,estado_verificacion.is.null')
@@ -37,8 +49,8 @@ router.get('/', async (req, res) => {
   if (verificado !== undefined) query = query.eq('verificado', verificado === 'true');
   let { data, error } = await query;
   if (error) {
-    // Fallback sin estado_verificacion (tabla vieja)
-    let q2 = supabase.from('negocios').select('id,nombre,direccion,zona,ciudad,telefono,categoria,latitud,longitud,imagen_url,calificacion_promedio,total_resenas').eq('activo', true).order('nombre');
+    // Fallback sin estado_verificacion (tabla vieja) — misma lista blanca, sin datos sensibles
+    let q2 = supabase.from('negocios').select(CAMPOS_NEGOCIO_PUBLICOS).eq('activo', true).order('nombre');
     if (zona) q2 = q2.eq('zona', zona);
     if (categoria) q2 = q2.eq('categoria', categoria);
     const r = await q2;
@@ -109,12 +121,12 @@ router.get('/:id/detalle', async (req, res) => {
   delete negocio.estado_verificacion;
 
   let { data, error: bErr } = await supabase
-    .from('bolsas').select('*')
+    .from('bolsas').select(CAMPOS_BOLSA_PUBLICOS)
     .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
     .order('created_at', { ascending: false });
   if (bErr) {
-    const r = await supabase.from('bolsas').select('*')
+    const r = await supabase.from('bolsas').select(CAMPOS_BOLSA_PUBLICOS)
       .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0);
     data = r.data;
   }
@@ -178,7 +190,7 @@ router.get('/:id', async (req, res) => {
   delete negocio.estado_verificacion;
   let { data: bolsas, error: bErr } = await supabase
     .from('bolsas')
-    .select('*')
+    .select(CAMPOS_BOLSA_PUBLICOS)
     .eq('negocio_id', req.params.id)
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
@@ -186,7 +198,7 @@ router.get('/:id', async (req, res) => {
   if (bErr) {
     const r = await supabase
       .from('bolsas')
-      .select('*')
+      .select(CAMPOS_BOLSA_PUBLICOS)
       .eq('negocio_id', req.params.id)
       .eq('activo', true)
       .gt('cantidad_disponible', 0);
@@ -376,14 +388,14 @@ router.get('/:id/bolsas', async (req, res) => {
 
   let { data, error } = await supabase
     .from('bolsas')
-    .select('*')
+    .select(CAMPOS_BOLSA_PUBLICOS)
     .eq('negocio_id', req.params.id)
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
     .order('created_at', { ascending: false });
   if (error) {
-    const r = await supabase.from('bolsas').select('*')
+    const r = await supabase.from('bolsas').select(CAMPOS_BOLSA_PUBLICOS)
       .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0)
       .order('created_at', { ascending: false });
     data = r.data; error = r.error;

@@ -189,7 +189,7 @@ export default function AdminDashboard() {
         )}
 
         {/* Métricas principales */}
-        <Text style={s.sectionTitle}>Resumen general</Text>
+        <Text style={s.sectionTitle}>Resumen general — histórico total</Text>
         <View style={s.metricsGrid}>
           {skelStats ? (
             [1,2,3,4].map(k => (
@@ -200,8 +200,8 @@ export default function AdminDashboard() {
               </View>
             ))
           ) : [
-            { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(0)}`,    sub: 'total acumulado',     color: TEXT,   icon: 'trending-up'     as any },
-            { label: 'Comisión Bocara', val: `Q${comision.toFixed(0)}`,    sub: `${comisionPct}% de ventas`, color: GOLD, icon: 'wallet'        as any },
+            { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(0)}`,    sub: 'desde el inicio',     color: TEXT,   icon: 'trending-up'     as any },
+            { label: 'Comisión Bocara', val: `Q${comision.toFixed(0)}`,    sub: `${comisionPct}% · desde el inicio`, color: GOLD, icon: 'wallet' as any },
             { label: 'Restaurantes',    val: stats?.negocios_activos || 0, sub: 'activos',             color: GREEN,  icon: 'storefront'      as any },
             { label: 'Pedidos totales', val: stats?.total_pedidos || 0,    sub: `${stats?.pedidos_completados || 0} completados`, color: BLUE, icon: 'bag-check' as any },
           ].map(({ label, val, sub, color, icon }) => (
@@ -229,7 +229,10 @@ export default function AdminDashboard() {
         </View>
 
         {/* Resumen financiero */}
-        <Text style={s.sectionTitle}>Resumen financiero</Text>
+        <Text style={s.sectionTitle}>Resumen financiero — histórico total</Text>
+        <Text style={s.sectionCaption}>
+          Estas cifras son acumuladas desde el inicio y no coinciden con la tabla de abajo, que es solo de los últimos 30 días.
+        </Text>
         <View style={[card(), { marginBottom: 20 }]}>
           {[
             { label: 'Ventas brutas',                       val: `Q${ingresos.toFixed(2)}`,             color: TEXT   },
@@ -328,6 +331,7 @@ const s = StyleSheet.create({
   alertSub:   { fontSize: 11, color: '#B45309', marginTop: 2 },
 
   sectionTitle: { fontSize: 11, fontWeight: '700', color: TEXT2, marginBottom: 10, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.8 },
+  sectionCaption: { fontSize: 11, color: TEXT2, marginTop: -6, marginBottom: 10, lineHeight: 15 },
 
   metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
   metricCard:  { flex: 1, minWidth: (SCREEN - 52) / 2, padding: 14, gap: 2 },

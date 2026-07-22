@@ -26,6 +26,17 @@ function extraerColumnaFaltante(error) {
   return null;
 }
 
+// Campos públicos de una bolsa — estos endpoints no llevan auth. motivo_rechazo
+// queda fuera a propósito (defensa en profundidad): hoy nunca debería llegar
+// con valor porque solo se muestran bolsas aprobadas, pero un select('*') sin
+// whitelist lo expondría igual si algún filtro fallara.
+const CAMPOS_BOLSA_PUBLICOS = 'id,negocio_id,nombre,descripcion,contenido,precio_original,precio_descuento,' +
+  'cantidad_disponible,tipo,categoria,categoria_alimento,categoria_menu,' +
+  'hora_recogida_inicio,hora_recogida_fin,permite_envio,imagen_url,' +
+  'peso_estimado_kg,co2_salvado_kg,fecha,fecha_disponible,fecha_caducidad,' +
+  'activo,activa,estado_aprobacion,creado_en,created_at,' +
+  'es_tiempo_limitado,es_promocion,es_descuento,es_destacado,es_mas_vendido,es_precio_bajo';
+
 // GET /api/bolsas — listar bolsas disponibles con distancia opcional
 router.get('/', async (req, res) => {
   const { tipo, negocio_id, zona, categoria, mi_negocio, lat, lng, max_distancia } = req.query;
@@ -46,9 +57,14 @@ router.get('/', async (req, res) => {
   const userLng = lng ? parseFloat(lng) : null;
   const maxKm   = max_distancia ? parseFloat(max_distancia) : null;
 
+  // mi_negocio=true (autenticado, el restaurante viendo sus propias publicaciones)
+  // sí necesita ver motivo_rechazo — select('*') solo para ese camino privado.
+  // El feed público usa la whitelist para no exponer motivo_rechazo de más.
+  const selectBolsas = mi_negocio === 'true' ? '*' : CAMPOS_BOLSA_PUBLICOS;
+
   let query = supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
+    .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)`)
     .eq('activo', true)
     .order('created_at', { ascending: false });
 
@@ -67,7 +83,7 @@ router.get('/', async (req, res) => {
     // Fallback sin columnas opcionales (estado_aprobacion puede no existir aún)
     let q2 = supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)')
+      .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)`)
       .gt('cantidad_disponible', 0);
     if (nIdOwner) q2 = q2.eq('negocio_id', nIdOwner);
     else if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
@@ -148,7 +164,7 @@ router.get('/:id', async (req, res) => {
 
   let { data, error } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url,activo,estado_verificacion)')
+    .select(`${CAMPOS_BOLSA_PUBLICOS}, negocios(id,nombre,zona,ciudad,categoria,direccion,telefono,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url,activo,estado_verificacion)`)
     .eq('id', req.params.id)
     .single();
 
@@ -157,7 +173,7 @@ router.get('/:id', async (req, res) => {
     console.warn('[BOLSAS DETAIL] join falló, reintentando sin negocios join:', error.message);
     const r2 = await supabase
       .from('bolsas')
-      .select('*, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url,activo,estado_verificacion)')
+      .select(`${CAMPOS_BOLSA_PUBLICOS}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,calificacion_promedio,total_resenas,google_maps_url,waze_url,activo,estado_verificacion)`)
       .eq('id', req.params.id)
       .single();
     data = r2.data;

@@ -39,6 +39,7 @@ export default function AdminFinancieroScreen() {
   const [pedidos,       setPedidos]       = useState<any[]>([]);
   const [mostrarPedidos, setMostrarPedidos] = useState(false);
   const [exporting,     setExporting]     = useState(false);
+  const [comisionPct,   setComisionPct]   = useState(25);
 
   const cargar = useCallback(async () => {
     try {
@@ -54,6 +55,15 @@ export default function AdminFinancieroScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
+  useEffect(() => {
+    adminAPI.getConfig().then(res => {
+      const pct = parseFloat(res.data?.comision_porcentaje);
+      if (!isNaN(pct)) setComisionPct(pct);
+    }).catch(() => {});
+  }, []);
+
+  const comisionFraccion = comisionPct / 100;
+
   async function exportarExcel() {
     if (!datos?.resumen?.length) return Alert.alert('Sin datos', 'No hay datos para exportar en este período.');
     if (!XLSX) return Alert.alert('Error', 'Librería XLSX no disponible.');
@@ -68,8 +78,8 @@ export default function AdminFinancieroScreen() {
         ['Métrica', 'Valor'],
         ['Pedidos completados', datos.totales.pedidos],
         ['Ventas brutas (Q)', datos.totales.bruto],
-        ['Comisión Bocara 25% (Q)', datos.totales.comision],
-        ['Pago a restaurantes 75% (Q)', datos.totales.neto],
+        [`Comisión Bocara ${comisionPct}% (Q)`, datos.totales.comision],
+        [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% (Q)`, datos.totales.neto],
         ['Fecha exportación', new Date().toLocaleDateString('es-GT')],
       ];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja1), 'Dashboard');
@@ -98,7 +108,7 @@ export default function AdminFinancieroScreen() {
           p.usuarios?.nombre || '—',
           new Date(p.created_at || p.creado_en || 0).toLocaleDateString('es-GT'),
           Number((p.total || 0).toFixed(2)),
-          Number(((p.total || 0) * 0.25).toFixed(2)),
+          Number(((p.total || 0) * comisionFraccion).toFixed(2)),
           p.estado,
         ]),
       ];
@@ -173,8 +183,8 @@ export default function AdminFinancieroScreen() {
           {[
             { label: 'Pedidos completados', val: String(totales.pedidos), color: TEXT,  icon: 'bag-check'  as any },
             { label: 'Ventas brutas',       val: `Q${totales.bruto.toFixed(2)}`,     color: TEXT,  icon: 'trending-up' as any },
-            { label: 'Comisión Bocara (25%)', val: `Q${totales.comision.toFixed(2)}`, color: GOLD,  icon: 'wallet'     as any },
-            { label: 'Pago a restaurantes (75%)', val: `Q${totales.neto.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
+            { label: `Comisión Bocara (${comisionPct}%)`, val: `Q${totales.comision.toFixed(2)}`, color: GOLD,  icon: 'wallet'     as any },
+            { label: `Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${totales.neto.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
           ].map(({ label, val, color, icon }, i, arr) => (
             <View key={label} style={[s.totalRow, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: BORDER }]}>
               <View style={s.totalIconWrap}>
@@ -215,8 +225,8 @@ export default function AdminFinancieroScreen() {
               <View style={{ borderTopWidth: 1, borderTopColor: BORDER }}>
                 {[
                   { label: 'Ventas brutas',              val: `Q${r.bruto.toFixed(2)}`,          color: TEXT  },
-                  { label: 'Comisión Bocara (25%)',       val: `-Q${r.comision.toFixed(2)}`,      color: '#DC2626' },
-                  { label: 'Pago al restaurante (75%)',  val: `Q${r.neto.toFixed(2)}`,            color: GREEN },
+                  { label: `Comisión Bocara (${comisionPct}%)`, val: `-Q${r.comision.toFixed(2)}`, color: '#DC2626' },
+                  { label: `Pago al restaurante (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${r.neto.toFixed(2)}`, color: GREEN },
                   { label: 'Promedio por pedido',        val: r.pedidos > 0 ? `Q${(r.bruto / r.pedidos).toFixed(2)}` : '—', color: TEXT2 },
                 ].map(({ label, val, color }, i, arr) => (
                   <View key={label} style={[s.detailRow, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: BORDER }]}>
@@ -255,7 +265,7 @@ export default function AdminFinancieroScreen() {
             </View>
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={s.txTotal}>Q{(p.total || 0).toFixed(2)}</Text>
-              <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>-Q{((p.total || 0) * 0.25).toFixed(2)}</Text>
+              <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>-Q{((p.total || 0) * comisionFraccion).toFixed(2)}</Text>
               <View style={[s.txEstado, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
                 <Text style={[s.txEstadoText, { color: '#166534' }]}>recogido</Text>
               </View>

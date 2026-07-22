@@ -113,13 +113,21 @@ router.put('/usuarios/:id/rehabilitar', authMiddleware, adminOnly, async (req, r
   // sin importar qué llegue en rol_restaurar — evita que un dueño suspendido
   // se reactive como 'cliente' y pierda acceso a su negocio.
   const { data: negocioPropio } = await supabase
-    .from('negocios').select('id').eq('propietario_id', req.params.id).maybeSingle();
+    .from('negocios').select('id,activo').eq('propietario_id', req.params.id).maybeSingle();
   const rolFinal = negocioPropio ? 'restaurante' : (rol_restaurar || 'cliente');
 
-  const { data: u } = await supabase.from('usuarios').select('email,nombre,apellido').eq('id', req.params.id).single();
+  const { data: u } = await supabase.from('usuarios').select('email,nombre,apellido,rol').eq('id', req.params.id).single();
 
   const { data, error } = await supabase.from('usuarios').update({ rol: rolFinal }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+
+  // Cascada inversa a la de suspender: si el dueño estaba realmente suspendido
+  // y esa suspensión fue la que apagó su negocio (negocios.activo=false), al
+  // rehabilitarlo debe reactivarse también — de lo contrario el rol se
+  // restaura pero el restaurante sigue invisible para los clientes.
+  if (negocioPropio && u?.rol === 'suspendido' && negocioPropio.activo === false) {
+    await supabase.from('negocios').update({ activo: true }).eq('id', negocioPropio.id);
+  }
 
   if (u?.email) {
     const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
