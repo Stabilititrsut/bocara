@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl, TextInput, ActivityIndicator, Modal, Linking, Alert,
+  SafeAreaView, RefreshControl, TextInput, ActivityIndicator, Modal, Linking,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,26 +14,7 @@ const TEXT   = '#111827';
 const TEXT2  = '#6B7280';
 const GOLD   = '#E8820C';
 
-type Filtro = 'todos' | 'pendientes' | 'verificados' | 'suspendidos' | 'rechazados' | 'inactivos';
-type Estado = 'pendiente' | 'verificado' | 'suspendido' | 'rechazado' | 'inactivo';
-
-// Clasificación real de un negocio. estado_verificacion (cuando existe) es la
-// fuente de verdad; verificado/activo solo se usan como respaldo para negocios
-// viejos que se crearon antes de que esa columna existiera. Antes esta pantalla
-// solo miraba verificado/activo, así que un negocio RECHAZADO (verificado:false,
-// activo:false) era indistinguible de uno recién registrado y se quedaba para
-// siempre en la pestaña "Pendientes".
-function estadoNegocio(n: any): Estado {
-  if (n.estado_verificacion === 'rechazado') return 'rechazado';
-  if (n.estado_verificacion === 'pendiente') return 'pendiente';
-  if (n.estado_verificacion === 'aprobado' || n.verificado) {
-    return n.activo === false ? 'suspendido' : 'verificado';
-  }
-  // Sin estado_verificacion y nunca verificado: legado. Si además está
-  // desactivado no hay forma de saber si fue rechazado o nunca revisado —
-  // se muestra aparte en "Inactivos" en vez de mezclarlo con pendientes reales.
-  return n.activo === false ? 'inactivo' : 'pendiente';
-}
+type Filtro = 'todos' | 'pendientes' | 'verificados' | 'suspendidos' | 'inactivos';
 
 export default function AdminNegociosScreen() {
   const router = useRouter();
@@ -63,7 +44,7 @@ export default function AdminNegociosScreen() {
       await adminAPI.verificarNegocio(n.id);
       cargar();
     } catch (e: any) {
-      Alert.alert('Error al aprobar', e.message || 'No se pudo aprobar el negocio');
+      console.error('[negocios] aprobar error:', e.message);
     } finally { setProcesando(null); }
   }
 
@@ -75,7 +56,7 @@ export default function AdminNegociosScreen() {
       await adminAPI.rechazarNegocio(rechazarModal.id, motivoRechazo.trim() || undefined);
       cargar();
     } catch (e: any) {
-      Alert.alert('Error al rechazar', e.message || 'No se pudo rechazar el negocio');
+      console.error('[negocios] rechazar error:', e.message);
     } finally { setProcesando(null); setMotivoRechazo(''); }
   }
 
@@ -85,7 +66,7 @@ export default function AdminNegociosScreen() {
       await adminAPI.toggleNegocio(id);
       cargar();
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo actualizar el negocio');
+      console.error('[negocios] activar error:', e.message);
     } finally { setProcesando(null); }
   }
 
@@ -93,18 +74,17 @@ export default function AdminNegociosScreen() {
     const match = !busqueda ||
       n.nombre?.toLowerCase().includes(busqueda.toLowerCase()) ||
       n.zona?.toLowerCase().includes(busqueda.toLowerCase());
-    if (filtro === 'todos') return match;
-    return match && estadoNegocio(n) === (
-      filtro === 'pendientes' ? 'pendiente' :
-      filtro === 'verificados' ? 'verificado' :
-      filtro === 'suspendidos' ? 'suspendido' :
-      filtro === 'rechazados' ? 'rechazado' : 'inactivo'
-    );
+    switch (filtro) {
+      case 'pendientes':   return match && !n.verificado;
+      case 'verificados':  return match && n.verificado && n.activo !== false;
+      case 'suspendidos':  return match && n.verificado && n.activo === false;
+      case 'inactivos':    return match && !n.verificado && n.activo === false;
+      default: return match;
+    }
   });
 
-  const pendienteCount   = negocios.filter(n => estadoNegocio(n) === 'pendiente').length;
-  const suspendidoCount  = negocios.filter(n => estadoNegocio(n) === 'suspendido').length;
-  const rechazadoCount   = negocios.filter(n => estadoNegocio(n) === 'rechazado').length;
+  const pendienteCount   = negocios.filter(n => !n.verificado).length;
+  const suspendidoCount  = negocios.filter(n => n.verificado && n.activo === false).length;
 
   if (loading) return (
     <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: BG }}>
@@ -145,20 +125,19 @@ export default function AdminNegociosScreen() {
       </View>
 
       {/* Filtros */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filtrosBar} contentContainerStyle={{ paddingHorizontal: 14, gap: 8 }}>
+      <View style={s.filtrosBar}>
         {([
           ['todos',       'Todos'],
           ['pendientes',  `Pendientes${pendienteCount > 0 ? ` (${pendienteCount})` : ''}`],
           ['verificados', 'Verificados'],
           ['suspendidos', `Suspendidos${suspendidoCount > 0 ? ` (${suspendidoCount})` : ''}`],
-          ['rechazados',  `Rechazados${rechazadoCount > 0 ? ` (${rechazadoCount})` : ''}`],
           ['inactivos',   'Inactivos'],
         ] as [Filtro, string][]).map(([f, label]) => (
           <TouchableOpacity key={f} style={[s.chip, filtro === f && s.chipActive]} onPress={() => setFiltro(f)}>
             <Text style={[s.chipText, filtro === f && s.chipTextActive]}>{label}</Text>
           </TouchableOpacity>
         ))}
-      </ScrollView>
+      </View>
 
       <ScrollView
         contentContainerStyle={s.scroll}
@@ -175,9 +154,7 @@ export default function AdminNegociosScreen() {
           </View>
         )}
 
-        {filtrados.map((n) => {
-          const estado = estadoNegocio(n);
-          return (
+        {filtrados.map((n) => (
           <TouchableOpacity
             key={n.id}
             style={s.card}
@@ -197,35 +174,33 @@ export default function AdminNegociosScreen() {
                 </Text>
               </View>
               <View style={{ alignItems: 'flex-end', gap: 5 }}>
-                {estado === 'verificado' && <View style={s.chipVer}><Text style={s.chipVerText}>Verificado</Text></View>}
-                {estado === 'pendiente' && <View style={s.chipPend}><Text style={s.chipPendText}>Pendiente</Text></View>}
-                {estado === 'rechazado' && <View style={[s.chipPend, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}><Text style={[s.chipPendText, { color: '#DC2626' }]}>Rechazado</Text></View>}
-                {(estado === 'suspendido' || estado === 'inactivo') && <View style={s.chipInac}><Text style={s.chipInacText}>{estado === 'suspendido' ? 'Suspendido' : 'Inactivo'}</Text></View>}
+                {n.verificado
+                  ? <View style={s.chipVer}><Text style={s.chipVerText}>Verificado</Text></View>
+                  : <View style={s.chipPend}><Text style={s.chipPendText}>Pendiente</Text></View>}
+                {n.activo === false && <View style={s.chipInac}><Text style={s.chipInacText}>Inactivo</Text></View>}
               </View>
             </View>
 
             {/* Actions */}
             <View style={s.actionsRow}>
-              {(estado === 'pendiente' || estado === 'rechazado') && (
+              {!n.verificado && (
                 <>
                   <TouchableOpacity style={s.btnAprobar} onPress={() => aprobar(n)} disabled={!!procesando}>
                     {procesando === n.id
                       ? <ActivityIndicator color="#fff" size="small" />
                       : <><Ionicons name="checkmark" size={14} color="#fff" /><Text style={s.btnAprobarText}>Aprobar</Text></>}
                   </TouchableOpacity>
-                  {estado === 'pendiente' && (
-                    <TouchableOpacity
-                      style={s.btnRechazar}
-                      onPress={() => { setRechazarModal(n); setMotivoRechazo(''); }}
-                      disabled={!!procesando}
-                    >
-                      <Ionicons name="close" size={14} color="#DC2626" />
-                      <Text style={s.btnRechazarText}>Rechazar</Text>
-                    </TouchableOpacity>
-                  )}
+                  <TouchableOpacity
+                    style={s.btnRechazar}
+                    onPress={() => { setRechazarModal(n); setMotivoRechazo(''); }}
+                    disabled={!!procesando}
+                  >
+                    <Ionicons name="close" size={14} color="#DC2626" />
+                    <Text style={s.btnRechazarText}>Rechazar</Text>
+                  </TouchableOpacity>
                 </>
               )}
-              {(estado === 'suspendido' || estado === 'inactivo') && (
+              {n.activo === false && (
                 <TouchableOpacity style={s.btnActivar} onPress={() => activar(n.id)} disabled={!!procesando}>
                   {procesando === n.id
                     ? <ActivityIndicator color="#16A34A" size="small" />
@@ -238,8 +213,7 @@ export default function AdminNegociosScreen() {
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
-          );
-        })}
+        ))}
 
         <View style={{ height: 24 }} />
       </ScrollView>
@@ -286,7 +260,7 @@ const s = StyleSheet.create({
   searchWrap:  { flexDirection: 'row', alignItems: 'center', margin: 12, backgroundColor: CARD, borderRadius: 12, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 14, paddingVertical: 10 },
   searchInput: { flex: 1, fontSize: 14, color: TEXT },
 
-  filtrosBar:   { maxHeight: 48, marginBottom: 4 },
+  filtrosBar:   { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, marginBottom: 8 },
   chip:         { borderWidth: 1, borderColor: BORDER, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, backgroundColor: CARD },
   chipActive:   { backgroundColor: GOLD, borderColor: GOLD },
   chipText:     { fontSize: 12, color: TEXT2, fontWeight: '600' },
