@@ -254,17 +254,19 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
 
   const { periodo = 'mes' } = req.query;
-  let desde = new Date();
-  if (periodo === 'dia')    desde = new Date(Date.now() - 86400000);
+  let desde = null;
+  if (periodo === 'dia')         desde = new Date(Date.now() - 86400000);
   else if (periodo === 'semana') desde = new Date(Date.now() - 7 * 86400000);
-  else                     desde = new Date(Date.now() - 30 * 86400000);
+  else if (periodo === 'mes')    desde = new Date(Date.now() - 30 * 86400000);
+  // periodo === 'todo' → desde queda null, sin límite de fecha (histórico completo)
 
-  const { data: pedidos } = await supabase
+  let query = supabase
     .from('pedidos')
     .select('id,total,precio_bolsa,comision_bocara,monto_neto_restaurante,estado,created_at')
     .eq('negocio_id', negocio.id)
-    .in('estado', ['completado', 'recogido'])
-    .gte('created_at', desde.toISOString());
+    .in('estado', ['completado', 'recogido']);
+  if (desde) query = query.gte('created_at', desde.toISOString());
+  const { data: pedidos } = await query;
 
   const ventas = pedidos || [];
   const bruto = ventas.reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
