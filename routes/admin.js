@@ -242,39 +242,48 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
 
 // PUT /api/admin/negocios/:id/verificar (alias de /aprobar)
 router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res) => {
-  const updates = { verificado: true, activo: true };
-  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+  // Una sola escritura atómica: verificado, activo y estado_verificacion deben
+  // quedar consistentes juntos o no quedar aplicados en absoluto. Antes eran dos
+  // updates separados y el segundo (estado_verificacion) no verificaba su error,
+  // así que un fallo ahí dejaba el negocio "aprobado" en la respuesta pero
+  // "pendiente" en la fila real — reaparecía al recargar /admin/negocios/pendientes.
+  const { data, error } = await supabase
+    .from('negocios')
+    .update({ verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null })
+    .eq('id', req.params.id)
+    .select()
+    .single();
   if (error) return res.status(400).json({ error: error.message });
-  // Intentar marcar estado_verificacion si la columna existe
-  await supabase.from('negocios').update({ estado_verificacion: 'aprobado', motivo_rechazo: null }).eq('id', req.params.id);
   await notificarPropietario(data.propietario_id, data.nombre, 'negocio_aprobado', '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`);
-  res.json({ ...data, estado_verificacion: 'aprobado' });
+  res.json(data);
 });
 
 // PUT /api/admin/negocios/:id/aprobar
 router.put('/negocios/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
-  const updates = { verificado: true, activo: true };
-  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+  const { data, error } = await supabase
+    .from('negocios')
+    .update({ verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null })
+    .eq('id', req.params.id)
+    .select()
+    .single();
   if (error) return res.status(400).json({ error: error.message });
-  await supabase.from('negocios').update({ estado_verificacion: 'aprobado', motivo_rechazo: null }).eq('id', req.params.id);
   await notificarPropietario(data.propietario_id, data.nombre, 'negocio_aprobado', '🎉 ¡Negocio aprobado!', `${data.nombre} ya está activo en Bocara. ¡Empieza a publicar bolsas!`);
-  res.json({ ...data, estado_verificacion: 'aprobado' });
+  res.json(data);
 });
 
 // PUT /api/admin/negocios/:id/rechazar
 router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
   const { motivo, campos_incorrectos } = req.body;
-  const { data, error } = await supabase.from('negocios').update({ verificado: false, activo: false }).eq('id', req.params.id).select().single();
-  if (error) return res.status(400).json({ error: error.message });
-  const rechazarUpd = { estado_verificacion: 'rechazado' };
   const hayCampos = Array.isArray(campos_incorrectos) && campos_incorrectos.length > 0;
+  const updates = { verificado: false, activo: false, estado_verificacion: 'rechazado' };
   if (motivo || hayCampos) {
-    rechazarUpd.motivo_rechazo = JSON.stringify({ texto: motivo || '', campos: campos_incorrectos || [] });
+    updates.motivo_rechazo = JSON.stringify({ texto: motivo || '', campos: campos_incorrectos || [] });
   }
-  await supabase.from('negocios').update(rechazarUpd).eq('id', req.params.id);
+  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+  if (error) return res.status(400).json({ error: error.message });
   const motivoTexto = motivo ? `: ${motivo}` : (hayCampos ? '. Revisa los campos indicados en el correo.' : '. Contacta a soporte para más información.');
   await notificarPropietario(data.propietario_id, data.nombre, 'negocio_rechazado', '❌ Solicitud rechazada', `Tu solicitud para ${data.nombre} fue rechazada${motivoTexto}`, { motivo, campos: campos_incorrectos || [] });
-  res.json({ ...data, estado_verificacion: 'rechazado', motivo_rechazo: rechazarUpd.motivo_rechazo });
+  res.json(data);
 });
 
 // PUT /api/admin/negocios/:id/toggle
@@ -833,10 +842,15 @@ router.put('/cambios-perfil/:id/aprobar', authMiddleware, adminOnly, async (req,
     .eq('id', solicitud.negocio_id);
   if (updErr) return res.status(400).json({ error: updErr.message });
 
-  // Marcar solicitud como aprobada
-  await supabase.from('negocio_cambios_pendientes')
-    .update({ estado: 'aprobado', updated_at: new Date().toISOString() })
+  // Marcar solicitud como aprobada. reviewed_at (no updated_at, esa columna no
+  // existe en negocio_cambios_pendientes) — si esta escritura fallara, la
+  // solicitud quedaría en 'pendiente' para siempre pese a que los cambios ya
+  // se aplicaron al negocio, dejando el banner "Cambios en revisión" fijo en
+  // el panel del restaurante. Por eso ahora se verifica su error.
+  const { error: estadoErr } = await supabase.from('negocio_cambios_pendientes')
+    .update({ estado: 'aprobado', reviewed_at: new Date().toISOString(), revisado_por: req.usuario.id })
     .eq('id', req.params.id);
+  if (estadoErr) return res.status(400).json({ error: estadoErr.message });
 
   // Notificar al propietario
   const propietarioId = solicitud.negocios?.propietario_id;
@@ -861,9 +875,10 @@ router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req
     .single();
   if (fetchErr || !solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
 
-  await supabase.from('negocio_cambios_pendientes')
-    .update({ estado: 'rechazado', motivo_rechazo: motivo || null, updated_at: new Date().toISOString() })
+  const { error: estadoErr } = await supabase.from('negocio_cambios_pendientes')
+    .update({ estado: 'rechazado', motivo_rechazo: motivo || null, reviewed_at: new Date().toISOString(), revisado_por: req.usuario.id })
     .eq('id', req.params.id);
+  if (estadoErr) return res.status(400).json({ error: estadoErr.message });
 
   const propietarioId = solicitud.negocios?.propietario_id;
   if (propietarioId) {

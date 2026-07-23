@@ -231,7 +231,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, imagen_url, peso_kg, fecha_caducidad, categoria_alimento,
+    permite_envio, imagen_url, peso_estimado_kg, fecha_caducidad, categoria_alimento,
     categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
     es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
@@ -272,7 +272,7 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
-  const pesoKg = parseFloat(peso_kg) || 0.5;
+  const pesoKg = parseFloat(peso_estimado_kg) || 0.5;
 
   let { data, error } = await supabase
     .from('bolsas')
@@ -285,7 +285,7 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_inicio: hora_recogida_inicio || '18:00',
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
-      peso_kg: pesoKg,
+      peso_estimado_kg: pesoKg,
       categoria_alimento: categoria_alimento || null,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
@@ -303,7 +303,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
   if (error) {
     // Fallback: solo omite las columnas de metadata más recientes (fecha_caducidad,
-    // categoria_menu) que pueden faltar en despliegues antiguos. peso_kg y los
+    // categoria_menu) que pueden faltar en despliegues antiguos. peso_estimado_kg y los
     // flags es_tiempo_limitado/es_promocion/es_descuento se preservan siempre:
     // son los que definen el tipo real de la publicación y no deben perderse.
     const r = await supabase
@@ -317,7 +317,7 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_inicio: hora_recogida_inicio || '18:00',
         hora_recogida_fin: hora_recogida_fin || '20:00',
         permite_envio: permite_envio || false,
-        peso_kg: pesoKg,
+        peso_estimado_kg: pesoKg,
         imagen_url: imagen_url || null,
         estado_aprobacion: estadoAprobacion,
         es_tiempo_limitado: es_tiempo_limitado ?? false,
@@ -346,7 +346,7 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa, error: bolsaErr } = await supabase
     .from('bolsas')
-    .select('negocio_id, estado_aprobacion, peso_kg, categoria_alimento')
+    .select('negocio_id, estado_aprobacion, peso_estimado_kg, categoria_alimento')
     .eq('id', req.params.id)
     .single();
   console.log('[PUT /bolsas/:id] id=%s usuario=%s error=%s', req.params.id, req.usuario?.id, bolsaErr?.message);
@@ -366,7 +366,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
     'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
-    'es_destacado','es_mas_vendido','es_precio_bajo','peso_kg'];
+    'es_destacado','es_mas_vendido','es_precio_bajo','peso_estimado_kg'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 

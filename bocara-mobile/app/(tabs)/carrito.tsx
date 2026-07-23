@@ -28,7 +28,7 @@ export default function CarritoScreen() {
     );
   }
 
-  const kgTotal = items.reduce((sum, i) => sum + (((i.bolsa as any).peso_kg ?? 0) * i.cantidad), 0);
+  const kgTotal = items.reduce((sum, i) => sum + (((i.bolsa as any).peso_estimado_kg ?? 0) * i.cantidad), 0);
   const ahorrado = items.reduce((sum, i) => sum + (i.bolsa.precio_original - i.bolsa.precio_descuento) * i.cantidad, 0);
 
   return (

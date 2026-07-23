@@ -40,7 +40,7 @@ const FORM_INIT = {
   precio_original: '', precio_descuento: '',
   cantidad_disponible: '5',
   hora_recogida_inicio: '18:00', hora_recogida_fin: '20:00',
-  peso_kg: '0.5', imagen_url: '', activo: true,
+  peso_estimado_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
   fecha_caducidad: '',
   categoria_alimento: '',
@@ -135,7 +135,7 @@ export default function BolsasRestauranteScreen() {
         precio_original: String(b.precio_original),
         precio_descuento: String(b.precio_descuento),
         cantidad_disponible: String(b.cantidad_disponible),
-        peso_kg: String(b.peso_kg || 0.5),
+        peso_estimado_kg: String(b.peso_estimado_kg || 0.5),
         hora_recogida_inicio: b.hora_recogida_inicio || '18:00',
         hora_recogida_fin: b.hora_recogida_fin || '20:00',
         imagen_url: b.imagen_url || '',
@@ -230,7 +230,7 @@ export default function BolsasRestauranteScreen() {
     payload.categoria_alimento = form.categoria_alimento || null;
     // peso y fecha de caducidad solo para bolsas
     if (form.tipo_form === 'bolsa') {
-      payload.peso_kg = parseFloat(form.peso_kg) || 0.5;
+      payload.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
       const [d, m, y] = form.fecha_caducidad.split('/');
       if (d && m && y) payload.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
     }
@@ -558,8 +558,8 @@ export default function BolsasRestauranteScreen() {
                 />
                 <Field
                   label="Peso aproximado por unidad (kg)"
-                  value={form.peso_kg}
-                  onChange={set('peso_kg')}
+                  value={form.peso_estimado_kg}
+                  onChange={set('peso_estimado_kg')}
                   placeholder="0.5"
                   keyboard="numeric"
                 />

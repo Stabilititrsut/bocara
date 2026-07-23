@@ -158,7 +158,7 @@ router.get('/:id/impacto', async (req, res) => {
   try {
     const { data: pedidos, error } = await supabase
       .from('pedidos')
-      .select('precio_bolsa, bolsas!bolsa_id(peso_kg)')
+      .select('precio_bolsa, bolsas!bolsa_id(peso_estimado_kg)')
       .eq('negocio_id', req.params.id)
       .in('estado', ['completado', 'recogido']);
     if (error) return res.status(500).json({ error: error.message });
@@ -166,7 +166,7 @@ router.get('/:id/impacto', async (req, res) => {
     const pedidos_completados = rows.length;
     const unidades_rescatadas = rows.length; // sin columna cantidad; cada pedido = 1 unidad
     const kg_rescatados = Math.round(
-      rows.reduce((sum, p) => sum + (parseFloat(p.bolsas?.peso_kg) || 0), 0) * 10
+      rows.reduce((sum, p) => sum + (parseFloat(p.bolsas?.peso_estimado_kg) || 0), 0) * 10
     ) / 10;
     const ventas_recuperadas = Math.round(
       rows.reduce((sum, p) => sum + (parseFloat(p.precio_bolsa) || 0), 0) * 100
@@ -451,7 +451,7 @@ router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) =>
   if (pendiente) {
     ({ data, error } = await supabase
       .from('negocio_cambios_pendientes')
-      .update({ cambios, updated_at: new Date().toISOString() })
+      .update({ cambios })
       .eq('id', pendiente.id)
       .select()
       .single());

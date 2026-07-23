@@ -52,7 +52,7 @@ export interface Bolsa {
   hora_recogida_fin: string;
   fecha_disponible?: string;
   permite_envio: boolean;
-  peso_kg?: number;
+  peso_estimado_kg?: number;
   categoria_alimento?: string | null;
   activo: boolean;
   negocios?: Negocio;

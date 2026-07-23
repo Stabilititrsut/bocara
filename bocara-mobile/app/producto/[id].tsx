@@ -458,12 +458,12 @@ export default function ProductoScreen() {
             </View>
 
             {/* Peso aproximado por unidad */}
-            {(bolsa as any).peso_kg > 0 && (
+            {(bolsa as any).peso_estimado_kg > 0 && (
               <View style={s.impactCard}>
                 <Text style={s.impactEmoji}>🍽️</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={s.impactTitle}>Peso aproximado por unidad</Text>
-                  <Text style={s.impactText}>{(bolsa as any).peso_kg} kg de alimentos</Text>
+                  <Text style={s.impactText}>{(bolsa as any).peso_estimado_kg} kg de alimentos</Text>
                 </View>
               </View>
             )}

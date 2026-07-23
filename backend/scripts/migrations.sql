@@ -88,9 +88,15 @@ ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT;
 UPDATE bolsas SET estado_aprobacion = 'aprobado' WHERE estado_aprobacion IS NULL;
 
 -- 10. Peso del producto para cálculo automático de CO₂
---     Formula: co2_salvado_kg = peso_kg × factor_emision (kgCO₂e/kg)
+--     Formula: co2_salvado_kg = peso_estimado_kg × factor_emision (kgCO₂e/kg)
 --     Fuentes: Our World in Data, FAO (2013), EPA WARM Model
-ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS peso_kg NUMERIC(10,3) DEFAULT 0.5;
+--     NOTA 2026-07-22: esta migración originalmente creaba una columna nueva
+--     "peso_kg". Introspección real del esquema (information_schema.columns)
+--     confirmó que la tabla bolsas ya traía "peso_estimado_kg" desde su
+--     creación original — nunca hizo falta la columna nueva, y el código que
+--     sí la usaba fallaba en producción con "column does not exist". El
+--     código ahora usa peso_estimado_kg; se retira este ALTER para no crear
+--     una columna duplicada sin uso.
 
 -- 11. Campo data en notificaciones (metadata adicional)
 ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS data JSONB;

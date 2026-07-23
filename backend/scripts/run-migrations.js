@@ -151,8 +151,8 @@ const SQL_STATEMENTS = [
   "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS estado_aprobacion TEXT DEFAULT 'aprobado'",
   "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT",
   "UPDATE bolsas SET estado_aprobacion = 'aprobado' WHERE estado_aprobacion IS NULL",
-  // bolsas — peso para cálculo automático de CO₂
-  "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS peso_kg NUMERIC(10,3) DEFAULT 0.5",
+  // bolsas ya trae peso_estimado_kg desde su esquema original — no se necesita
+  // una columna peso_kg nueva (ver nota en backend/scripts/migrations.sql).
   // notificaciones — campo data para metadata extra
   "ALTER TABLE notificaciones ADD COLUMN IF NOT EXISTS data JSONB",
   // pedidos — estado en_preparacion

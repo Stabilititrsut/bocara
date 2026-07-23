@@ -229,9 +229,9 @@ export default function AdminContenidoScreen() {
                       <Text style={s.metaChipText}>📅 Caduca: {item.fecha_caducidad}</Text>
                     </View>
                   )}
-                  {item.peso_kg != null && (
+                  {item.peso_estimado_kg != null && (
                     <View style={s.metaChip}>
-                      <Text style={s.metaChipText}>⚖️ Peso aprox.: {item.peso_kg} kg</Text>
+                      <Text style={s.metaChipText}>⚖️ Peso aprox.: {item.peso_estimado_kg} kg</Text>
                     </View>
                   )}
                   {item.created_at && (
