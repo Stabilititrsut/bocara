@@ -5,12 +5,14 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { negociosAPI, uploadsAPI, adminAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
+const CAMBIO_CERRADO_KEY = 'bocara_cambio_perfil_cerrado';
 
 export default function PerfilRestauranteScreen() {
   const [negocio, setNegocio] = useState<any>(null);
@@ -32,6 +34,7 @@ export default function PerfilRestauranteScreen() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
   const [refrescando, setRefrescando] = useState(false);
+  const [solicitudCerrada, setSolicitudCerrada] = useState<string | null>(null);
   const set = (k: string) => (v: string) => {
     setForm((f: any) => ({ ...f, [k]: v }));
     setCamposPendientes(prev => {
@@ -92,7 +95,17 @@ export default function PerfilRestauranteScreen() {
   }, [camposPendientes]);
 
   // Carga inicial
-  useEffect(() => { cargarNegocio(); cargarSolicitud(); }, []);
+  useEffect(() => {
+    cargarNegocio();
+    cargarSolicitud();
+    AsyncStorage.getItem(CAMBIO_CERRADO_KEY).then(id => { if (id) setSolicitudCerrada(id); }).catch(() => {});
+  }, []);
+
+  function cerrarSolicitud() {
+    if (!solicitudPendiente) return;
+    setSolicitudCerrada(solicitudPendiente.id);
+    AsyncStorage.setItem(CAMBIO_CERRADO_KEY, solicitudPendiente.id).catch(() => {});
+  }
 
   // Re-sincronizar con el servidor cada vez que la pantalla recupera el foco
   // (evita que un cambio aprobado/rechazado por el admin siga viéndose como pendiente)
@@ -328,8 +341,12 @@ export default function PerfilRestauranteScreen() {
           </View>
         )}
 
-        {/* Banner: estado de la última solicitud de cambios */}
-        {solicitudPendiente && (
+        {/* Banner: estado de la última solicitud de cambios. Una vez resuelta
+            (aprobada/rechazada) se puede cerrar con la X — el cierre se
+            recuerda por solicitud (AsyncStorage) para que no reaparezca en
+            cada visita a la pantalla. Mientras está pendiente no se puede
+            cerrar: sigue siendo información activa. */}
+        {solicitudPendiente && solicitudPendiente.id !== solicitudCerrada && (
           <View style={[
             s.solicitudBanner,
             solicitudPendiente.estado === 'pendiente' && s.solicitudPendiente,
@@ -350,6 +367,11 @@ export default function PerfilRestauranteScreen() {
                 <Text style={s.solicitudMotivo}>Motivo: {solicitudPendiente.motivo_rechazo}</Text>
               )}
             </View>
+            {solicitudPendiente.estado !== 'pendiente' && (
+              <TouchableOpacity onPress={cerrarSolicitud} style={s.solicitudCerrar} hitSlop={8}>
+                <Text style={s.solicitudCerrarText}>✕</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -635,6 +657,8 @@ const s = StyleSheet.create({
   solicitudEmoji: { fontSize: 20, marginTop: 1 },
   solicitudTitulo: { fontSize: 13, fontWeight: '800', color: Colors.brown },
   solicitudMotivo: { fontSize: 12, color: Colors.textSecondary, marginTop: 3, lineHeight: 18 },
+  solicitudCerrar: { padding: 4, marginTop: -2, marginRight: -4 },
+  solicitudCerrarText: { fontSize: 15, fontWeight: '800', color: Colors.textSecondary },
   dpiContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 140, borderWidth: 1.5, borderColor: Colors.border },
   dpiImg: { width: '100%', height: '100%' },
   dpiPlaceholder: { width: '100%', height: '100%', backgroundColor: '#FEF3C7', justifyContent: 'center', alignItems: 'center', gap: 6 },
