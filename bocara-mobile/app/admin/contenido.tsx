@@ -91,7 +91,14 @@ export default function AdminContenidoScreen() {
     setModalCambios(null);
     try {
       await adminAPI.pedirCambiosBolsa(id, motivoCambios);
-      setItems(prev => prev.filter(i => i.id !== id));
+      // A diferencia de aprobar/rechazar, "pedir cambios" NO saca la bolsa de
+      // revisión — la deja en estado_aprobacion='pendiente' a propósito, con
+      // el motivo guardado, para que el restaurante la corrija y un admin la
+      // vuelva a revisar. Por eso sigue apareciendo en /contenido/pendiente:
+      // no es un error, así que se refresca desde el servidor en vez de
+      // sacarla optimistamente de la lista (eso hacía parecer que "se perdía"
+      // el cambio al recargar, cuando en realidad nunca debió desaparecer).
+      await cargar();
       showToast(`⚠️ Cambios solicitados para "${nombre}". Restaurante notificado.`);
     } catch (e: any) {
       setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al pedir cambios' }));

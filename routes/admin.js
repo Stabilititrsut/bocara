@@ -792,9 +792,10 @@ router.put('/bolsas/:id/pedir-cambios', authMiddleware, adminOnly, async (req, r
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
   // Mantener en pendiente con el motivo guardado para que el restaurante sepa qué corregir
-  await supabase.from('bolsas')
+  const { error: estadoErr } = await supabase.from('bolsas')
     .update({ estado_aprobacion: 'pendiente', motivo_rechazo: motivo || null })
     .eq('id', req.params.id);
+  if (estadoErr) return res.status(400).json({ error: estadoErr.message });
 
   const propietarioId = bolsa.negocios?.propietario_id;
   if (propietarioId) {
