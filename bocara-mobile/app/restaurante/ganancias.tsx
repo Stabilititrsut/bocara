@@ -6,12 +6,13 @@ import {
 import { negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
-type Periodo = 'dia' | 'semana' | 'mes';
+type Periodo = 'dia' | 'semana' | 'mes' | 'todo';
 
 const PERIODOS: { key: Periodo; label: string }[] = [
   { key: 'dia',    label: 'Hoy' },
   { key: 'semana', label: '7 días' },
   { key: 'mes',    label: '30 días' },
+  { key: 'todo',   label: 'Todo' },
 ];
 
 export default function GananciasScreen() {
@@ -218,3 +219,4 @@ const s = StyleSheet.create({
   liqDetail: { fontSize: 12, color: Colors.textSecondary },
   liqRef: { fontSize: 11, color: Colors.textLight, marginTop: 4 },
 });
+
