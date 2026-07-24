@@ -17,6 +17,15 @@ const PAYU_CHECKOUT = SANDBOX
 
 const COMISION_PAYU = 0.036; // ≈ 3.6% tarifa PayU Guatemala
 
+// Números de Guatemala tienen 8 dígitos locales. Algunos registros en `usuarios.telefono`
+// ya incluyen el prefijo "502" y otros no — tomar los últimos 8 dígitos normaliza ambos
+// casos y evita duplicar el código de país (causaba 422 "invalid phone number" en Cubo).
+function formatearTelefonoCubo(telefono) {
+  if (!telefono) return undefined;
+  const local = telefono.replace(/\D/g, '').slice(-8);
+  return local ? `+502${local}` : undefined;
+}
+
 function payuSign(apiKey, merchantId, refCode, amount, currency) {
   const str = `${apiKey}~${merchantId}~${refCode}~${amount.toFixed(2)}~${currency}`;
   return crypto.createHash('md5').update(str).digest('hex');
@@ -449,7 +458,7 @@ router.post('/cubopago', authMiddleware, async (req, res) => {
       cliente: {
         nombre:   `${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim() || undefined,
         email:    usuario?.email    || undefined,
-        telefono: usuario?.telefono ? `+502${usuario.telefono.replace(/\D/g, '')}` : undefined,
+        telefono: formatearTelefonoCubo(usuario?.telefono),
       },
       items: cuboItems,
     });
@@ -818,7 +827,7 @@ router.post('/generar-link', authMiddleware, async (req, res) => {
       cliente: {
         nombre: `${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim() || undefined,
         email: usuario?.email || undefined,
-        telefono: usuario?.telefono ? `+502${usuario.telefono.replace(/\D/g, '')}` : undefined,
+        telefono: formatearTelefonoCubo(usuario?.telefono),
       },
       items: cuboItems,
     });
