@@ -28,6 +28,7 @@ export default function PerfilRestauranteScreen() {
   const { logout } = useAuth();
   const fileInputRef = useRef<any>(null);
   const dpiInputRef = useRef<any>(null);
+  const pollingRef = useRef<any>(null);
   const [dpiUrl, setDpiUrl] = useState('');
   const [uploadingDpi, setUploadingDpi] = useState(false);
   const [dpiError, setDpiError] = useState('');
@@ -99,6 +100,12 @@ export default function PerfilRestauranteScreen() {
     cargarNegocio();
     cargarSolicitud();
     AsyncStorage.getItem(CAMBIO_CERRADO_KEY).then(id => { if (id) setSolicitudCerrada(id); }).catch(() => {});
+    // Refresca el estado de la solicitud cada 30s — sin esto, el banner queda
+    // desactualizado si el admin la resuelve mientras la pantalla sigue abierta
+    // sin navegar (useFocusEffect no cubre ese caso). Mismo patrón que
+    // restaurante/notificaciones.tsx.
+    pollingRef.current = setInterval(cargarSolicitud, 30000);
+    return () => clearInterval(pollingRef.current);
   }, []);
 
   function cerrarSolicitud() {
