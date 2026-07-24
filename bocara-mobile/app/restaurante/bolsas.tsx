@@ -346,10 +346,13 @@ export default function BolsasRestauranteScreen() {
                   <Text style={s.cardSub} numberOfLines={1}>{b.descripcion}</Text>
                 )}
                 <Text style={s.cardHora}>⏰ {b.hora_recogida_inicio?.slice(0, 5)} – {b.hora_recogida_fin?.slice(0, 5)}</Text>
-                {b.estado_aprobacion === 'pendiente' && (
+                {b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo && (
                   <Text style={s.revisionMsg}>Esta publicación está siendo revisada por el administrador</Text>
                 )}
-                {b.estado_aprobacion === 'rechazado' && b.motivo_rechazo && (
+                {b.estado_aprobacion === 'pendiente' && b.motivo_rechazo && (
+                  <Text style={s.revisionMsg}>El administrador pidió cambios — corrige y guarda para reenviar a revisión</Text>
+                )}
+                {b.motivo_rechazo && (
                   <View style={s.motivoBox}><Text style={s.motivoText}>Motivo: {b.motivo_rechazo}</Text></View>
                 )}
               </View>

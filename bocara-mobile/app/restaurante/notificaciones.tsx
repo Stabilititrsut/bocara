@@ -12,6 +12,7 @@ const TIPO_CONFIG: Record<string, { emoji: string; color: string }> = {
   negocio_suspendido:    { emoji: '⚠️', color: '#F59E0B' },
   bolsa_aprobada:        { emoji: '✅', color: '#22C55E' },
   bolsa_rechazada:       { emoji: '❌', color: '#EF4444' },
+  bolsa_cambios_solicitados: { emoji: '⚠️', color: '#F59E0B' },
   nuevo_pedido:          { emoji: '🛍️', color: Colors.orange },
   pedido_en_preparacion: { emoji: '👨‍🍳', color: '#7C3AED' },
   pedido_listo:          { emoji: '🔔', color: Colors.orange },

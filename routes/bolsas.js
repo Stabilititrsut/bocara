@@ -346,7 +346,7 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa, error: bolsaErr } = await supabase
     .from('bolsas')
-    .select('negocio_id, estado_aprobacion, peso_estimado_kg, categoria_alimento')
+    .select('negocio_id, estado_aprobacion, motivo_rechazo, peso_estimado_kg, categoria_alimento')
     .eq('id', req.params.id)
     .single();
   console.log('[PUT /bolsas/:id] id=%s usuario=%s error=%s', req.params.id, req.usuario?.id, bolsaErr?.message);
@@ -381,6 +381,11 @@ router.put('/:id', authMiddleware, async (req, res) => {
     // Si editó el contenido de una bolsa aprobada o rechazada, vuelve a revisión del admin
     if (!soloVisibilidad && (bolsa.estado_aprobacion === 'aprobado' || bolsa.estado_aprobacion === 'rechazado')) {
       updates.estado_aprobacion = 'pendiente';
+      updates.motivo_rechazo = null;
+    } else if (!soloVisibilidad && bolsa.estado_aprobacion === 'pendiente' && bolsa.motivo_rechazo) {
+      // Estaba en "pedir cambios" (pendiente + motivo). Al reenviar, limpiar el
+      // motivo para que el admin vea que el restaurante ya corrigió y quede
+      // claro en la cola que espera una revisión nueva, no la misma de antes.
       updates.motivo_rechazo = null;
     }
   } else if (req.body.estado_aprobacion !== undefined) {

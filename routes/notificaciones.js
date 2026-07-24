@@ -15,7 +15,7 @@ router.get('/', authMiddleware, async (req, res) => {
     .from('notificaciones')
     .select('*')
     .eq('usuario_id', req.usuario.id)
-    .order('created_at', { ascending: false })
+    .order('creado_en', { ascending: false })
     .limit(50);
 
   // BUG 4: Filtrar por tipos relevantes según rol
