@@ -14,7 +14,7 @@ import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 
 const { height: SH } = Dimensions.get('window');
-const IMG_H = Math.round(SH * 0.42);
+const IMG_H = Math.round(SH * 0.48);
 const STATUS_TOP = Platform.OS === 'ios' ? 52 : (StatusBar.currentHeight || 24) + 8;
 
 function calcularEstadoHorario(inicio: string, fin: string) {

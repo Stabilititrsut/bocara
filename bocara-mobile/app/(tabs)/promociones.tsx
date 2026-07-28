@@ -13,8 +13,8 @@ const YELLOW = '#FFD600';
 const DARK = '#0A2A2A';
 const { width: SW } = Dimensions.get('window');
 const CARD_W = Math.floor((SW - 48) / 2);
-const CARD_H = 255;
-const CARD_IMG_H = 140;
+const CARD_H = 295;
+const CARD_IMG_H = 180;
 
 const CATEGORIAS = [
   'Todos', 'Panadería', 'Restaurante', 'Cafetería',

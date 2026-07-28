@@ -28,7 +28,7 @@ const SLIDES = [
     color: Colors.primary,
     bg: Colors.surface,
     titulo: 'Empieza con 10 puntos',
-    texto: 'Te damos 10 puntos de bienvenida. Úsalos para canjear descuentos. ¡Rescata tu primera bolsa y gana más!',
+    texto: 'Te damos 10 puntos de bienvenida. Suma más con cada bolsa que rescates y sube de nivel. ¡Rescata tu primera bolsa y gana más!',
   },
 ];
 

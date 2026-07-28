@@ -337,7 +337,7 @@ const pc = StyleSheet.create({
     shadowOpacity: 0.08, shadowRadius: 8,
   },
   agotado: { opacity: 0.45 },
-  imgWrap: { height: 140, backgroundColor: SURF, justifyContent: 'center', alignItems: 'center' },
+  imgWrap: { height: 180, backgroundColor: SURF, justifyContent: 'center', alignItems: 'center' },
   placeholder: { backgroundColor: SURF, justifyContent: 'center', alignItems: 'center' },
   badgeDisc: {
     position: 'absolute', top: 10, left: 10,
