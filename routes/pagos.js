@@ -604,9 +604,16 @@ router.post('/preparar', authMiddleware, async (req, res) => {
       .select('id');
     console.log('[PREPARAR] pedidos anteriores cancelados:', viejos?.length ?? 0);
     // Liberar reservas de cupón de borradores cancelados
+    // NOTA: .rpc(...) no expone .catch() directamente (solo .then()) — encadenarlo
+    // así lanza "‥.catch is not a function" de forma síncrona y tumbaba TODO /preparar
+    // (incluso sin cupón de por medio, porque este bloque corre para cualquier usuario
+    // con un carrito previo sin terminar). Usar try/catch alrededor del await en su lugar.
     for (const v of (viejos || [])) {
-      await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: v.id })
-        .catch(err => console.error('[PREPARAR] liberar_reserva_cupon error:', err.message));
+      try {
+        await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: v.id });
+      } catch (err) {
+        console.error('[PREPARAR] liberar_reserva_cupon error:', err.message);
+      }
     }
 
     for (let i = 0; i < cartItems.length; i++) {

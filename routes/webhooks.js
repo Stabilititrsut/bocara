@@ -305,8 +305,14 @@ async function procesarWebhookCubo(body) {
       .neq('estado_pago', 'pagado');
 
     // Liberar reserva de cupón al rechazar el pago
+    // NOTA: .rpc(...) no expone .catch() directamente — encadenarlo así lanzaba
+    // sincrónicamente y tumbaba esta función ANTES del return de abajo, así que
+    // Cubo recibía 500 (y reintentaba el webhook) pese a que el pedido ya había
+    // quedado bien marcado como cancelado/fallido. .then() sí devuelve una
+    // promesa real, así que encadenar el catch después de él es seguro.
     supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedido.id })
-      .catch(err => console.error('[CUBO WEBHOOK] liberar_reserva_cupon (REJECTED) error:', err.message));
+      .then(({ error }) => { if (error) console.error('[CUBO WEBHOOK] liberar_reserva_cupon (REJECTED) error:', error.message); })
+      .catch(err => console.error('[CUBO WEBHOOK] liberar_reserva_cupon (REJECTED) network error:', err.message));
 
     console.log(`[CUBO WEBHOOK] Pedido ${pedido.id} marcado fallido/cancelado — status Cubo: ${rawStatus}`);
     return { statusCode: 200 };

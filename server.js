@@ -181,9 +181,16 @@ app.listen(PORT, () => {
       if (data?.length) {
         console.log('[CLEANUP] borradores expirados cancelados:', data.length);
         // Liberar reservas de cupón de borradores expirados
+        // NOTA: .rpc(...) no expone .catch() directamente (solo .then()) — encadenarlo
+        // así lanzaba sincrónicamente en el primer pedido del lote y abortaba el resto
+        // del for (capturado por el catch de afuera), dejando sin liberar la reserva de
+        // cupón de todos los pedidos siguientes del batch. try/catch por iteración evita eso.
         for (const d of data) {
-          await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: d.id })
-            .catch(err => console.error('[CLEANUP] liberar_reserva_cupon error:', err.message));
+          try {
+            await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: d.id });
+          } catch (err) {
+            console.error('[CLEANUP] liberar_reserva_cupon error:', err.message);
+          }
         }
       }
     } catch (err) {
