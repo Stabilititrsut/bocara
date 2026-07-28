@@ -5,7 +5,7 @@ const router = express.Router();
 
 const TIPOS_RESTAURANTE = [
   'negocio_aprobado','negocio_rechazado','negocio_suspendido',
-  'bolsa_aprobada','bolsa_rechazada','nuevo_pedido','pedido_en_preparacion',
+  'bolsa_aprobada','bolsa_rechazada','bolsa_cambios_solicitados','nuevo_pedido','pedido_en_preparacion',
   'pedido_listo','liquidacion','liquidacion_pagada','perfil_aprobado','perfil_rechazado',
 ];
 

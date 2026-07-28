@@ -101,6 +101,19 @@ router.get('/', authMiddleware, async (req, res) => {
 });
 
 // GET /api/pedidos/restaurante — pedidos para el restaurante
+//
+// El flujo de carrito (POST /pagos/preparar) crea el pedido en estado 'borrador'
+// ANTES de que el cliente confirme nada — es solo un carrito. Si el cliente lo
+// abandona, un cron (server.js) o el propio /pagos/preparar lo pasa a
+// 'cancelado' un par de horas después. Ese 'cancelado' no representa un pedido
+// real: el cliente nunca llegó a pagar ni a iniciar el pago (nunca se generó
+// cubo_payment_intent_token vía /pagos/generar-link). Mostrarlo en el panel
+// del restaurante como "pedido cancelado" es engañoso — infla el conteo con
+// carritos que nadie intentó completar.
+//
+// Un pedido cuenta como real si el pago se completó (estado_pago='pagado') o
+// si al menos se inició (se generó un link de pago con Cubo). 'borrador' puro
+// nunca tiene token, así que queda excluido junto con los cancelados sin token.
 router.get('/restaurante', authMiddleware, async (req, res) => {
   try {
     if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin')
@@ -112,9 +125,11 @@ router.get('/restaurante', authMiddleware, async (req, res) => {
       .from('pedidos')
       .select('*, bolsas!bolsa_id(id,nombre), usuarios!usuario_id(id,nombre,telefono)')
       .eq('negocio_id', negocio.id)
+      .or('estado_pago.eq.pagado,cubo_payment_intent_token.not.is.null')
       .order('created_at', { ascending: false });
     if (error) {
-      const r = await supabase.from('pedidos').select('*').eq('negocio_id', negocio.id);
+      const r = await supabase.from('pedidos').select('*').eq('negocio_id', negocio.id)
+        .or('estado_pago.eq.pagado,cubo_payment_intent_token.not.is.null');
       data = r.data; error = r.error;
     }
     if (error) return res.status(500).json({ error: error.message });

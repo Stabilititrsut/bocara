@@ -313,7 +313,15 @@ export default function BolsasRestauranteScreen() {
           </View>
         )}
 
-        {filtrados.map((b) => (
+        {filtrados.map((b) => {
+          // En revisión inicial = pendiente de la PRIMERA decisión del admin (nunca
+          // aprobada ni rechazada, sin motivo_rechazo). En ese punto el admin puede
+          // estar revisando este contenido en este momento; editar o activar aquí
+          // podría hacer que apruebe una versión distinta a la que ve. Una vez que
+          // hay una decisión (aprobado / rechazado / "pedir cambios" con motivo),
+          // editar y activar vuelven a funcionar con normalidad.
+          const enRevisionInicial = b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
+          return (
           <View key={b.id} style={[s.card, !b.activo && s.cardInactiva]}>
             <View style={s.cardRow}>
               <View style={s.foto}>
@@ -346,8 +354,8 @@ export default function BolsasRestauranteScreen() {
                   <Text style={s.cardSub} numberOfLines={1}>{b.descripcion}</Text>
                 )}
                 <Text style={s.cardHora}>⏰ {b.hora_recogida_inicio?.slice(0, 5)} – {b.hora_recogida_fin?.slice(0, 5)}</Text>
-                {b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo && (
-                  <Text style={s.revisionMsg}>Esta publicación está siendo revisada por el administrador</Text>
+                {enRevisionInicial && (
+                  <Text style={s.revisionMsg}>Esta publicación está siendo revisada por el administrador. No se puede editar ni activar hasta que se resuelva la revisión.</Text>
                 )}
                 {b.estado_aprobacion === 'pendiente' && b.motivo_rechazo && (
                   <Text style={s.revisionMsg}>El administrador pidió cambios — corrige y guarda para reenviar a revisión</Text>
@@ -366,28 +374,36 @@ export default function BolsasRestauranteScreen() {
             <View style={s.cardActions}>
               <Switch
                 value={!!b.activo}
+                disabled={enRevisionInicial}
                 onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'))}
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
               {/* Visible a clientes solo si activo Y aprobado */}
               <Text style={s.switchLabel}>
-                {b.activo && (b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion)
+                {enRevisionInicial
+                  ? 'En revisión'
+                  : b.activo && (b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion)
                   ? 'Visible'
                   : b.activo && b.estado_aprobacion === 'pendiente'
                   ? 'En revisión'
                   : 'Inactiva'}
               </Text>
               <View style={{ flex: 1 }} />
-              <TouchableOpacity style={s.editBtn} onPress={() => abrir(b)}>
-                <Text style={s.editBtnText}>Editar</Text>
+              <TouchableOpacity
+                style={[s.editBtn, enRevisionInicial && s.editBtnDisabled]}
+                onPress={() => abrir(b)}
+                disabled={enRevisionInicial}
+              >
+                <Text style={[s.editBtnText, enRevisionInicial && s.editBtnTextDisabled]}>Editar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.deleteBtn} onPress={() => eliminar(b.id)}>
                 <Text style={s.deleteBtnText}>Eliminar</Text>
               </TouchableOpacity>
             </View>
           </View>
-        ))}
+          );
+        })}
         <View style={{ height: 20 }} />
       </ScrollView>
 
@@ -669,6 +685,8 @@ const s = StyleSheet.create({
   switchLabel: { fontSize: 12, color: Colors.textSecondary, marginLeft: 4 },
   editBtn: { borderWidth: 1.5, borderColor: Colors.aqua, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, marginRight: 8 },
   editBtnText: { color: Colors.aqua, fontSize: 13, fontWeight: '700' },
+  editBtnDisabled: { borderColor: Colors.border },
+  editBtnTextDisabled: { color: Colors.textLight },
   deleteBtn: { borderWidth: 1.5, borderColor: Colors.error, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 },
   deleteBtnText: { color: Colors.error, fontSize: 13, fontWeight: '700' },
 

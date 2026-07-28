@@ -360,6 +360,17 @@ router.put('/:id', authMiddleware, async (req, res) => {
       .eq('propietario_id', req.usuario.id)
       .single();
     if (!negocio) return res.status(403).json({ error: 'No autorizado' });
+
+    // En revisión inicial (pendiente, nunca aprobada/rechazada, sin "pedir cambios"
+    // de por medio) el admin puede estar mirando esta publicación en este momento —
+    // permitir editarla o activarla podría hacer que apruebe una versión que el
+    // restaurante ya cambió. Bloqueado solo mientras dure esa primera revisión;
+    // en cuanto hay una decisión (aprobado/rechazado/pedir-cambios) se libera.
+    if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo) {
+      return res.status(409).json({
+        error: 'Esta publicación está en revisión inicial. Espera a que el administrador la revise antes de editarla o activarla.',
+      });
+    }
   }
 
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',

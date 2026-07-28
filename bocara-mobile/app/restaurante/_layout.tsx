@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
 import { Tabs } from 'expo-router';
 import { Text, View } from 'react-native';
-import { notificacionesAPI } from '@/src/services/api';
+import { NotificacionesRestauranteProvider, useNotificacionesRestaurante } from '@/src/context/NotificacionesRestauranteContext';
 
 const PRIMARY = '#0A2A2A';
 const GOLD    = '#C8960C';
@@ -21,19 +20,15 @@ function TabIcon({ emoji, label, focused }: { emoji: string; label: string; focu
 }
 
 export default function RestauranteLayout() {
-  const [sinLeer, setSinLeer] = useState(0);
+  return (
+    <NotificacionesRestauranteProvider>
+      <RestauranteTabs />
+    </NotificacionesRestauranteProvider>
+  );
+}
 
-  useEffect(() => {
-    const cargar = async () => {
-      try {
-        const res = await notificacionesAPI.listar();
-        setSinLeer((res.data || []).filter((n: any) => !n.leida).length);
-      } catch {}
-    };
-    cargar();
-    const interval = setInterval(cargar, 30000);
-    return () => clearInterval(interval);
-  }, []);
+function RestauranteTabs() {
+  const { sinLeer } = useNotificacionesRestaurante();
 
   return (
     <Tabs screenOptions={{

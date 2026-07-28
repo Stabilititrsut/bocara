@@ -1,10 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   RefreshControl, ActivityIndicator, SafeAreaView,
 } from 'react-native';
-import { notificacionesAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { useNotificacionesRestaurante } from '@/src/context/NotificacionesRestauranteContext';
 
 const TIPO_CONFIG: Record<string, { emoji: string; color: string }> = {
   negocio_aprobado:      { emoji: '🎉', color: '#22C55E' },
@@ -24,36 +24,14 @@ const TIPO_CONFIG: Record<string, { emoji: string; color: string }> = {
 };
 
 export default function RestauranteNotificacionesScreen() {
-  const [notifs, setNotifs] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { notifs, sinLeer, loading, refrescar, marcarLeida } = useNotificacionesRestaurante();
   const [refreshing, setRefreshing] = useState(false);
-  const pollingRef = useRef<any>(null);
 
-  const TIPOS_RESTAURANTE = new Set(Object.keys(TIPO_CONFIG).filter(k => k !== 'default'));
-
-  const cargar = useCallback(async () => {
-    try {
-      const res = await notificacionesAPI.listar();
-      // BUG 4: Mostrar solo notificaciones relevantes para restaurantes
-      const todas: any[] = res.data || [];
-      setNotifs(todas.filter(n => !n.tipo || TIPOS_RESTAURANTE.has(n.tipo)));
-    } catch { setNotifs([]); } finally { setLoading(false); setRefreshing(false); }
-  }, []);
-
-  useEffect(() => {
-    cargar();
-    pollingRef.current = setInterval(cargar, 30000);
-    return () => clearInterval(pollingRef.current);
-  }, [cargar]);
-
-  async function marcarLeida(id: string) {
-    try {
-      await notificacionesAPI.marcarLeida(id);
-      setNotifs(prev => prev.map(n => n.id === id ? { ...n, leida: true } : n));
-    } catch { }
+  async function onRefresh() {
+    setRefreshing(true);
+    await refrescar();
+    setRefreshing(false);
   }
-
-  const sinLeer = notifs.filter(n => !n.leida).length;
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
 
@@ -75,7 +53,7 @@ export default function RestauranteNotificacionesScreen() {
       ) : (
         <ScrollView
           contentContainerStyle={s.scroll}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.orange} />}
         >
           {notifs.map((n) => {
             const cfg = TIPO_CONFIG[n.tipo] || TIPO_CONFIG.default;
