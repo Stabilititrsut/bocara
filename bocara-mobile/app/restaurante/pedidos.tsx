@@ -17,7 +17,9 @@ if (Platform.OS !== 'web') {
   } catch {}
 }
 
-const ESTADOS = ['todos', 'confirmado', 'en_preparacion', 'listo', 'completado', 'cancelado'];
+// 'cancelado' fuera de las pestañas a propósito: los pedidos cancelados/no
+// confirmados no deben mostrarse en ningún panel — ver filtro en cargar().
+const ESTADOS = ['todos', 'confirmado', 'en_preparacion', 'listo', 'completado'];
 const ESTADO_LABELS: Record<string, string> = {
   confirmado: 'Confirmado', en_preparacion: 'En preparación',
   listo: 'Listo', completado: 'Recogido', recogido: 'Recogido', cancelado: 'Cancelado', pendiente: 'Pendiente',
@@ -124,7 +126,11 @@ export default function PedidosRestauranteScreen() {
   const cargar = useCallback(async () => {
     try {
       const res = await pedidosAPI.restaurante();
-      setPedidos(res.data || []);
+      // El backend ya filtra a pagos verificados por Cubo, pero incluye
+      // cancelados (un pedido puede pagarse y luego cancelarse) — esta pantalla
+      // nunca debe mostrarlos.
+      const reales = (res.data || []).filter((p: any) => p.estado !== 'cancelado');
+      setPedidos(reales);
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
