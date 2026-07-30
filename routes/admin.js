@@ -866,6 +866,35 @@ router.put('/cambios-perfil/:id/aprobar', authMiddleware, adminOnly, async (req,
   res.json({ ok: true });
 });
 
+// PUT /api/admin/cambios-perfil/:id/pedir-cambios — mantener pendiente con motivo para que el restaurante corrija y reenvíe
+router.put('/cambios-perfil/:id/pedir-cambios', authMiddleware, adminOnly, async (req, res) => {
+  const { motivo } = req.body;
+  const { data: solicitud, error: fetchErr } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('*, negocios(id,propietario_id,nombre)')
+    .eq('id', req.params.id)
+    .single();
+  if (fetchErr || !solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
+  if (solicitud.estado !== 'pendiente') return res.status(400).json({ error: 'La solicitud ya fue procesada' });
+
+  const { error: estadoErr } = await supabase.from('negocio_cambios_pendientes')
+    .update({ estado: 'pendiente', motivo_rechazo: motivo || null })
+    .eq('id', req.params.id);
+  if (estadoErr) return res.status(400).json({ error: estadoErr.message });
+
+  const propietarioId = solicitud.negocios?.propietario_id;
+  if (propietarioId) {
+    const motivoTexto = motivo ? `: ${motivo}` : '. Revisa y reenvía tus cambios de perfil.';
+    await guardarNotificacion(supabase, propietarioId, 'perfil_cambios_solicitados',
+      '⚠️ Se solicitan cambios en tu perfil',
+      `El administrador te pide corregir los cambios enviados para "${solicitud.negocios?.nombre}"${motivoTexto}`,
+      { negocioId: solicitud.negocio_id, motivo }
+    );
+  }
+
+  res.json({ ok: true });
+});
+
 // PUT /api/admin/cambios-perfil/:id/rechazar
 router.put('/cambios-perfil/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
   const { motivo } = req.body;

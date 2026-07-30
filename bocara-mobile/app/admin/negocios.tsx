@@ -200,7 +200,7 @@ export default function AdminNegociosScreen() {
                   </TouchableOpacity>
                 </>
               )}
-              {n.activo === false && (
+              {n.verificado && n.activo === false && (
                 <TouchableOpacity style={s.btnActivar} onPress={() => activar(n.id)} disabled={!!procesando}>
                   {procesando === n.id
                     ? <ActivityIndicator color="#16A34A" size="small" />

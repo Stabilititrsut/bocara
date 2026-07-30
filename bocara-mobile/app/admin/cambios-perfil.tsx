@@ -17,6 +17,8 @@ export default function AdminCambiosPerfilScreen() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [modalRechazo, setModalRechazo] = useState<{ id: string; nombre: string } | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
+  const [modalCambios, setModalCambios] = useState<{ id: string; nombre: string } | null>(null);
+  const [motivoCambios, setMotivoCambios] = useState('');
 
   function showToast(msg: string, ok = true) {
     setToast({ msg, ok });
@@ -64,6 +66,28 @@ export default function AdminCambiosPerfilScreen() {
     } finally {
       setProcesando(null);
       setMotivoRechazo('');
+    }
+  }
+
+  async function pedirCambios() {
+    if (!modalCambios) return;
+    const { id, nombre } = modalCambios;
+    setProcesando(id);
+    setModalCambios(null);
+    try {
+      await adminAPI.pedirCambiosCambioPerfil(id, motivoCambios);
+      // A diferencia de aprobar/rechazar, "pedir cambios" NO saca la solicitud
+      // de la lista — se queda en estado 'pendiente' con el motivo guardado
+      // para que el restaurante la corrija y reenvíe. Por eso se refresca desde
+      // el servidor en vez de sacarla optimistamente de la lista (mismo patrón
+      // que /admin/contenido.tsx).
+      await cargar();
+      showToast(`⚠️ Cambios solicitados para "${nombre}". Restaurante notificado.`);
+    } catch (e: any) {
+      showToast(`Error: ${e.message || 'No se pudo enviar la solicitud'}`, false);
+    } finally {
+      setProcesando(null);
+      setMotivoCambios('');
     }
   }
 
@@ -118,6 +142,7 @@ export default function AdminCambiosPerfilScreen() {
                 procesando={procesando}
                 onAprobar={() => aprobar(item.id, item.negocios?.nombre || 'Negocio')}
                 onRechazar={() => { setModalRechazo({ id: item.id, nombre: item.negocios?.nombre || 'Negocio' }); setMotivoRechazo(''); }}
+                onModificar={() => { setModalCambios({ id: item.id, nombre: item.negocios?.nombre || 'Negocio' }); setMotivoCambios(''); }}
               />
             ))}
           </>
@@ -165,6 +190,32 @@ export default function AdminCambiosPerfilScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={!!modalCambios} transparent animationType="slide" onRequestClose={() => setModalCambios(null)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalCard}>
+            <Text style={s.modalTitle}>⚠️ Pedir cambios en "{modalCambios?.nombre}"</Text>
+            <Text style={s.modalSub}>El restaurante recibirá una notificación con qué debe corregir antes de reenviar.</Text>
+            <TextInput
+              style={s.modalInput}
+              placeholder="Ej: La dirección no coincide con la foto del negocio..."
+              placeholderTextColor="#64748B"
+              value={motivoCambios}
+              onChangeText={setMotivoCambios}
+              multiline
+              autoFocus
+            />
+            <View style={s.modalActions}>
+              <TouchableOpacity style={s.modalCancelar} onPress={() => setModalCambios(null)}>
+                <Text style={s.modalCancelarText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.modalCambios} onPress={pedirCambios}>
+                <Text style={s.modalCambiosText}>Enviar solicitud</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -176,7 +227,7 @@ const CAMPO_LABELS: Record<string, string> = {
   google_maps_url: 'Google Maps', waze_url: 'Waze',
 };
 
-function SolicitudCard({ item, procesando, onAprobar, onRechazar, readonly }: any) {
+function SolicitudCard({ item, procesando, onAprobar, onRechazar, onModificar, readonly }: any) {
   const propietario = item.negocios?.usuarios;
   const negocio = item.negocios;
   const cambios = item.cambios || {};
@@ -209,7 +260,10 @@ function SolicitudCard({ item, procesando, onAprobar, onRechazar, readonly }: an
 
       {item.motivo_rechazo && (
         <View style={s.motivoBox}>
-          <Text style={s.motivoText}>Motivo de rechazo: {item.motivo_rechazo}</Text>
+          <Text style={s.motivoText}>
+            {esPendiente ? 'El administrador pidió cambios: ' : 'Motivo de rechazo: '}
+            {item.motivo_rechazo}
+          </Text>
         </View>
       )}
 
@@ -231,13 +285,20 @@ function SolicitudCard({ item, procesando, onAprobar, onRechazar, readonly }: an
               : <Text style={s.btnRechazarText}>✕ Rechazar</Text>}
           </TouchableOpacity>
           <TouchableOpacity
+            style={[s.btnCambios, procesando === item.id && s.btnDisabled]}
+            onPress={onModificar}
+            disabled={procesando === item.id}
+          >
+            <Text style={s.btnCambiosText}>⚠ Modificar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
             style={[s.btnAprobar, procesando === item.id && s.btnDisabled]}
             onPress={onAprobar}
             disabled={procesando === item.id}
           >
             {procesando === item.id
               ? <ActivityIndicator color={Colors.white} size="small" />
-              : <Text style={s.btnAprobarText}>✓ Aprobar y aplicar</Text>}
+              : <Text style={s.btnAprobarText}>✓ Aprobar</Text>}
           </TouchableOpacity>
         </View>
       )}
@@ -295,6 +356,11 @@ const s = StyleSheet.create({
     borderRadius: 12, padding: 14, alignItems: 'center',
   },
   btnRechazarText: { color: Colors.error, fontWeight: '800', fontSize: 14 },
+  btnCambios: {
+    flex: 1, backgroundColor: DARK, borderWidth: 1.5, borderColor: '#B45309',
+    borderRadius: 12, padding: 14, alignItems: 'center',
+  },
+  btnCambiosText: { color: '#F59E0B', fontWeight: '800', fontSize: 14 },
   btnDisabled: { opacity: 0.5 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
   modalCard: {
@@ -313,4 +379,6 @@ const s = StyleSheet.create({
   modalCancelarText: { color: '#94A3B8', fontWeight: '700', fontSize: 14 },
   modalRechazar: { flex: 1, backgroundColor: Colors.error, borderRadius: 12, padding: 14, alignItems: 'center' },
   modalRechazarText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
+  modalCambios: { flex: 1, backgroundColor: '#B45309', borderRadius: 12, padding: 14, alignItems: 'center' },
+  modalCambiosText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
 });

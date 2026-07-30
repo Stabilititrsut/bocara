@@ -451,9 +451,13 @@ router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) =>
   let data, error;
 
   if (pendiente) {
+    // Limpiar motivo_rechazo: si el admin había pedido cambios, esta es la versión
+    // corregida — el motivo viejo ya no aplica y no debe seguir mostrándose como
+    // si la nueva versión todavía tuviera ese pendiente (mismo criterio que
+    // PUT /bolsas/:id al reenviar tras un "pedir cambios").
     ({ data, error } = await supabase
       .from('negocio_cambios_pendientes')
-      .update({ cambios })
+      .update({ cambios, motivo_rechazo: null })
       .eq('id', pendiente.id)
       .select()
       .single());

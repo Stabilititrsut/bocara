@@ -204,6 +204,8 @@ export const adminAPI = {
   aprobarCambioPerfil: (id: string) => api.put(`/admin/cambios-perfil/${id}/aprobar`),
   rechazarCambioPerfil: (id: string, motivo?: string) =>
     api.put(`/admin/cambios-perfil/${id}/rechazar`, { motivo }),
+  pedirCambiosCambioPerfil: (id: string, motivo?: string) =>
+    api.put(`/admin/cambios-perfil/${id}/pedir-cambios`, { motivo }),
   cuboStatus: () => api.get('/admin/cubo-status'),
   cupones: () => api.get('/admin/cupones'),
   crearCupon: (data: any) => api.post('/admin/cupones', data),

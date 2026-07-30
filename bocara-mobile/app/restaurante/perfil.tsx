@@ -36,6 +36,8 @@ export default function PerfilRestauranteScreen() {
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
   const [refrescando, setRefrescando] = useState(false);
   const [solicitudCerrada, setSolicitudCerrada] = useState<string | null>(null);
+  const camposPendientesRef = useRef<Set<string>>(new Set());
+  useEffect(() => { camposPendientesRef.current = camposPendientes; }, [camposPendientes]);
   const set = (k: string) => (v: string) => {
     setForm((f: any) => ({ ...f, [k]: v }));
     setCamposPendientes(prev => {
@@ -58,7 +60,7 @@ export default function PerfilRestauranteScreen() {
     }).catch(() => {});
   }, []);
 
-  const cargarNegocio = useCallback((opts?: { preservarEdicion?: boolean }) => {
+  const cargarNegocio = useCallback(() => {
     return negociosAPI.miNegocio().then((res) => {
       setNegocio(res.data);
       const loaded = {
@@ -75,8 +77,14 @@ export default function PerfilRestauranteScreen() {
         google_maps_url: res.data.google_maps_url || '',
         waze_url: res.data.waze_url || '',
       };
-      // Si el usuario tiene cambios sin enviar en pantalla, no los sobrescribas al refrescar en segundo plano
-      if (!opts?.preservarEdicion || camposPendientes.size === 0) {
+      // Si el usuario tiene cambios sin enviar en pantalla, no los sobrescribas —
+      // ni en la carga inicial ni en un refresco en segundo plano. Antes esto solo
+      // se respetaba cuando el llamador pasaba preservarEdicion:true, así que si
+      // la carga inicial (sin esa opción) resolvía DESPUÉS de que el usuario ya
+      // había empezado a escribir (backend lento/cold start), el formulario se
+      // pisaba solo con los datos viejos del servidor y el texto tecleado
+      // desaparecía sin ningún error visible.
+      if (camposPendientesRef.current.size === 0) {
         setForm(loaded);
         setOriginalForm(loaded);
         setCamposPendientes(new Set());
@@ -93,7 +101,7 @@ export default function PerfilRestauranteScreen() {
         setRechazoInfo(null);
       }
     }).catch(() => {}).finally(() => setLoading(false));
-  }, [camposPendientes]);
+  }, []);
 
   // Carga inicial
   useEffect(() => {
@@ -119,13 +127,13 @@ export default function PerfilRestauranteScreen() {
   useFocusEffect(
     useCallback(() => {
       cargarSolicitud();
-      cargarNegocio({ preservarEdicion: true });
+      cargarNegocio();
     }, [cargarSolicitud, cargarNegocio])
   );
 
   function refrescarManual() {
     setRefrescando(true);
-    Promise.all([cargarSolicitud(), cargarNegocio({ preservarEdicion: true })])
+    Promise.all([cargarSolicitud(), cargarNegocio()])
       .finally(() => setRefrescando(false));
   }
 
@@ -220,11 +228,6 @@ export default function PerfilRestauranteScreen() {
 
   async function guardar() {
     if (camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
-    // BUG 5: DPI obligatorio
-    if (!dpiUrl) {
-      showToast('La foto del DPI es obligatoria para verificar tu cuenta', false);
-      return;
-    }
     setSaving(true);
     setToast(null);
     try {
@@ -353,7 +356,12 @@ export default function PerfilRestauranteScreen() {
             recuerda por solicitud (AsyncStorage) para que no reaparezca en
             cada visita a la pantalla. Mientras está pendiente no se puede
             cerrar: sigue siendo información activa. */}
-        {solicitudPendiente && solicitudPendiente.id !== solicitudCerrada && (
+        {solicitudPendiente && solicitudPendiente.id !== solicitudCerrada && (() => {
+          // "Pedir cambios" mantiene la solicitud en estado 'pendiente' pero con un
+          // motivo guardado — es un tercer caso visual, distinto de "en revisión
+          // inicial" (pendiente sin motivo) y de "rechazado" (decisión final).
+          const pidieronCambios = solicitudPendiente.estado === 'pendiente' && !!solicitudPendiente.motivo_rechazo;
+          return (
           <View style={[
             s.solicitudBanner,
             solicitudPendiente.estado === 'pendiente' && s.solicitudPendiente,
@@ -361,16 +369,18 @@ export default function PerfilRestauranteScreen() {
             solicitudPendiente.estado === 'rechazado' && s.solicitudRechazada,
           ]}>
             <Text style={s.solicitudEmoji}>
-              {solicitudPendiente.estado === 'pendiente' ? '⏳'
+              {pidieronCambios ? '⚠️'
+               : solicitudPendiente.estado === 'pendiente' ? '⏳'
                : solicitudPendiente.estado === 'aprobado' ? '✅' : '❌'}
             </Text>
             <View style={{ flex: 1 }}>
               <Text style={s.solicitudTitulo}>
-                {solicitudPendiente.estado === 'pendiente' ? 'Cambios en revisión'
+                {pidieronCambios ? 'El administrador pidió cambios'
+                 : solicitudPendiente.estado === 'pendiente' ? 'Cambios en revisión'
                  : solicitudPendiente.estado === 'aprobado' ? 'Cambios aprobados'
                  : 'Cambios rechazados'}
               </Text>
-              {solicitudPendiente.estado === 'rechazado' && solicitudPendiente.motivo_rechazo && (
+              {(pidieronCambios || solicitudPendiente.estado === 'rechazado') && solicitudPendiente.motivo_rechazo && (
                 <Text style={s.solicitudMotivo}>Motivo: {solicitudPendiente.motivo_rechazo}</Text>
               )}
             </View>
@@ -380,7 +390,8 @@ export default function PerfilRestauranteScreen() {
               </TouchableOpacity>
             )}
           </View>
-        )}
+          );
+        })()}
 
         {rechazoInfo && (
           <View style={s.rechazoCard}>
@@ -570,7 +581,16 @@ export default function PerfilRestauranteScreen() {
         <View style={s.sectionRow}>
           <Text style={s.sectionTitle}>Foto del DPI 🪪</Text>
           {isRejected('dpi_foto_url') && <View style={s.pendienteBadge}><Text style={[s.pendienteBadgeText, { color: '#DC2626' }]}>⚠️ Requiere corrección</Text></View>}
+          {!isRejected('dpi_foto_url') && !dpiUrl && <View style={s.pendienteBadge}><Text style={s.pendienteBadgeText}>⚠️ Falta subir</Text></View>}
         </View>
+        {!dpiUrl && (
+          <View style={s.dpiWarning}>
+            <Text style={s.dpiWarningText}>
+              Aún no has subido tu foto del DPI. Puedes seguir editando y enviando el resto de tu perfil sin problema,
+              pero súbela cuando puedas — la necesitamos para verificar tu cuenta.
+            </Text>
+          </View>
+        )}
         <TouchableOpacity
           style={[s.dpiContainer, isRejected('dpi_foto_url') && { borderColor: '#DC2626' }]}
           onPress={seleccionarDpi}
@@ -670,4 +690,6 @@ const s = StyleSheet.create({
   dpiImg: { width: '100%', height: '100%' },
   dpiPlaceholder: { width: '100%', height: '100%', backgroundColor: '#FEF3C7', justifyContent: 'center', alignItems: 'center', gap: 6 },
   dpiPlaceholderText: { color: Colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  dpiWarning: { backgroundColor: '#FEF3C7', borderRadius: 10, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#FDE68A' },
+  dpiWarningText: { color: '#92400E', fontSize: 12, lineHeight: 17, fontWeight: '600' },
 });
