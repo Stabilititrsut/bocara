@@ -198,6 +198,53 @@ app.listen(PORT, () => {
     }
   }, 60 * 60 * 1000);
   console.log('⏰ Cron de limpieza de borradores activo (cada hora)');
+
+  // Resta n días hábiles (lunes-viernes) a una fecha, para calcular el corte de
+  // "hace 5 días hábiles" sin contar fines de semana.
+  function restarDiasHabiles(fecha, n) {
+    const d = new Date(fecha);
+    let restados = 0;
+    while (restados < n) {
+      d.setDate(d.getDate() - 1);
+      const diaSemana = d.getDay(); // 0 = domingo, 6 = sábado
+      if (diaSemana !== 0 && diaSemana !== 6) restados++;
+    }
+    return d;
+  }
+
+  setInterval(async () => {
+    try {
+      const corte = restarDiasHabiles(new Date(), 5).toISOString();
+      const { data: candidatas, error } = await supabase
+        .from('bolsas')
+        .select('id, nombre')
+        .not('inactivo_desde', 'is', null)
+        .lte('inactivo_desde', corte);
+      if (error) {
+        // Columna inactivo_desde aún no existe — ver sql/limpieza-automatica-bolsas.sql
+        if (!/inactivo_desde/.test(error.message || '')) console.error('[CLEANUP BOLSAS] error:', error.message);
+        return;
+      }
+      if (!candidatas?.length) return;
+
+      // Borrado real (no soft-delete) uno por uno: si una bolsa tiene un pedido
+      // real apuntándole, el FK pedidos_bolsa_id_fkey rechaza ese DELETE — se
+      // captura por fila para que no aborte el resto del lote.
+      let borradas = 0;
+      for (const b of candidatas) {
+        const { error: delErr } = await supabase.from('bolsas').delete().eq('id', b.id);
+        if (delErr) {
+          console.warn('[CLEANUP BOLSAS] no se pudo borrar (probablemente tiene pedidos reales):', b.nombre, b.id, '-', delErr.message);
+        } else {
+          borradas++;
+        }
+      }
+      if (borradas > 0) console.log('[CLEANUP BOLSAS] rechazadas/inactivas borradas (5+ días hábiles):', borradas, 'de', candidatas.length, 'candidatas');
+    } catch (err) {
+      console.error('[CLEANUP BOLSAS] error limpiando bolsas rechazadas/inactivas:', err.message);
+    }
+  }, 60 * 60 * 1000);
+  console.log('⏰ Cron de limpieza de bolsas rechazadas/inactivas activo (cada hora, borra tras 5 días hábiles)');
 });
 
 module.exports = app;

@@ -381,10 +381,20 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
-  // Un cambio que solo toca "activo" es un toggle de visibilidad del restaurante,
-  // no una edición de contenido — no debe mandar la publicación de vuelta a revisión.
+  // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
+  // de limpieza (server.js) — se setea al apagar el switch de visibilidad y se
+  // limpia al reactivarlo, para que el contador se reinicie si el restaurante
+  // vuelve a publicarla. Columna faltante (migración pendiente) la resuelve el
+  // mismo retry loop de abajo, igual que cualquier otro campo.
+  if (updates.activo !== undefined) {
+    updates.inactivo_desde = updates.activo ? null : new Date().toISOString();
+  }
+
+  // Un cambio que solo toca "activo" (+ inactivo_desde, que viaja siempre junto)
+  // es un toggle de visibilidad del restaurante, no una edición de contenido —
+  // no debe mandar la publicación de vuelta a revisión.
   const soloVisibilidad = Object.keys(updates).length > 0 &&
-    Object.keys(updates).every(k => k === 'activo');
+    Object.keys(updates).every(k => k === 'activo' || k === 'inactivo_desde');
 
   // BUG 2: Restaurantes nunca pueden aprobar directamente — strip any estado_aprobacion del body
   if (req.usuario.rol !== 'admin') {
@@ -434,7 +444,12 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
   if (bolsa.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
-  await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
+  // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
+  // de limpieza (server.js). Si la columna aún no existe, reintentar sin ella.
+  const { error } = await supabase.from('bolsas')
+    .update({ activo: false, inactivo_desde: new Date().toISOString() })
+    .eq('id', req.params.id);
+  if (error) await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
   res.json({ ok: true });
 });
 

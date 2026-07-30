@@ -804,7 +804,11 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
-  const updates = { estado_aprobacion: 'rechazado', activo: false };
+  // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
+  // de limpieza (server.js). Si la columna aún no existe (migración pendiente:
+  // sql/limpieza-automatica-bolsas.sql), se degrada sin ella en vez de fallar.
+  const inactivoDesde = new Date().toISOString();
+  const updates = { estado_aprobacion: 'rechazado', activo: false, inactivo_desde: inactivoDesde };
   if (motivo) updates.motivo_rechazo = motivo;
 
   let { data, error } = await supabase
@@ -814,10 +818,17 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     .select()
     .single();
   if (error) {
-    // Fallback: solo desactivar la bolsa
-    const r = await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id).select().single();
-    if (r.error) return res.status(400).json({ error: r.error.message });
-    data = r.data;
+    // Fallback 1: reintentar sin inactivo_desde (columna puede no existir aún)
+    const { inactivo_desde, ...sinInactivoDesde } = updates;
+    const r1 = await supabase.from('bolsas').update(sinInactivoDesde).eq('id', req.params.id).select().single();
+    if (!r1.error) {
+      data = r1.data;
+    } else {
+      // Fallback 2: solo desactivar la bolsa
+      const r2 = await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id).select().single();
+      if (r2.error) return res.status(400).json({ error: r2.error.message });
+      data = r2.data;
+    }
   }
 
   // Notificar al propietario del restaurante
