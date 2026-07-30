@@ -327,11 +327,17 @@ export default function BolsasRestauranteScreen() {
         {filtrados.map((b) => {
           // En revisión inicial = pendiente de la PRIMERA decisión del admin (nunca
           // aprobada ni rechazada, sin motivo_rechazo). En ese punto el admin puede
-          // estar revisando este contenido en este momento; editar o activar aquí
-          // podría hacer que apruebe una versión distinta a la que ve. Una vez que
-          // hay una decisión (aprobado / rechazado / "pedir cambios" con motivo),
-          // editar y activar vuelven a funcionar con normalidad.
+          // estar revisando este contenido en este momento; editar aquí podría hacer
+          // que apruebe una versión distinta a la que ve. Una vez que hay una
+          // decisión (aprobado / rechazado / "pedir cambios" con motivo), editar
+          // vuelve a funcionar con normalidad para que el restaurante pueda corregir.
           const enRevisionInicial = b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
+          // El switch de visibilidad, en cambio, debe quedarse bloqueado durante
+          // TODA la revisión (inicial o "pedir cambios" aún sin reenviar) — no solo
+          // la inicial. Antes se desbloqueaba en cuanto había motivo_rechazo, así
+          // que se podía activar/desactivar una publicación que el admin todavía no
+          // había vuelto a aprobar.
+          const enRevision = b.estado_aprobacion === 'pendiente';
           return (
           <View key={b.id} style={[s.card, !b.activo && s.cardInactiva]}>
             <View style={s.cardRow}>
@@ -385,19 +391,17 @@ export default function BolsasRestauranteScreen() {
             <View style={s.cardActions}>
               <Switch
                 value={!!b.activo}
-                disabled={enRevisionInicial}
+                disabled={enRevision}
                 onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'))}
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
               {/* Visible a clientes solo si activo Y aprobado */}
               <Text style={s.switchLabel}>
-                {enRevisionInicial
+                {enRevision
                   ? 'En revisión'
                   : b.activo && (b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion)
                   ? 'Visible'
-                  : b.activo && b.estado_aprobacion === 'pendiente'
-                  ? 'En revisión'
                   : 'Inactiva'}
               </Text>
               <View style={{ flex: 1 }} />
