@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
   Modal, TextInput, Alert, RefreshControl, Switch, Image, ActivityIndicator, Platform,
 } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
@@ -120,6 +121,16 @@ export default function BolsasRestauranteScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  // Re-sincronizar con el servidor cada vez que la pantalla recupera el foco —
+  // sin esto, si el admin aprueba/rechaza/pide cambios (incluso una segunda vez
+  // sobre la misma publicación) mientras el restaurante ya tiene esta pantalla
+  // abierta, la tarjeta se queda con el estado/motivo viejo indefinidamente:
+  // los datos en el servidor están correctos, pero nada en esta pantalla los
+  // vuelve a pedir sin un pull-to-refresh manual. cargar() solo toca items/
+  // negocioId, nunca el formulario del modal, así que no hay riesgo de pisar
+  // una edición en curso (mismo criterio que restaurante/perfil.tsx).
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   function abrir(b?: any) {
     setUploadFotoError('');

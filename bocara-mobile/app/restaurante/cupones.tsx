@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, TextInput, Alert, RefreshControl, ActivityIndicator, Modal,
 } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -51,6 +52,12 @@ export default function CuponesRestauranteScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  // Re-sincronizar al recuperar el foco — mismo criterio que restaurante/bolsas.tsx:
+  // si el admin cambia el estado de una promoción (comparte estado_aprobacion con
+  // las bolsas vía /admin/contenido) mientras esta pantalla ya está abierta, no
+  // debe quedarse con datos viejos hasta un pull-to-refresh manual.
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   function abrirNuevo() {
     setEditando(null);
