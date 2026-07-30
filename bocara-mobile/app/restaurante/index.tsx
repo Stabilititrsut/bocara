@@ -56,11 +56,17 @@ export default function DashboardRestauranteScreen() {
         negociosAPI.impacto(neg.id).then(r => setImpacto(r.data)).catch(() => {});
       }
 
+      // pedidosAPI.restaurante() ya viene filtrado a pagos verificados por Cubo,
+      // pero incluye cancelados (un pedido puede pagarse y luego cancelarse) —
+      // "Últimos pedidos" no debe mostrarlos: contradice el resumen de arriba,
+      // que sí los excluye. Para ver el historial de cancelados está la pestaña
+      // dedicada en la pantalla de gestión de pedidos, no el dashboard.
       const allPedidos = pedRes.status === 'fulfilled' ? (pedRes.value.data || []) : [];
-      const today = allPedidos.filter((p: any) => {
+      const pedidosReales = allPedidos.filter((p: any) => p.estado !== 'cancelado');
+      const today = pedidosReales.filter((p: any) => {
         return new Date(p.created_at).toDateString() === new Date().toDateString();
       });
-      setPedidos(allPedidos);
+      setPedidos(pedidosReales);
 
       // Solo pedidos realmente pagados cuentan para las métricas de ventas/ganancias del día
       const todayPagados = today.filter((p: any) => p.estado_pago === 'pagado');
