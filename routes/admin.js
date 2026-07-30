@@ -17,14 +17,24 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const [usersRes, negociosRes, pedidosRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
     supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
-    supabase.from('pedidos').select('total,estado,estado_pago'),
+    supabase.from('pedidos').select('total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier'),
   ]);
   const pedidos = pedidosRes.data || [];
   // 'cancelado' excluido explícitamente: /pedidos/:id/cancelar (admin, con reembolso)
   // nunca resetea estado_pago, así que un pedido reembolsado se queda con
   // estado_pago='pagado' para siempre. Sin este filtro, ingresos_totales y
   // comision_generada cuentan ventas que en realidad fueron devueltas.
-  const pagados = pedidos.filter(p => p.estado_pago === 'pagado' && p.estado !== 'cancelado');
+  //
+  // cubo_payment_intent_token/cubo_identifier no nulos, además de estado_pago:
+  // estado_pago='pagado' también lo escriben /pedidos/crear (sin pasarela) y el
+  // webhook legacy de PayU, ninguno con verificación real. Esos dos campos solo
+  // se escriben juntos dentro de confirmar_pago_cubo, después de que el webhook
+  // confirmó el pago con Cubo de forma independiente — es la única evidencia
+  // confiable de que el dinero se movió de verdad.
+  const pagados = pedidos.filter(p =>
+    p.estado_pago === 'pagado' && p.estado !== 'cancelado' &&
+    p.cubo_payment_intent_token != null && p.cubo_identifier != null
+  );
   const ingresos = pagados.reduce((s, p) => s + (p.total || 0), 0);
   const negocios = negociosRes.data || [];
   const comision = ingresos * (await obtenerComisionFraccion());
@@ -315,16 +325,23 @@ router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) =
 router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   const { periodo } = req.query; // '7d' | '30d' | 'todo'
 
-  // Venta real = hubo transacción monetaria (estado_pago='pagado'), sin importar si
+  // Venta real = hubo transacción monetaria confirmada por Cubo, sin importar si
   // ya se recogió. No exigir estado IN (completado,recogido): un pedido confirmado/
   // en_preparacion/listo ya cobró y debe verse en finanzas el mismo día, no hasta
   // que el cliente pase a recogerlo. 'cancelado' se excluye aparte porque el
   // endpoint de cancelación con reembolso no resetea estado_pago.
+  //
+  // cubo_payment_intent_token/cubo_identifier no nulos: estado_pago='pagado' solo
+  // no basta — /pedidos/crear y el webhook legacy de PayU también lo escriben sin
+  // verificación real contra ninguna pasarela. Esos dos campos son la única
+  // evidencia confiable de un pago confirmado por Cubo (ver confirmar_pago_cubo).
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,negocios(id,nombre,zona)')
+    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,negocios(id,nombre,zona)')
     .eq('estado_pago', 'pagado')
-    .neq('estado', 'cancelado');
+    .neq('estado', 'cancelado')
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null);
 
   if (periodo === '7d') {
     const desde = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -336,14 +353,20 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id').eq('estado_pago', 'pagado').neq('estado', 'cancelado');
+    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,cubo_payment_intent_token,cubo_identifier')
+      .eq('estado_pago', 'pagado').neq('estado', 'cancelado')
+      .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null);
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Filtro defensivo en JS: solo pedidos realmente pagados y no cancelados cuentan
-  // para finanzas, sin importar si vino del camino principal o del fallback.
-  data = (data || []).filter(p => p.estado_pago === 'pagado' && p.estado !== 'cancelado');
+  // Filtro defensivo en JS: solo pedidos realmente pagados, no cancelados y
+  // verificados por Cubo cuentan para finanzas, sin importar si vino del camino
+  // principal o del fallback.
+  data = (data || []).filter(p =>
+    p.estado_pago === 'pagado' && p.estado !== 'cancelado' &&
+    p.cubo_payment_intent_token != null && p.cubo_identifier != null
+  );
 
   // Agrupar por negocio
   const map = {};
@@ -382,24 +405,32 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   });
 });
 
-// GET /api/admin/pedidos-todos — ventas reales (pagadas, no canceladas), para
+// GET /api/admin/pedidos-todos — ventas reales, verificadas por Cubo, para
 // finanzas y el dashboard. Únicos consumidores hoy: admin/index.tsx (gráfica
 // semanal) y admin/financiero.tsx (transacciones + export) — ambos financieros,
 // por eso el filtro va server-side y no queda a criterio del cliente.
+//
+// cubo_payment_intent_token/cubo_identifier no nulos, además de estado_pago:
+// estado_pago='pagado' también lo escriben /pedidos/crear y el webhook legacy
+// de PayU sin verificación real — ver confirmar_pago_cubo para el porqué estos
+// dos campos son la única evidencia confiable de un pago confirmado por Cubo.
 router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   const { negocio_id, limite } = req.query;
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,monto_neto_restaurante,negocios(nombre),usuarios(nombre,email)')
+    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,monto_neto_restaurante,cubo_payment_intent_token,cubo_identifier,negocios(nombre),usuarios(nombre,email)')
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null)
     .order('created_at', { ascending: false })
     .limit(parseInt(limite) || 100);
   if (negocio_id) query = query.eq('negocio_id', negocio_id);
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id')
-      .eq('estado_pago', 'pagado').neq('estado', 'cancelado').limit(100);
+    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id,cubo_payment_intent_token,cubo_identifier')
+      .eq('estado_pago', 'pagado').neq('estado', 'cancelado')
+      .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null).limit(100);
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
@@ -482,12 +513,18 @@ router.post('/geocodificar-negocios', authMiddleware, adminOnly, async (req, res
 
 // GET /api/admin/liquidaciones — deuda pendiente por restaurante
 router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
-  // Calcular neto por restaurante desde pedidos no liquidados
+  // Calcular neto por restaurante desde pedidos no liquidados. Exigir
+  // cubo_payment_intent_token/cubo_identifier no nulos: no se le puede pagar a
+  // un restaurante por un pedido cuyo estado_pago='pagado' nunca fue verificado
+  // contra Cubo (ver confirmar_pago_cubo) — pagar de más por eso es dinero real
+  // perdido, no solo una cifra mal mostrada.
   const { data: pedidos } = await supabase
     .from('pedidos')
     .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
     .in('estado', ['completado', 'recogido'])
     .eq('estado_pago', 'pagado')
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null)
     .is('liquidacion_id', null);
 
   // Liquidaciones ya pagadas
@@ -544,13 +581,17 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
   const { restaurante_id } = req.params;
   const { datos_transferencia, monto } = req.body;
 
-  // Buscar pedidos pendientes del restaurante
+  // Buscar pedidos pendientes del restaurante — mismo filtro que GET /liquidaciones,
+  // deben coincidir exactamente o el monto que se marca "pagado" aquí no
+  // corresponderá con lo que el admin vio como pendiente.
   const { data: pedidosPend } = await supabase
     .from('pedidos')
     .select('id,precio_bolsa,total,monto_neto_restaurante')
     .eq('negocio_id', restaurante_id)
     .in('estado', ['completado', 'recogido'])
     .eq('estado_pago', 'pagado')
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null)
     .is('liquidacion_id', null);
 
   const comisionFraccion = await obtenerComisionFraccion();

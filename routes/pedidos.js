@@ -77,20 +77,37 @@ router.post('/crear', authMiddleware, soloCliente, async (req, res) => {
 // una vez que el pago fue confirmado y el estado es 'confirmado' o superior.
 const ESTADOS_VISIBLES_CLIENTE = ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido', 'cancelado'];
 
+// estado_pago='pagado' por sí solo no basta: /pedidos/crear (sin pasarela) y el
+// webhook legacy de PayU también lo escriben, sin ninguna verificación real de
+// que el dinero se haya movido. cubo_payment_intent_token Y cubo_identifier
+// SOLO se escriben juntos dentro de la RPC confirmar_pago_cubo (sql/cubo-pago-
+// schema.sql), y solo después de que el webhook consultó a Cubo de forma
+// independiente y confirmó SUCCEEDED — es la única prueba confiable de un pago
+// real. Un filtro por separado en vez de .or() porque Supabase-js no encadena
+// bien .not() dentro de .or() con múltiples condiciones is-null.
+function filtrarSoloPagosCuboVerificados(query) {
+  return query
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null);
+}
+
 // GET /api/pedidos — pedidos del cliente autenticado
 router.get('/', authMiddleware, async (req, res) => {
   try {
-    let { data, error } = await supabase
-      .from('pedidos')
-      .select('*, bolsas!bolsa_id(id,nombre), negocios!negocio_id(id,nombre,zona)')
-      .eq('usuario_id', req.usuario.id)
-      .in('estado', ESTADOS_VISIBLES_CLIENTE)
-      .order('created_at', { ascending: false });
+    let { data, error } = await filtrarSoloPagosCuboVerificados(
+      supabase
+        .from('pedidos')
+        .select('*, bolsas!bolsa_id(id,nombre), negocios!negocio_id(id,nombre,zona)')
+        .eq('usuario_id', req.usuario.id)
+        .in('estado', ESTADOS_VISIBLES_CLIENTE)
+    ).order('created_at', { ascending: false });
     if (error) {
       console.warn('[PEDIDOS API] join failed, fallback:', error.message);
-      const r = await supabase.from('pedidos').select('*')
-        .eq('usuario_id', req.usuario.id)
-        .in('estado', ESTADOS_VISIBLES_CLIENTE);
+      const r = await filtrarSoloPagosCuboVerificados(
+        supabase.from('pedidos').select('*')
+          .eq('usuario_id', req.usuario.id)
+          .in('estado', ESTADOS_VISIBLES_CLIENTE)
+      );
       data = r.data; error = r.error;
     }
     if (error) return res.status(500).json({ error: error.message });
@@ -107,14 +124,16 @@ router.get('/', authMiddleware, async (req, res) => {
 // ANTES de que el cliente confirme nada — es solo un carrito. Si el cliente lo
 // abandona, un cron (server.js) o el propio /pagos/preparar lo pasa a
 // 'cancelado' un par de horas después. Ese 'cancelado' no representa un pedido
-// real: el cliente nunca llegó a pagar ni a iniciar el pago (nunca se generó
-// cubo_payment_intent_token vía /pagos/generar-link). Mostrarlo en el panel
-// del restaurante como "pedido cancelado" es engañoso — infla el conteo con
-// carritos que nadie intentó completar.
+// real: el cliente nunca llegó a pagar. Mostrarlo en el panel del restaurante
+// como "pedido cancelado" sería engañoso — infla el conteo con carritos que
+// nadie intentó completar.
 //
-// Un pedido cuenta como real si el pago se completó (estado_pago='pagado') o
-// si al menos se inició (se generó un link de pago con Cubo). 'borrador' puro
-// nunca tiene token, así que queda excluido junto con los cancelados sin token.
+// Un pedido cuenta como real solo con confirmación genuina de Cubo (ver
+// filtrarSoloPagosCuboVerificados). Antes se aceptaba también con solo
+// cubo_payment_intent_token (el link de pago generado, antes de pagar) — eso
+// mostraba pedidos "iniciados" pero nunca cobrados. Ya no: el restaurante debe
+// ver únicamente lo que de verdad se pagó, para que sus cifras coincidan con
+// las de Finanzas del admin.
 router.get('/restaurante', authMiddleware, async (req, res) => {
   try {
     if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin')
@@ -122,15 +141,16 @@ router.get('/restaurante', authMiddleware, async (req, res) => {
     const { data: negocio } = await supabase
       .from('negocios').select('id').eq('propietario_id', req.usuario.id).single();
     if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
-    let { data, error } = await supabase
-      .from('pedidos')
-      .select('*, bolsas!bolsa_id(id,nombre), usuarios!usuario_id(id,nombre,telefono)')
-      .eq('negocio_id', negocio.id)
-      .or('estado_pago.eq.pagado,cubo_payment_intent_token.not.is.null')
-      .order('created_at', { ascending: false });
+    let { data, error } = await filtrarSoloPagosCuboVerificados(
+      supabase
+        .from('pedidos')
+        .select('*, bolsas!bolsa_id(id,nombre), usuarios!usuario_id(id,nombre,telefono)')
+        .eq('negocio_id', negocio.id)
+    ).order('created_at', { ascending: false });
     if (error) {
-      const r = await supabase.from('pedidos').select('*').eq('negocio_id', negocio.id)
-        .or('estado_pago.eq.pagado,cubo_payment_intent_token.not.is.null');
+      const r = await filtrarSoloPagosCuboVerificados(
+        supabase.from('pedidos').select('*').eq('negocio_id', negocio.id)
+      );
       data = r.data; error = r.error;
     }
     if (error) return res.status(500).json({ error: error.message });
