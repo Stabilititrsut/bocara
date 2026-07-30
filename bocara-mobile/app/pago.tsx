@@ -10,6 +10,7 @@ import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { pagosAPI, pedidosAPI, cuponesAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
+import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
@@ -50,7 +51,9 @@ const TIPO_COLORS: Record<string, string> = {
 
 export default function PagoScreen() {
   const { items, total, limpiar } = useCart();
+  const { usuario } = useAuth();
   const router = useRouter();
+  const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
 
   // Core payment
   const [pedidoId, setPedidoId] = useState<string | null>(null);
@@ -114,7 +117,7 @@ export default function PagoScreen() {
 
   // Al montar: preparar pedido borrador (sin cupón)
   useEffect(() => {
-    if (items.length === 0) return;
+    if (items.length === 0 || noPuedeComprarPorRol) return;
     prepararPedido(null);
   }, []);
 
@@ -307,6 +310,18 @@ export default function PagoScreen() {
       })
       .catch(() => {});
   }
+
+  // ── Rol sin permiso de compra ────────────────────────────────────────────
+  if (noPuedeComprarPorRol) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={s.errorIcon}>🚫</Text>
+      <Text style={s.errorTitulo}>Compra no disponible para esta cuenta</Text>
+      <Text style={s.errorMsg}>Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente para comprar.</Text>
+      <TouchableOpacity onPress={() => router.back()}>
+        <Text style={s.linkVolver}>Volver</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
 
   // ── Error ─────────────────────────────────────────────────────────────────
   if (fase === 'error') return (

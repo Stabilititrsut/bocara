@@ -1,12 +1,13 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const soloCliente = require('../middleware/soloCliente');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { obtenerComisionFraccion, obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
 // POST /api/pedidos/crear — confirmar pedido directamente (sin pasarela de pago)
-router.post('/crear', authMiddleware, async (req, res) => {
+router.post('/crear', authMiddleware, soloCliente, async (req, res) => {
   try {
     const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
     if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });

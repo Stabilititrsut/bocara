@@ -17,6 +17,15 @@ const TEXT   = '#111827';
 const TEXT2  = '#6B7280';
 const GOLD   = '#E8820C';
 const GREEN  = '#16A34A';
+const AMBER  = '#D97706';
+
+const ESTADO_LABELS: Record<string, string> = {
+  confirmado:      'Confirmado',
+  en_preparacion:  'En preparación',
+  listo:           'Listo',
+  completado:      'Recogido',
+  recogido:        'Recogido',
+};
 
 type Periodo = '7d' | '30d' | 'todo';
 
@@ -48,8 +57,9 @@ export default function AdminFinancieroScreen() {
         adminAPI.pedidosTodos({ limite: 200 }),
       ]);
       setDatos(finRes.data);
-      // Solo pedidos realmente completados (recogidos por el cliente)
-      setPedidos((pedRes.data || []).filter((p: any) => p.estado === 'completado' || p.estado === 'recogido'));
+      // El backend ya filtra a ventas reales (pagadas, no canceladas) —
+      // incluye confirmado/en_preparacion/listo, no solo completado/recogido.
+      setPedidos(pedRes.data || []);
     } catch {} finally { setLoading(false); setRefreshing(false); }
   }, [periodo]);
 
@@ -76,7 +86,7 @@ export default function AdminFinancieroScreen() {
         ['Bocara — Reporte Financiero', '', `Período: ${periodo}`],
         [],
         ['Métrica', 'Valor'],
-        ['Pedidos completados', datos.totales.pedidos],
+        ['Ventas reales (pagadas)', datos.totales.pedidos],
         ['Ventas brutas (Q)', datos.totales.bruto],
         [`Comisión Bocara ${comisionPct}% (Q)`, datos.totales.comision],
         [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% (Q)`, datos.totales.neto],
@@ -101,15 +111,16 @@ export default function AdminFinancieroScreen() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja2), 'Por Restaurante');
 
       const hoja3: any[][] = [
-        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión (Q)', 'Estado'],
-        ...pedidos.slice(0, 500).map((p: any) => [ // pedidos ya filtrados por estado=recogido
+        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión (Q)', 'Estado', 'Liquidación'],
+        ...pedidos.slice(0, 500).map((p: any) => [ // pedidos ya filtrados server-side: pagados, no cancelados
           p.codigo_recogida || '—',
           p.negocios?.nombre || '—',
           p.usuarios?.nombre || '—',
           new Date(p.created_at || p.creado_en || 0).toLocaleDateString('es-GT'),
           Number((p.total || 0).toFixed(2)),
           Number(((p.total || 0) * comisionFraccion).toFixed(2)),
-          p.estado,
+          ESTADO_LABELS[p.estado] || p.estado,
+          p.liquidacion_id ? 'Liquidado' : 'Por liquidar',
         ]),
       ];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja3), 'Pedidos Detallados');
@@ -181,7 +192,7 @@ export default function AdminFinancieroScreen() {
         <Text style={s.sectionTitle}>Resumen del período</Text>
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
           {[
-            { label: 'Pedidos completados', val: String(totales.pedidos), color: TEXT,  icon: 'bag-check'  as any },
+            { label: 'Ventas reales (pagadas)', val: String(totales.pedidos), color: TEXT,  icon: 'bag-check'  as any },
             { label: 'Ventas brutas',       val: `Q${totales.bruto.toFixed(2)}`,     color: TEXT,  icon: 'trending-up' as any },
             { label: `Comisión Bocara (${comisionPct}%)`, val: `Q${totales.comision.toFixed(2)}`, color: GOLD,  icon: 'wallet'     as any },
             { label: `Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${totales.neto.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
@@ -256,22 +267,32 @@ export default function AdminFinancieroScreen() {
             <Text style={{ color: TEXT2, fontSize: 12, marginTop: 4 }}>Total: Q0.00</Text>
           </View>
         )}
-        {mostrarPedidos && pedidos.slice(0, 50).map((p: any) => (
-          <View key={p.id} style={[card(), s.txRow]}>
-            <View style={{ flex: 1 }}>
-              <Text style={s.txCodigo}>{p.codigo_recogida || '—'}</Text>
-              <Text style={s.txNegocio}>{p.negocios?.nombre || '—'}</Text>
-              <Text style={s.txFecha}>{new Date(p.created_at || p.creado_en || 0).toLocaleDateString('es-GT')}</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={s.txTotal}>Q{(p.total || 0).toFixed(2)}</Text>
-              <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>-Q{((p.total || 0) * comisionFraccion).toFixed(2)}</Text>
-              <View style={[s.txEstado, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                <Text style={[s.txEstadoText, { color: '#166534' }]}>recogido</Text>
+        {mostrarPedidos && pedidos.slice(0, 50).map((p: any) => {
+          const liquidado = !!p.liquidacion_id;
+          return (
+            <View key={p.id} style={[card(), s.txRow]}>
+              <View style={{ flex: 1 }}>
+                <Text style={s.txCodigo}>{p.codigo_recogida || '—'}</Text>
+                <Text style={s.txNegocio}>{p.negocios?.nombre || '—'}</Text>
+                <Text style={s.txFecha}>{new Date(p.created_at || p.creado_en || 0).toLocaleDateString('es-GT')}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={s.txTotal}>Q{(p.total || 0).toFixed(2)}</Text>
+                <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>-Q{((p.total || 0) * comisionFraccion).toFixed(2)}</Text>
+                <View style={[s.txEstado, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0', marginTop: 4 }]}>
+                  <Text style={[s.txEstadoText, { color: '#166534' }]}>{ESTADO_LABELS[p.estado] || p.estado}</Text>
+                </View>
+                <View style={[s.txEstado, liquidado
+                  ? { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }
+                  : { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}>
+                  <Text style={[s.txEstadoText, { color: liquidado ? GREEN : AMBER }]}>
+                    {liquidado ? 'Liquidado' : 'Por liquidar'}
+                  </Text>
+                </View>
               </View>
             </View>
-          </View>
-        ))}
+          );
+        })}
 
         <View style={{ height: 32 }} />
       </ScrollView>

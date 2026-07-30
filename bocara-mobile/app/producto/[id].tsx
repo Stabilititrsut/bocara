@@ -214,6 +214,7 @@ export default function ProductoScreen() {
   const agotada = bolsa.cantidad_disponible === 0;
   const horarioBloqueado = horario?.bloqueado ?? false;
   const puedeComprar = !agotada && !horarioBloqueado;
+  const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
   const EMOJI_MAP: Record<string, string> = {
     Panadería: '🥐', Restaurante: '🍽️', Cafetería: '☕', Supermercado: '🛒', Sushi: '🍣', Pizza: '🍕',
   };
@@ -252,6 +253,10 @@ export default function ProductoScreen() {
 
   function handleAgregar() {
     if (!bolsa || !puedeComprar) return;
+    if (noPuedeComprarPorRol) {
+      Alert.alert('Compra no disponible', 'Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente.');
+      return;
+    }
     if (enCarrito && enCarrito.cantidad >= bolsa.cantidad_disponible) {
       Alert.alert('Sin stock', `Solo quedan ${bolsa.cantidad_disponible} unidades disponibles.`);
       return;
@@ -527,7 +532,12 @@ export default function ProductoScreen() {
 
       {/* ── FOOTER ── */}
       <View style={s.footer}>
-        {agotada ? (
+        {noPuedeComprarPorRol ? (
+          <View style={[s.footerBtn, s.footerBtnOff]}>
+            <Ionicons name="lock-closed-outline" size={16} color={Colors.textLight} />
+            <Text style={s.footerBtnTextOff}>Solo cuentas de cliente pueden comprar</Text>
+          </View>
+        ) : agotada ? (
           <View style={[s.footerBtn, s.footerBtnOff]}>
             <Text style={s.footerBtnTextOff}>Sin stock disponible</Text>
           </View>

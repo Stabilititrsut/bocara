@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
+const soloCliente = require('../middleware/soloCliente');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { generarLinkPago } = require('../services/visaLink');
 const { getReservadoPendiente } = require('../services/stock');
@@ -39,7 +40,7 @@ async function getCostoEnvio() {
 }
 
 // POST /api/pagos/crear-intent — crea pedido pendiente y retorna URL de checkout PayU
-router.post('/crear-intent', authMiddleware, async (req, res) => {
+router.post('/crear-intent', authMiddleware, soloCliente, async (req, res) => {
   try {
     const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
     if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
@@ -272,7 +273,7 @@ router.post('/webhook', async (req, res) => {
 });
 
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
-router.post('/cubopago', authMiddleware, async (req, res) => {
+router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
   try {
     console.log('1. Endpoint /pagos/cubopago recibido', req.body);
     const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
@@ -564,7 +565,7 @@ router.post('/cubo-webhook', async (req, res) => {
 });
 
 // POST /api/pagos/preparar — crea pedido en estado 'borrador' sin generar link de pago
-router.post('/preparar', authMiddleware, async (req, res) => {
+router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
   try {
     const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq, cupon_id } = req.body;
     const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
@@ -744,7 +745,7 @@ router.post('/preparar', authMiddleware, async (req, res) => {
 });
 
 // POST /api/pagos/generar-link — genera link CuboPago para un borrador existente (se llama al presionar Pagar)
-router.post('/generar-link', authMiddleware, async (req, res) => {
+router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
   try {
     const { pedidoId } = req.body;
     if (!pedidoId) return res.status(400).json({ error: 'pedidoId requerido' });

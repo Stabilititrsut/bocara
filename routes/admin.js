@@ -20,7 +20,11 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
     supabase.from('pedidos').select('total,estado,estado_pago'),
   ]);
   const pedidos = pedidosRes.data || [];
-  const pagados = pedidos.filter(p => p.estado_pago === 'pagado');
+  // 'cancelado' excluido explícitamente: /pedidos/:id/cancelar (admin, con reembolso)
+  // nunca resetea estado_pago, así que un pedido reembolsado se queda con
+  // estado_pago='pagado' para siempre. Sin este filtro, ingresos_totales y
+  // comision_generada cuentan ventas que en realidad fueron devueltas.
+  const pagados = pedidos.filter(p => p.estado_pago === 'pagado' && p.estado !== 'cancelado');
   const ingresos = pagados.reduce((s, p) => s + (p.total || 0), 0);
   const negocios = negociosRes.data || [];
   const comision = ingresos * (await obtenerComisionFraccion());
@@ -310,11 +314,17 @@ router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) =
 // GET /api/admin/financiero — resumen por restaurante
 router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   const { periodo } = req.query; // '7d' | '30d' | 'todo'
+
+  // Venta real = hubo transacción monetaria (estado_pago='pagado'), sin importar si
+  // ya se recogió. No exigir estado IN (completado,recogido): un pedido confirmado/
+  // en_preparacion/listo ya cobró y debe verse en finanzas el mismo día, no hasta
+  // que el cliente pase a recogerlo. 'cancelado' se excluye aparte porque el
+  // endpoint de cancelación con reembolso no resetea estado_pago.
   let query = supabase
     .from('pedidos')
     .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,negocios(id,nombre,zona)')
-    .in('estado', ['completado', 'recogido'])
-    .eq('estado_pago', 'pagado');
+    .eq('estado_pago', 'pagado')
+    .neq('estado', 'cancelado');
 
   if (periodo === '7d') {
     const desde = new Date(Date.now() - 7 * 86400000).toISOString();
@@ -326,14 +336,14 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id').in('estado', ['completado', 'recogido']);
+    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id').eq('estado_pago', 'pagado').neq('estado', 'cancelado');
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Filtro defensivo en JS: solo pedidos realmente pagados cuentan para finanzas,
-  // sin importar si vino del camino principal o del fallback.
-  data = (data || []).filter(p => p.estado_pago === 'pagado');
+  // Filtro defensivo en JS: solo pedidos realmente pagados y no cancelados cuentan
+  // para finanzas, sin importar si vino del camino principal o del fallback.
+  data = (data || []).filter(p => p.estado_pago === 'pagado' && p.estado !== 'cancelado');
 
   // Agrupar por negocio
   const map = {};
@@ -372,18 +382,24 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   });
 });
 
-// GET /api/admin/pedidos-todos — lista completa de pedidos
+// GET /api/admin/pedidos-todos — ventas reales (pagadas, no canceladas), para
+// finanzas y el dashboard. Únicos consumidores hoy: admin/index.tsx (gráfica
+// semanal) y admin/financiero.tsx (transacciones + export) — ambos financieros,
+// por eso el filtro va server-side y no queda a criterio del cliente.
 router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   const { negocio_id, limite } = req.query;
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,negocios(nombre),usuarios(nombre,email)')
+    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,monto_neto_restaurante,negocios(nombre),usuarios(nombre,email)')
+    .eq('estado_pago', 'pagado')
+    .neq('estado', 'cancelado')
     .order('created_at', { ascending: false })
     .limit(parseInt(limite) || 100);
   if (negocio_id) query = query.eq('negocio_id', negocio_id);
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id').limit(100);
+    const r = await supabase.from('pedidos').select('id,total,estado,negocio_id')
+      .eq('estado_pago', 'pagado').neq('estado', 'cancelado').limit(100);
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
