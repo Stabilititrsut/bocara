@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useAuth } from '@/src/context/AuthContext';
+import { useAuth, SESSION_MESSAGE_KEY } from '@/src/context/AuthContext';
 import { supabase } from '@/src/services/supabase';
 import { Colors } from '@/constants/Colors';
 
@@ -26,6 +27,17 @@ export default function LoginScreen() {
 
   const esRest = modo === 'restaurante';
   const esAdmin = modo === 'admin';
+
+  // Mensaje dejado por AuthContext al forzar un logout (sesión inválida) — se
+  // muestra una sola vez y se limpia para que no reaparezca en visitas futuras.
+  useEffect(() => {
+    AsyncStorage.getItem(SESSION_MESSAGE_KEY).then((msg) => {
+      if (msg) {
+        setErrorMsg(msg);
+        AsyncStorage.removeItem(SESSION_MESSAGE_KEY).catch(() => {});
+      }
+    }).catch(() => {});
+  }, []);
 
   function setModoLimpio(m: Modo) { setModo(m); setErrorMsg(''); }
 

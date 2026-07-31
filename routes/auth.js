@@ -198,7 +198,7 @@ router.post('/registro', registroLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: resolvedRol },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '100d' }
     );
     const { password_hash, ...u } = usuario;
     res.status(201).json({ token, usuario: { ...u, rol: resolvedRol }, esNuevo: true });
@@ -251,7 +251,7 @@ router.post('/registro-completo', registroLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '100d' }
     );
     const { password_hash, ...u } = usuario;
     res.status(201).json({ token, usuario: u, esNuevo: true });
@@ -326,7 +326,7 @@ router.post('/verificar-otp-email', otpVerifyLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '100d' }
     );
     const { password_hash, ...u } = usuario;
     res.status(201).json({ token, usuario: u, esNuevo: true });
@@ -428,7 +428,7 @@ router.post('/verify-phone-otp', otpVerifyLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email || '', rol: usuario.rol || 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '100d' }
     );
     const { password_hash, ...u } = usuario;
     res.json({ token, usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, ...u } });
@@ -482,7 +482,7 @@ router.post('/oauth-complete', async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: usuario.rol || 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '100d' }
     );
     const { password_hash, ...u } = usuario;
     res.json({
@@ -527,7 +527,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '100d' }
     );
     const { password_hash, ...u } = usuario;
     res.json({ token, usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, rol, ...u } });

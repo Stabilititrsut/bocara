@@ -1,9 +1,12 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authAPI } from '../services/api';
+import { onSessionInvalid } from '../services/sessionEvents';
+import { CART_KEY_PREFIX } from './CartContext';
 import { Usuario } from '../types';
 
 const PERFIL_KEY = 'bocara_perfil_cache';
+export const SESSION_MESSAGE_KEY = 'bocara_session_message';
 
 interface AuthContextType {
   usuario: Usuario | null;
@@ -25,6 +28,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => { cargarSesion(); }, []);
+
+  // Se dispara cuando el interceptor de api.ts detecta un 401 "Token inválido"
+  // (sesión muerta: expiró, la cuenta usaba un secreto viejo tras una rotación, etc.)
+  // Se resuscribe en cada cambio de `usuario` para no usar un id de carrito viejo.
+  useEffect(() => {
+    const unsubscribe = onSessionInvalid((message) => { handleSessionInvalid(message); });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usuario]);
+
+  async function handleSessionInvalid(message: string) {
+    const keysToRemove = ['bocara_token', PERFIL_KEY];
+    if (usuario?.id) keysToRemove.push(`${CART_KEY_PREFIX}${usuario.id}`);
+    try {
+      await AsyncStorage.multiRemove(keysToRemove);
+      await AsyncStorage.setItem(SESSION_MESSAGE_KEY, message);
+    } catch (error) {
+      console.warn('handleSessionInvalid: fallo al limpiar AsyncStorage', error);
+    } finally {
+      setToken(null);
+      setUsuario(null);
+      if (typeof window !== 'undefined' && typeof window.location !== 'undefined') {
+        window.location.replace('/login');
+      }
+    }
+  }
 
   async function cargarSesion() {
     try {

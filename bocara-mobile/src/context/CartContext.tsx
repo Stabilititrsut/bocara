@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Bolsa, CartItem } from '../types';
 
-const CART_KEY_PREFIX = 'carrito_';
+export const CART_KEY_PREFIX = 'carrito_';
 
 interface CartContextType {
   items: CartItem[];
