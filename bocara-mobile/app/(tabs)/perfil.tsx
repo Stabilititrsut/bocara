@@ -9,13 +9,6 @@ import { useAuth } from '@/src/context/AuthContext';
 import { authAPI, pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
-function calcularNivel(puntos: number) {
-  if (puntos < 50)  return { nombre: 'Bronce',    emoji: '🥉', color: '#CD7F32', next: 50,  pctBase: 0   };
-  if (puntos < 150) return { nombre: 'Plata',     emoji: '🥈', color: '#9E9E9E', next: 150, pctBase: 50  };
-  if (puntos < 300) return { nombre: 'Oro',       emoji: '🥇', color: '#FF9800', next: 300, pctBase: 150 };
-  return             { nombre: 'Embajador', emoji: '👑', color: Colors.primary, next: null, pctBase: 300 };
-}
-
 const MENU_ITEMS = [
   { icon: 'receipt-outline',    label: 'Mis pedidos',        route: '/(tabs)/pedidos' },
   { icon: 'ticket-outline',     label: 'Cupones',            route: '/cupones' },
@@ -32,7 +25,8 @@ export default function PerfilScreen() {
   const [resumen, setResumen] = useState({ bolsas_rescatadas: 0, total_ahorrado: 0 });
 
   useEffect(() => {
-    authAPI.perfil().then((res) => actualizarUsuario(res.data)).catch(() => {});
+    // Puntos desactivados por el momento: no refrescar perfil (evita cargar puntos innecesariamente)
+    // authAPI.perfil().then((res) => actualizarUsuario(res.data)).catch(() => {});
     pedidosAPI.getResumenCliente().then(({ data }) => setResumen(data)).catch(() => {});
   }, []);
 
@@ -52,11 +46,6 @@ export default function PerfilScreen() {
 
   if (!usuario) return <View style={s.loadingBox}><ActivityIndicator color={Colors.primary} /></View>;
 
-  const puntos = usuario.puntos || 0;
-  const nivel = calcularNivel(puntos);
-  const rango = nivel.next ? nivel.next - nivel.pctBase : 100;
-  const progreso = nivel.next ? Math.min(puntos - nivel.pctBase, rango) : rango;
-  const pct = Math.round((progreso / rango) * 100);
   const inicialesNombre = `${usuario.nombre?.[0] || ''}${usuario.apellido?.[0] || ''}`.toUpperCase();
 
   return (
@@ -70,27 +59,6 @@ export default function PerfilScreen() {
           </View>
           <Text style={s.nombre}>{usuario.nombre} {usuario.apellido || ''}</Text>
           <Text style={s.email}>{usuario.email}</Text>
-          <View style={[s.nivelPill, { backgroundColor: nivel.color + '18', borderColor: nivel.color + '40' }]}>
-            <Text style={s.nivelPillText}>{nivel.emoji}</Text>
-            <Text style={[s.nivelPillLabel, { color: nivel.color }]}>Nivel {nivel.nombre}</Text>
-          </View>
-        </View>
-
-        {/* Tarjeta de puntos */}
-        <View style={s.puntosCard}>
-          <View style={s.puntosRow}>
-            <Ionicons name="star" size={28} color="rgba(255,255,255,0.9)" />
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={s.puntosVal}>{puntos}</Text>
-              <Text style={s.puntosLabel}>Puntos Bocara</Text>
-            </View>
-          </View>
-          <View style={s.progresoBg}>
-            <View style={[s.progresoFill, { width: `${pct}%` as any }]} />
-          </View>
-          <Text style={s.progresoText}>
-            {nivel.next ? `${nivel.next - puntos} puntos para nivel ${calcularNivel(nivel.next).nombre}` : '¡Nivel máximo alcanzado! 🎉'}
-          </Text>
         </View>
 
         {/* Stats */}
@@ -144,17 +112,6 @@ const s = StyleSheet.create({
   avatarText: { fontSize: 36, fontWeight: '900', color: Colors.white },
   nombre: { fontSize: 26, fontWeight: '900', color: Colors.textPrimary },
   email: { fontSize: 13, color: Colors.textSecondary, marginTop: 4 },
-  nivelPill: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1.5, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 8, marginTop: 14 },
-  nivelPillText: { fontSize: 16 },
-  nivelPillLabel: { fontWeight: '800', fontSize: 13 },
-
-  puntosCard: { backgroundColor: Colors.primary, borderRadius: 24, padding: 20, marginBottom: 24, elevation: 5, shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12 },
-  puntosRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  puntosVal: { fontSize: 34, fontWeight: '900', color: Colors.white },
-  puntosLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  progresoBg: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 10, height: 8, marginBottom: 8 },
-  progresoFill: { borderRadius: 10, height: 8, backgroundColor: Colors.accent },
-  progresoText: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
 
   sectionTitle: { fontSize: 20, fontWeight: '900', color: Colors.textPrimary, marginBottom: 14 },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },

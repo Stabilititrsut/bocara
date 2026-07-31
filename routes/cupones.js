@@ -83,8 +83,11 @@ router.get('/mis-cupones', authMiddleware, async (req, res) => {
       ]),
     ];
 
+    // Solo cupones vigentes: sin fecha de vencimiento o con fecha futura
+    const nowIso = new Date().toISOString();
+    const vigente = `fecha_vencimiento.is.null,fecha_vencimiento.gt.${nowIso}`;
     let query = supabase.from('cupones').select('*').eq('activo', true)
-      .or(`usuario_id_exclusivo.is.null,usuario_id_exclusivo.eq.${req.usuario.id}`);
+      .or(`and(usuario_id_exclusivo.is.null,or(${vigente})),and(usuario_id_exclusivo.eq.${req.usuario.id},or(${vigente}))`);
     if (idsNoDisponibles.length > 0) {
       query = query.not('id', 'in', `(${idsNoDisponibles.join(',')})`);
     }
