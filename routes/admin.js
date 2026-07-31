@@ -4,7 +4,7 @@ const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
 const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario } = require('../services/email');
-const { obtenerConfig, obtenerComisionFraccion } = require('../services/configuracion');
+const { obtenerConfig, obtenerComisionFraccion, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
 const router = express.Router();
 
 function adminOnly(req, res, next) {
@@ -17,7 +17,7 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const [usersRes, negociosRes, pedidosRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
     supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
-    supabase.from('pedidos').select('total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,comision_bocara,comision_pasarela,monto_neto_restaurante,propina'),
+    supabase.from('pedidos').select('total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon'),
   ]);
   const pedidos = pedidosRes.data || [];
   // 'cancelado' excluido explícitamente: /pedidos/:id/cancelar (admin, con reembolso)
@@ -49,7 +49,14 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const cargoPlataforma = pagados.reduce((s, p) => s + (p.comision_pasarela || 0), 0);
   const propinasTotales = pagados.reduce((s, p) => s + (p.propina           || 0), 0);
   const pagoRestaurantes = pagados.reduce((s, p) => s + (p.monto_neto_restaurante || 0), 0);
-  const comision = comisionBocara + cargoPlataforma; // total ingreso Bocara: 25% + 3.5%
+  const descuentosCupon = pagados.reduce((s, p) => s + (p.descuento_cupon || 0), 0);
+  const comision = comisionBocara + cargoPlataforma; // total ingreso Bocara bruto: 25% + 3.5%, ANTES de cupones
+  // Bocara absorbe el descuento de cupón de su propia comisión (el restaurante
+  // siempre recibe su 75%+propina+envío completo, sin importar el cupón — los
+  // cupones no son promociones del restaurante). Puede quedar negativo si el
+  // descuento de una campaña supera lo que Bocara ganó en esas ventas — eso es
+  // una pérdida real y debe verse como tal, no camuflarse dentro de "comisión".
+  const comisionBocaraNeta = comision - descuentosCupon;
   // Contar pendientes: estado_verificacion='pendiente' o activo=false y no verificado (legacy)
   const negocios_pendientes = negocios.filter(n =>
     n.estado_verificacion === 'pendiente' || (!n.verificado && n.activo === false && n.estado_verificacion !== 'rechazado')
@@ -62,11 +69,12 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
     total_pedidos: pagados.length,
     pedidos_completados: pagados.filter(p => p.estado === 'completado' || p.estado === 'recogido').length,
     ingresos_totales: ingresos,
-    comision_generada: comision,
+    comision_generada: comisionBocaraNeta, // total ingreso Bocara YA NETO de cupones
     comision_bocara: comisionBocara,
     cargo_plataforma: cargoPlataforma,
     propinas_totales: propinasTotales,
     pago_restaurantes: pagoRestaurantes,
+    descuentos_cupon: descuentosCupon,
   });
 });
 
@@ -356,7 +364,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   // evidencia confiable de un pago confirmado por Cubo (ver confirmar_pago_cubo).
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,negocios(id,nombre,zona)')
+    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,negocios(id,nombre,zona)')
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
     .not('cubo_payment_intent_token', 'is', null)
@@ -372,7 +380,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,cubo_payment_intent_token,cubo_identifier')
+    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,cubo_payment_intent_token,cubo_identifier')
       .eq('estado_pago', 'pagado').neq('estado', 'cancelado')
       .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null);
     data = r.data; error = r.error;
@@ -408,6 +416,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
         cargoPlataforma: 0,
         propinas: 0,
         neto: 0,
+        descuentoCupon: 0,
       };
     }
     map[nid].pedidos += 1;
@@ -416,9 +425,13 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
     map[nid].cargoPlataforma += p.comision_pasarela || 0;
     map[nid].propinas        += p.propina           || 0;
     map[nid].neto            += p.monto_neto_restaurante || 0;
+    map[nid].descuentoCupon  += p.descuento_cupon   || 0;
   }
+  // Bocara absorbe el descuento de cupón — nunca el restaurante (montoNetoRestaurante
+  // arriba ya no lo incluye). "comision" queda NETO de cupones: puede ser negativo si
+  // una campaña costó más de lo que esas ventas generaron — se muestra tal cual, no se oculta.
   const resumen = Object.values(map)
-    .map(r => ({ ...r, comision: r.comisionBocara + r.cargoPlataforma })) // total ingreso Bocara (legado)
+    .map(r => ({ ...r, comision: r.comisionBocara + r.cargoPlataforma - r.descuentoCupon }))
     .sort((a, b) => b.bruto - a.bruto);
 
   const totales = resumen.reduce((acc, r) => ({
@@ -428,8 +441,9 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
     propinas:         acc.propinas         + r.propinas,
     neto:             acc.neto             + r.neto,
     pedidos:          acc.pedidos          + r.pedidos,
-  }), { bruto: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0 });
-  totales.comision = totales.comisionBocara + totales.cargoPlataforma; // total ingreso Bocara (legado)
+    descuentoCupon:   acc.descuentoCupon   + r.descuentoCupon,
+  }), { bruto: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0, descuentoCupon: 0 });
+  totales.comision = totales.comisionBocara + totales.cargoPlataforma - totales.descuentoCupon; // ingreso Bocara neto de cupones
 
   res.json({ resumen, totales });
 });
@@ -447,7 +461,7 @@ router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   const { negocio_id, limite } = req.query;
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,precio_bolsa,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,cubo_payment_intent_token,cubo_identifier,negocios(nombre),usuarios(nombre,email)')
+    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,precio_bolsa,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,cubo_payment_intent_token,cubo_identifier,negocios(nombre),usuarios(nombre,email)')
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
     .not('cubo_payment_intent_token', 'is', null)
@@ -549,7 +563,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   // perdido, no solo una cifra mal mostrada.
   const { data: pedidos } = await supabase
     .from('pedidos')
-    .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,comision_bocara,comision_pasarela,propina,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
+    .select('id,negocio_id,precio_bolsa,total,monto_neto_restaurante,comision_bocara,comision_pasarela,propina,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
     .in('estado', ['completado', 'recogido'])
     .eq('estado_pago', 'pagado')
     .not('cubo_payment_intent_token', 'is', null)
@@ -568,7 +582,12 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   // auditable sin ambigüedad: cuánto es venta bruta del producto, cuánto se quedó
   // Bocara (comisión 25% + cargo de plataforma 3.5%, nunca mezclados) y cuánto de
   // eso es propina (100% del restaurante, aparte de su 75%).
-  const comisionFraccion = await obtenerComisionFraccion();
+  //
+  // Todo sale de columnas guardadas al confirmar el pago — nunca de un % recalculado
+  // aquí. Un pedido Cubo-verificado sin monto_neto_restaurante calculado sería un
+  // dato faltante real (nunca debería pasar: routes/pagos.js siempre lo guarda al
+  // crear el pedido) — se excluye del neto y se cuenta en `pedidos_sin_desglose`
+  // para que quede visible en vez de camuflarse con una cifra inventada.
   const mapa = {};
   for (const p of (pedidos || [])) {
     const nid = p.negocio_id;
@@ -584,6 +603,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
         cargoPlataforma: 0,
         propinas: 0,
         neto: 0,
+        pedidosSinDesglose: 0,
       };
     }
     const bruto = p.precio_bolsa || p.total || 0;
@@ -592,11 +612,12 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     mapa[nid].comisionBocara  += p.comision_bocara   || 0;
     mapa[nid].cargoPlataforma += p.comision_pasarela || 0;
     mapa[nid].propinas        += p.propina           || 0;
-    // Fallback solo para pedidos legacy sin monto_neto_restaurante calculado:
-    // 75% del bruto + propina íntegra — nunca restar el cargo de plataforma.
-    mapa[nid].neto += p.monto_neto_restaurante != null
-      ? p.monto_neto_restaurante
-      : bruto * (1 - comisionFraccion) + (p.propina || 0);
+    if (p.monto_neto_restaurante == null) {
+      mapa[nid].pedidosSinDesglose += 1;
+      console.warn('[LIQUIDACIONES] pedido pagado sin monto_neto_restaurante — excluido del neto:', p.id);
+    } else {
+      mapa[nid].neto += p.monto_neto_restaurante;
+    }
   }
 
   // Enriquecer con push token del propietario
@@ -619,7 +640,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
       propinas:        parseFloat(r.propinas.toFixed(2)),
       neto:            parseFloat(r.neto.toFixed(2)),
     }))
-    .filter(r => r.neto > 0)
+    .filter(r => r.neto > 0 || r.pedidosSinDesglose > 0)
     .sort((a, b) => b.neto - a.neto);
 
   res.json({ pendientes, historial: liquidaciones });
@@ -643,16 +664,22 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     .not('cubo_identifier', 'is', null)
     .is('liquidacion_id', null);
 
-  const comisionFraccion = await obtenerComisionFraccion();
-  const bruto           = (pedidosPend || []).reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
-  const comisionBocara  = (pedidosPend || []).reduce((s, p) => s + (p.comision_bocara   || 0), 0);
-  const cargoPlataforma = (pedidosPend || []).reduce((s, p) => s + (p.comision_pasarela || 0), 0);
-  const propinas        = (pedidosPend || []).reduce((s, p) => s + (p.propina           || 0), 0);
-  // Fallback (pedidos legacy sin monto_neto_restaurante): 75% + propina, nunca restando el cargo de plataforma.
-  const neto = monto || parseFloat(((pedidosPend || []).reduce((s, p) =>
-    s + (p.monto_neto_restaurante != null
-      ? p.monto_neto_restaurante
-      : (p.precio_bolsa || p.total || 0) * (1 - comisionFraccion) + (p.propina || 0)), 0)).toFixed(2));
+  // Sin fallback por % recalculado: si algún pedido Cubo-verificado no tiene
+  // monto_neto_restaurante guardado (no debería ocurrir — ver GET /liquidaciones),
+  // no se le paga por ese pedido en este lote en vez de inventarle un monto; queda
+  // fuera de `pedidosPend` filtrados aquí y se avisa por consola para investigar.
+  const pedidosConDesglose = (pedidosPend || []).filter(p => p.monto_neto_restaurante != null);
+  const pedidosSinDesglose = (pedidosPend || []).filter(p => p.monto_neto_restaurante == null);
+  if (pedidosSinDesglose.length > 0) {
+    console.warn('[LIQUIDACIONES PAGAR] pedidos sin monto_neto_restaurante excluidos del pago:',
+      pedidosSinDesglose.map(p => p.id));
+  }
+
+  const bruto           = pedidosConDesglose.reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
+  const comisionBocara  = pedidosConDesglose.reduce((s, p) => s + (p.comision_bocara   || 0), 0);
+  const cargoPlataforma = pedidosConDesglose.reduce((s, p) => s + (p.comision_pasarela || 0), 0);
+  const propinas        = pedidosConDesglose.reduce((s, p) => s + (p.propina           || 0), 0);
+  const neto = monto || parseFloat(pedidosConDesglose.reduce((s, p) => s + p.monto_neto_restaurante, 0).toFixed(2));
 
   // Crear liquidacion — desglose completo guardado para que el pago quede auditable
   // sin ambigüedad: de dónde sale cada quetzal (venta, comisión, cargo de
@@ -668,7 +695,7 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
       propinas: parseFloat(propinas.toFixed(2)),
       estado: 'pagado',
       datos_transferencia: datos_transferencia || null,
-      total_pedidos: (pedidosPend || []).length,
+      total_pedidos: pedidosConDesglose.length,
       pagado_en: new Date().toISOString(),
       pagado_por: req.usuario.id,
     }])
@@ -676,9 +703,12 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     .single();
   if (liqErr) return res.status(400).json({ error: liqErr.message });
 
-  // Marcar pedidos como liquidados
-  if (pedidosPend?.length && liq?.id) {
-    const ids = pedidosPend.map(p => p.id);
+  // Marcar como liquidados solo los pedidos que realmente entraron en este pago
+  // (pedidosConDesglose) — los que se excluyeron por falta de monto_neto_restaurante
+  // se quedan is('liquidacion_id', null) y volverán a aparecer en GET /liquidaciones
+  // hasta que se investigue y corrija su dato faltante.
+  if (pedidosConDesglose.length && liq?.id) {
+    const ids = pedidosConDesglose.map(p => p.id);
     await supabase.from('pedidos').update({ liquidacion_id: liq.id }).in('id', ids);
   }
 
@@ -1064,6 +1094,50 @@ function validarUUID(valor) {
   return v;
 }
 
+// Advierte (nunca bloquea) si un cupón podría generar pérdida para Bocara — el
+// cupón lo absorbe Bocara de su propia comisión (comision_bocara + comision_pasarela),
+// nunca el restaurante, así que un cupón mal dimensionado sale directo del bolsillo
+// de Bocara. No es una aproximación: usa el precio real más bajo entre las bolsas
+// activas hoy (el peor caso real, no un umbral inventado) y, para cupones de
+// porcentaje, una comparación exacta e independiente del tamaño del pedido.
+async function evaluarRiesgoCupon(tipo, valorNum) {
+  const comisionFraccion = await obtenerComisionFraccion();
+  const comisionTotalFraccion = comisionFraccion + COMISION_PLATAFORMA_FRACCION; // 25% + 3.5%
+
+  if (tipo === 'porcentaje') {
+    const umbralPct = comisionTotalFraccion * 100;
+    if (valorNum >= umbralPct) {
+      return `Este cupón descuenta ${valorNum}% del total, pero la comisión de Bocara es ` +
+        `${umbralPct.toFixed(1)}% (25% + 3.5% de plataforma). Cada uso generará pérdida ` +
+        `para Bocara sin importar el tamaño del pedido — Bocara pondrá dinero de su ` +
+        `bolsillo en cada transacción con este cupón.`;
+    }
+    return null;
+  }
+
+  // monto_fijo y referido se aplican como un descuento en quetzales — el riesgo
+  // depende del tamaño del pedido, así que se compara contra la bolsa activa más
+  // barata hoy (el peor caso real y exacto, consultado en vivo, no estimado).
+  const { data: masBarata } = await supabase
+    .from('bolsas')
+    .select('precio_descuento')
+    .eq('activo', true)
+    .order('precio_descuento', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!masBarata) return null; // sin bolsas activas — no hay con qué comparar todavía
+
+  const comisionMinima = Math.round(masBarata.precio_descuento * comisionTotalFraccion * 100) / 100;
+  if (valorNum > comisionMinima) {
+    return `Este cupón descuenta Q${valorNum.toFixed(2)}, pero la comisión de Bocara en la ` +
+      `bolsa activa más barata hoy (Q${masBarata.precio_descuento.toFixed(2)}) es de solo ` +
+      `Q${comisionMinima.toFixed(2)}. Si se usa en un pedido así de pequeño, Bocara pierde ` +
+      `Q${(valorNum - comisionMinima).toFixed(2)} en esa transacción.`;
+  }
+  return null;
+}
+
 // GET /api/admin/cupones
 router.get('/cupones', authMiddleware, adminOnly, async (req, res) => {
   try {
@@ -1134,7 +1208,9 @@ router.post('/cupones', authMiddleware, adminOnly, async (req, res) => {
       if (error.code === '23505') return res.status(409).json({ error: 'Ya existe un cupón con ese código' });
       return res.status(400).json({ error: error.message });
     }
-    res.status(201).json(data);
+
+    const advertencia = await evaluarRiesgoCupon(tipo, parseFloat(valor));
+    res.status(201).json({ ...data, advertencia });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1188,7 +1264,11 @@ router.put('/cupones/:id', authMiddleware, adminOnly, async (req, res) => {
       if (error.code === '23505') return res.status(409).json({ error: 'Ya existe un cupón con ese código' });
       return res.status(400).json({ error: error.message });
     }
-    res.json(data);
+    // Evaluar sobre el estado final del cupón (data), no solo los campos que
+    // llegaron en este PATCH — así se avisa igual si tipo/valor no cambiaron
+    // pero ya eran riesgosos.
+    const advertencia = await evaluarRiesgoCupon(data.tipo, parseFloat(data.valor));
+    res.json({ ...data, advertencia });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

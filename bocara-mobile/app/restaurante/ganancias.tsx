@@ -73,6 +73,15 @@ export default function GananciasScreen() {
           <Text style={s.mainCardSub}>{resumen.total_pedidos || 0} pedidos</Text>
         </View>
 
+        {resumen.pedidos_sin_desglose > 0 && (
+          <View style={s.sinBancoCard}>
+            <Text style={{ fontSize: 12, color: Colors.error, fontWeight: '700' }}>
+              ⚠️ {resumen.pedidos_sin_desglose} pedido{resumen.pedidos_sin_desglose !== 1 ? 's' : ''} sin monto calculado —
+              no está incluido arriba. Contacta a soporte.
+            </Text>
+          </View>
+        )}
+
         {/* Empty state cuando no hay ventas */}
         {resumen.total_pedidos === 0 && (
           <View style={s.emptyVentas}>

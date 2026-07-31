@@ -12,6 +12,13 @@ const DEFAULTS = {
   max_bolsas_por_restaurante: 10,
 };
 
+// Cargo de plataforma Cubo Pago (3.5%) — fee de procesamiento fijo por contrato,
+// no una palanca de negocio como `comision_porcentaje`, así que vive como
+// constante de código en vez de la tabla `configuracion`. Se centraliza aquí
+// (una sola fuente) para que routes/pagos.js y la RPC aplicar_cupon_borrador
+// nunca puedan desincronizarse con literales 0.035 repetidos en cada archivo.
+const COMISION_PLATAFORMA_FRACCION = 0.035;
+
 const CACHE_TTL_MS = 60 * 1000;
 let cache = null;
 let cacheAt = 0;
@@ -44,4 +51,4 @@ async function obtenerComisionFraccion() {
   return pct / 100;
 }
 
-module.exports = { obtenerConfig, obtenerConfigNumerica, obtenerComisionFraccion, DEFAULTS };
+module.exports = { obtenerConfig, obtenerConfigNumerica, obtenerComisionFraccion, DEFAULTS, COMISION_PLATAFORMA_FRACCION };

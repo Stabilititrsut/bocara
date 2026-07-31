@@ -6,11 +6,10 @@ import {
 import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
-// Neto del restaurante, para pedidos legacy sin monto_neto_restaurante calculado.
+// Monto neto del restaurante — se lee tal cual quedó guardado al confirmar el
+// pago, nunca recalculado en el frontend a partir de porcentajes.
 function netoDe(p: any): number {
-  return p.monto_neto_restaurante != null
-    ? p.monto_neto_restaurante
-    : (p.precio_bolsa || 0) - (p.comision_bocara || 0) + (p.propina || 0);
+  return p.monto_neto_restaurante || 0;
 }
 
 type PedidoGrupo = {

@@ -203,13 +203,17 @@ export default function AdminCuponesScreen() {
         usuario_id_exclusivo: usuarioExclusivo,
         activo:               form.activo,
       };
-      if (editando) {
-        await adminAPI.actualizarCupon(editando.id, payload);
-      } else {
-        await adminAPI.crearCupon(payload);
-      }
+      const res = editando
+        ? await adminAPI.actualizarCupon(editando.id, payload)
+        : await adminAPI.crearCupon(payload);
       setModalVisible(false);
       cargar();
+      // Advertencia de riesgo de pérdida (nunca bloquea la creación/edición) —
+      // el backend la calcula con datos reales (comisión configurada + la bolsa
+      // activa más barata hoy), no un umbral fijo.
+      if (res.data?.advertencia) {
+        Alert.alert('⚠️ Riesgo de pérdida para Bocara', res.data.advertencia);
+      }
     } catch (e: any) {
       setErrForm(e.message || 'Error al guardar el cupón.');
     } finally {

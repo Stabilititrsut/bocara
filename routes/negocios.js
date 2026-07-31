@@ -288,7 +288,15 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   const cargoPlataforma = ventas.reduce((s, p) => s + (p.comision_pasarela || 0), 0); // informativo — nunca sale del restaurante
   const totalPropinas   = ventas.reduce((s, p) => s + (p.propina || 0), 0);
   const netoVentas       = bruto - comisionBocara; // 75% del producto, sin propina
-  const totalARecibir    = ventas.reduce((s, p) => s + (p.monto_neto_restaurante ?? ((p.precio_bolsa || 0) - (p.comision_bocara || 0) + (p.propina || 0))), 0); // 75% + propina íntegra
+  // "Lo que recibirás" se lee tal cual quedó guardado al confirmar el pago — nunca
+  // recalculado. Un pedido Cubo-verificado sin monto_neto_restaurante sería un dato
+  // faltante real (no debería ocurrir) y se excluye en vez de estimarlo.
+  const ventasSinDesglose = ventas.filter(p => p.monto_neto_restaurante == null);
+  if (ventasSinDesglose.length > 0) {
+    console.warn('[GANANCIAS] pedidos sin monto_neto_restaurante — excluidos de total_a_recibir:',
+      ventasSinDesglose.map(p => p.id));
+  }
+  const totalARecibir = ventas.reduce((s, p) => s + (p.monto_neto_restaurante || 0), 0);
 
   // Liquidaciones históricas
   const { data: liquidaciones } = await supabase
@@ -309,6 +317,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
       neto_restaurante: parseFloat(netoVentas.toFixed(2)),   // 75% del producto, sin propina
       total_propinas: parseFloat(totalPropinas.toFixed(2)),
       total_a_recibir: parseFloat(totalARecibir.toFixed(2)), // 75% + propina — lo que realmente se le paga
+      pedidos_sin_desglose: ventasSinDesglose.length, // pedidos excluidos de total_a_recibir por falta de dato — debería ser 0
     },
     liquidaciones: liquidaciones || [],
   });

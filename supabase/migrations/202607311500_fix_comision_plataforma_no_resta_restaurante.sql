@@ -11,7 +11,16 @@
 --     · comision_pasarela    = 3.5% de (producto + envío + propina) → cargo de
 --                               plataforma, 100% ingreso de Bocara. El cliente lo
 --                               paga aparte (se suma al `total` que cobra Cubo).
---     · monto_neto_restaurante = 75% del producto + 100% de la propina.
+--     · monto_neto_restaurante = 75% del producto + 100% de la propina + 100% del
+--                               costo de envío (no hay repartidor en el sistema).
+--     · descuento_cupon      = lo absorbe Bocara de su propia comisión, NUNCA el
+--                               restaurante (los cupones no tienen negocio_id — son
+--                               promociones de Bocara, no del restaurante). Si el
+--                               descuento supera comision_bocara + comision_pasarela
+--                               de esa transacción, Bocara pierde dinero en esa venta
+--                               — eso se calcula y muestra en el panel admin como
+--                               "Bocara neto" = comision_bocara + comision_pasarela -
+--                               descuento_cupon (puede ser negativo), nunca oculto.
 --
 --   La función aplicar_cupon_borrador (creada en
 --   202606251000_cupon_reserva_atomica.sql) calculaba monto_neto_restaurante
@@ -25,13 +34,22 @@
 --   se resta a monto_neto_restaurante sin sumarse a ningún ingreso de Bocara.
 --
 --   Esta migración corrige la función para que monto_neto_restaurante sea
---   únicamente subtotal_productos - comision_bocara + propina.
+--   subtotal_productos - comision_bocara + propina + costo_envio, y deja explícito
+--   que el descuento de cupón nunca la toca.
 --
 -- Caso real verificado (único pedido pagado hasta la fecha de esta migración):
 --   producto Q1.00 · comisión Bocara 25% = Q0.25 · cargo plataforma 3.5% = Q0.05
---   · propina Q0.50 · total cobrado por Cubo Q1.55.
---   Correcto: restaurante = 1.00 - 0.25 + 0.50 = Q1.25 (no Q1.20 como quedó guardado).
---   Bocara = 0.25 + 0.05 = Q0.30. Q1.25 + Q0.30 = Q1.55 ✓.
+--   · propina Q0.50 · envío Q0.00 · sin cupón · total cobrado por Cubo Q1.55.
+--   Correcto: restaurante = 1.00 - 0.25 + 0.50 + 0.00 = Q1.25 (no Q1.20 como quedó
+--   guardado). Bocara = 0.25 + 0.05 - 0 = Q0.30. Q1.25 + Q0.30 = Q1.55 ✓.
+--
+-- Reconciliación general (con envío y cupón, no solo el caso real de arriba):
+--   monto_neto_restaurante + (comision_bocara + comision_pasarela - descuento_cupon)
+--     = (S - comisionBocara + P + E) + (comisionBocara + comisionPasarela - D)
+--     = S + P + E + comisionPasarela - D
+--     = total                                                              siempre ✓
+--   (S=producto, E=envío, P=propina, D=descuento_cupon — álgebra válida porque
+--   comisionBocara se cancela y total se define exactamente como S+E+P+comisionPasarela-D).
 --
 -- Esta migración NO modifica datos existentes — solo la función. La corrección
 -- del registro histórico va en un UPDATE aparte, revisado antes de ejecutarse.
@@ -100,7 +118,9 @@ BEGIN
     v_total      := v_total_base;
     -- No restar v_comision_pasarela: es 100% ingreso de Bocara y el cliente ya la
     -- pagó aparte (incluida en v_total_base) — restarla aquí la cobraría dos veces.
-    v_monto_neto := ROUND(v_subtotal_productos - v_pedido.comision_bocara + v_propina, 2);
+    -- + costo_envio: 100% al restaurante, igual que la propina (no existe un
+    -- repartidor en el sistema — ajustar este punto si se agrega uno).
+    v_monto_neto := ROUND(v_subtotal_productos - v_pedido.comision_bocara + v_propina + v_pedido.costo_envio, 2);
 
     UPDATE pedidos SET
       descuento_cupon        = 0,
@@ -185,8 +205,12 @@ BEGIN
 
   -- ── 8. Actualizar pedido con descuento y totales recalculados ────────────
   v_total      := GREATEST(0, ROUND(v_total_base - v_descuento, 2));
-  -- No restar v_comision_pasarela — ver nota en el paso 4a.
-  v_monto_neto := ROUND(v_subtotal_productos - v_pedido.comision_bocara + v_propina, 2);
+  -- No restar v_comision_pasarela ni v_descuento — ver nota en el paso 4a. El
+  -- descuento de cupón lo absorbe Bocara de su propia comisión (comision_bocara +
+  -- comision_pasarela - descuento_cupon, calculado en los paneles de admin), NUNCA
+  -- el restaurante: el cupón es una promoción de Bocara, el restaurante no la
+  -- autorizó y su monto_neto_restaurante no debe variar por su existencia.
+  v_monto_neto := ROUND(v_subtotal_productos - v_pedido.comision_bocara + v_propina + v_pedido.costo_envio, 2);
 
   UPDATE pedidos SET
     descuento_cupon        = v_descuento,

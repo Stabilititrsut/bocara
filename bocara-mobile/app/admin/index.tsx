@@ -144,13 +144,15 @@ export default function AdminDashboard() {
     setRefreshing(false);
   }, []);
 
-  const comision         = stats?.comision_generada || 0; // total Bocara: comisión 25% + cargo plataforma 3.5%
+  const comision         = stats?.comision_generada || 0; // total Bocara NETO: comisión 25% + cargo plataforma 3.5% − descuentos de cupón
   const ingresos         = stats?.ingresos_totales  || 0;
   const comisionBocaraQ  = stats?.comision_bocara   || 0;
   const cargoPlataforma  = stats?.cargo_plataforma  || 0;
   const propinas         = stats?.propinas_totales  || 0;
-  const pagoRestaurantes = stats?.pago_restaurantes || 0; // 75% + propinas
-  const restaurante75    = pagoRestaurantes - propinas;   // solo la parte del 75%, sin propina
+  const pagoRestaurantes = stats?.pago_restaurantes || 0; // 75% + propinas + envío
+  const restaurante75    = pagoRestaurantes - propinas;   // solo la parte del 75% + envío, sin propina
+  const descuentosCupon  = stats?.descuentos_cupon  || 0; // absorbido por Bocara, nunca por el restaurante
+  const comisionEsPerdida = comision < 0;
   const resumen   = financiero?.resumen || [];
   const chartData = buildChartData(pedidos);
 
@@ -206,7 +208,7 @@ export default function AdminDashboard() {
             ))
           ) : [
             { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(2)}`,    sub: 'desde el inicio',     color: TEXT,   icon: 'trending-up'     as any },
-            { label: 'Comisión Bocara', val: `Q${comision.toFixed(2)}`,    sub: `${comisionPct}% + 3.5% plataforma`, color: GOLD, icon: 'wallet' as any },
+            { label: comisionEsPerdida ? 'Bocara: PÉRDIDA' : 'Comisión Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, sub: descuentosCupon > 0 ? `neto de -Q${descuentosCupon.toFixed(2)} en cupones` : `${comisionPct}% + 3.5% plataforma`, color: comisionEsPerdida ? '#DC2626' : GOLD, icon: comisionEsPerdida ? 'alert-circle' : 'wallet' as any },
             { label: 'Restaurantes',    val: stats?.negocios_activos || 0, sub: 'activos',             color: GREEN,  icon: 'storefront'      as any },
             { label: 'Pedidos totales', val: stats?.total_pedidos || 0,    sub: `${stats?.pedidos_completados || 0} completados`, color: BLUE, icon: 'bag-check' as any },
           ].map(({ label, val, sub, color, icon }) => (
@@ -244,8 +246,11 @@ export default function AdminDashboard() {
             { label: 'Ventas brutas',                        val: `Q${ingresos.toFixed(2)}`,          color: TEXT  },
             { label: `— Comisión Bocara (${comisionPct}%)`,   val: `Q${comisionBocaraQ.toFixed(2)}`,   color: GOLD  },
             { label: '— Cargo de plataforma (3.5%)',          val: `Q${cargoPlataforma.toFixed(2)}`,   color: GOLD  },
-            { label: 'Total Bocara',                          val: `Q${comision.toFixed(2)}`,          color: GOLD, bold: true },
-            { label: `— Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${restaurante75.toFixed(2)}`, color: GREEN },
+            ...(descuentosCupon > 0 ? [
+              { label: '— Descuentos de cupón (Bocara los absorbe)', val: `-Q${descuentosCupon.toFixed(2)}`, color: '#DC2626' },
+            ] : []),
+            { label: comisionEsPerdida ? 'Total Bocara — PÉRDIDA' : 'Total Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, color: comisionEsPerdida ? '#DC2626' : GOLD, bold: true },
+            { label: `— Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${restaurante75.toFixed(2)}`, color: GREEN },
             { label: '— Propinas (100% restaurante)',         val: `Q${propinas.toFixed(2)}`,          color: GREEN },
             { label: 'Total a restaurantes',                  val: `Q${pagoRestaurantes.toFixed(2)}`,  color: GREEN, bold: true },
           ].map(({ label, val, color, bold }, i, arr) => (

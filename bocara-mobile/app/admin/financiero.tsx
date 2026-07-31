@@ -88,8 +88,9 @@ export default function AdminFinancieroScreen() {
         ['Ventas brutas (Q)', datos.totales.bruto],
         [`Comisión Bocara ${comisionPct}% (Q)`, datos.totales.comisionBocara],
         ['Cargo de plataforma 3.5% (Q)', datos.totales.cargoPlataforma],
-        ['Total Bocara (Q)', datos.totales.comision],
-        [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% (Q)`, datos.totales.neto - datos.totales.propinas],
+        ['Descuentos de cupón — Bocara los absorbe (Q)', -datos.totales.descuentoCupon],
+        ['Total Bocara, neto de cupones (Q)', datos.totales.comision],
+        [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío (Q)`, datos.totales.neto - datos.totales.propinas],
         ['Propinas recibidas (Q)', datos.totales.propinas],
         ['Total a restaurantes (Q)', datos.totales.neto],
         ['Fecha exportación', new Date().toLocaleDateString('es-GT')],
@@ -97,12 +98,13 @@ export default function AdminFinancieroScreen() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja1), 'Dashboard');
 
       const hoja2: any[][] = [
-        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas (Q)', 'Comisión Bocara (Q)', 'Cargo plataforma (Q)', 'Propinas (Q)', 'Pago a restaurante (Q)', 'Promedio por pedido (Q)'],
+        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas (Q)', 'Comisión Bocara (Q)', 'Cargo plataforma (Q)', 'Descuentos cupón (Q)', 'Propinas (Q)', 'Pago a restaurante (Q)', 'Promedio por pedido (Q)'],
         ...datos.resumen.map((r: any) => [
           r.nombre, r.zona || '', r.pedidos,
           Number(r.bruto.toFixed(2)),
           Number(r.comisionBocara.toFixed(2)),
           Number(r.cargoPlataforma.toFixed(2)),
+          Number((-r.descuentoCupon).toFixed(2)),
           Number(r.propinas.toFixed(2)),
           Number(r.neto.toFixed(2)),
           r.pedidos > 0 ? Number((r.bruto / r.pedidos).toFixed(2)) : 0,
@@ -111,13 +113,14 @@ export default function AdminFinancieroScreen() {
           Number(datos.totales.bruto.toFixed(2)),
           Number(datos.totales.comisionBocara.toFixed(2)),
           Number(datos.totales.cargoPlataforma.toFixed(2)),
+          Number((-datos.totales.descuentoCupon).toFixed(2)),
           Number(datos.totales.propinas.toFixed(2)),
           Number(datos.totales.neto.toFixed(2)), ''],
       ];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja2), 'Por Restaurante');
 
       const hoja3: any[][] = [
-        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión Bocara (Q)', 'Cargo plataforma (Q)', 'Propina (Q)', 'Pago restaurante (Q)', 'Estado', 'Liquidación'],
+        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión Bocara (Q)', 'Cargo plataforma (Q)', 'Descuento cupón (Q)', 'Propina (Q)', 'Pago restaurante (Q)', 'Estado', 'Liquidación'],
         ...pedidos.slice(0, 500).map((p: any) => [ // pedidos ya filtrados server-side: pagados, no cancelados
           p.codigo_recogida || '—',
           p.negocios?.nombre || '—',
@@ -126,6 +129,7 @@ export default function AdminFinancieroScreen() {
           Number((p.total || 0).toFixed(2)),
           Number((p.comision_bocara || 0).toFixed(2)),
           Number((p.comision_pasarela || 0).toFixed(2)),
+          Number((-(p.descuento_cupon || 0)).toFixed(2)),
           Number((p.propina || 0).toFixed(2)),
           Number((p.monto_neto_restaurante || 0).toFixed(2)),
           ESTADO_LABELS[p.estado] || p.estado,
@@ -164,9 +168,10 @@ export default function AdminFinancieroScreen() {
     </View>
   );
 
-  const totales = datos?.totales || { bruto: 0, comision: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0 };
+  const totales = datos?.totales || { bruto: 0, comision: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0, descuentoCupon: 0 };
   const resumen = datos?.resumen || [];
-  const restaurante75Total = totales.neto - totales.propinas; // solo la parte del 75%, sin propina
+  const restaurante75Total = totales.neto - totales.propinas; // solo la parte del 75% + envío, sin propina
+  const totalEsPerdida = totales.comision < 0;
 
   return (
     <SafeAreaView style={s.root}>
@@ -206,8 +211,11 @@ export default function AdminFinancieroScreen() {
             { label: 'Ventas brutas',                        val: `Q${totales.bruto.toFixed(2)}`,             color: TEXT,  icon: 'trending-up'  as any },
             { label: `— Comisión Bocara (${comisionPct}%)`,   val: `Q${totales.comisionBocara.toFixed(2)}`,    color: GOLD,  icon: 'wallet'       as any },
             { label: '— Cargo de plataforma (3.5%)',          val: `Q${totales.cargoPlataforma.toFixed(2)}`,   color: GOLD,  icon: 'card'         as any },
-            { label: 'Total Bocara',                          val: `Q${totales.comision.toFixed(2)}`,          color: GOLD,  icon: 'wallet'       as any, bold: true },
-            { label: `— Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${restaurante75Total.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
+            ...(totales.descuentoCupon > 0 ? [
+              { label: '— Descuentos de cupón (Bocara los absorbe)', val: `-Q${totales.descuentoCupon.toFixed(2)}`, color: '#DC2626', icon: 'pricetag' as any },
+            ] : []),
+            { label: totalEsPerdida ? 'Total Bocara — PÉRDIDA' : 'Total Bocara', val: `${totalEsPerdida ? '-' : ''}Q${Math.abs(totales.comision).toFixed(2)}`, color: totalEsPerdida ? '#DC2626' : GOLD, icon: totalEsPerdida ? 'alert-circle' : 'wallet' as any, bold: true },
+            { label: `— Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${restaurante75Total.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
             { label: '— Propinas (100% restaurante)',         val: `Q${totales.propinas.toFixed(2)}`,          color: GREEN, icon: 'cash'         as any },
             { label: 'Total a restaurantes',                  val: `Q${totales.neto.toFixed(2)}`,              color: GREEN, icon: 'storefront'   as any, bold: true },
           ].map(({ label, val, color, icon, bold }: any, i, arr) => (
@@ -252,7 +260,10 @@ export default function AdminFinancieroScreen() {
                   { label: 'Ventas brutas',                        val: `Q${r.bruto.toFixed(2)}`,                        color: TEXT },
                   { label: `— Comisión Bocara (${comisionPct}%)`,   val: `-Q${r.comisionBocara.toFixed(2)}`,              color: '#DC2626' },
                   { label: '— Cargo de plataforma (3.5%)',          val: `-Q${r.cargoPlataforma.toFixed(2)}`,             color: '#DC2626' },
-                  { label: `Pago al restaurante (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${(r.neto - r.propinas).toFixed(2)}`, color: GREEN },
+                  ...(r.descuentoCupon > 0 ? [
+                    { label: 'Cupones en estos pedidos (Bocara los absorbe, no afecta este pago)', val: `-Q${r.descuentoCupon.toFixed(2)}`, color: TEXT2 },
+                  ] : []),
+                  { label: `Pago al restaurante (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${(r.neto - r.propinas).toFixed(2)}`, color: GREEN },
                   { label: '+ Propinas (100% restaurante)',         val: `Q${r.propinas.toFixed(2)}`,                     color: GREEN },
                   { label: 'Total a recibir', val: `Q${r.neto.toFixed(2)}`, color: GREEN, bold: true },
                   { label: 'Promedio por pedido',        val: r.pedidos > 0 ? `Q${(r.bruto / r.pedidos).toFixed(2)}` : '—', color: TEXT2 },
@@ -295,9 +306,18 @@ export default function AdminFinancieroScreen() {
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={s.txTotal}>Q{(p.total || 0).toFixed(2)}</Text>
-                <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>
-                  -Q{(((p.comision_bocara || 0) + (p.comision_pasarela || 0))).toFixed(2)} Bocara
-                </Text>
+                {(() => {
+                  const bocaraNeto = (p.comision_bocara || 0) + (p.comision_pasarela || 0) - (p.descuento_cupon || 0);
+                  const esPerdida = bocaraNeto < 0;
+                  return (
+                    <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1, fontWeight: esPerdida ? '800' : '400' }}>
+                      {esPerdida ? '-' : ''}Q{Math.abs(bocaraNeto).toFixed(2)} Bocara{esPerdida ? ' (PÉRDIDA)' : ''}
+                    </Text>
+                  );
+                })()}
+                {(p.descuento_cupon || 0) > 0 && (
+                  <Text style={{ fontSize: 11, color: TEXT2, marginTop: 1 }}>cupón: -Q{p.descuento_cupon.toFixed(2)}</Text>
+                )}
                 {(p.propina || 0) > 0 && (
                   <Text style={{ fontSize: 11, color: GREEN, marginTop: 1 }}>+Q{(p.propina || 0).toFixed(2)} propina</Text>
                 )}

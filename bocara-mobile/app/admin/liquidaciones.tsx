@@ -135,6 +135,16 @@ export default function AdminLiquidacionesScreen() {
                     <Text style={[s.cardFinVal, { color: Colors.green }]}>Q{r.propinas.toFixed(2)}</Text>
                   </View>
 
+                  {/* Pedidos sin desglose calculado — nunca se aproxima, se avisa */}
+                  {r.pedidosSinDesglose > 0 && (
+                    <View style={s.sinBancoWarn}>
+                      <Text style={s.sinBancoWarnText}>
+                        ⚠️ {r.pedidosSinDesglose} pedido{r.pedidosSinDesglose !== 1 ? 's' : ''} sin monto neto calculado —
+                        excluido{r.pedidosSinDesglose !== 1 ? 's' : ''} de este pago. Revisar antes de liquidar.
+                      </Text>
+                    </View>
+                  )}
+
                   {/* Datos bancarios */}
                   {r.datos_bancarios ? (
                     <View style={s.bancoInfo}>
