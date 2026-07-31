@@ -7,6 +7,17 @@
 -- Pre-condición: ninguna — aplica a las tablas existentes tal como están hoy
 -- Ejecutar en  : Supabase Dashboard → SQL Editor
 --
+-- ESTADO: APLICADA EN PRODUCCIÓN el 2026-07-30.
+--   Verificado en Supabase (rls_activado = true en las 16 tablas, políticas
+--   "deny_all_client_access" creadas) y probado manualmente en la app como
+--   cliente, restaurante y admin — todo funciona normal.
+--   Verificación adicional de código (2026-07-30): se auditaron los 17
+--   archivos backend que usan Supabase (todos vía config/supabase.js con
+--   SUPABASE_SERVICE_KEY, ninguno con la anon key) y los flujos de frontend
+--   sin probar manualmente (registro, recuperación de contraseña, subida de
+--   imágenes, notificaciones, favoritos, pago con CuboPago) — ninguno hace
+--   llamadas directas a tablas de Supabase desde el cliente. Sin hallazgos.
+--
 -- ╔══════════════════════════════════════════════════════════════════════════╗
 -- ║  Problema (2026-07-30):                                               ║
 -- ║  La clave pública (anon key) de Supabase está embebida en el código   ║
