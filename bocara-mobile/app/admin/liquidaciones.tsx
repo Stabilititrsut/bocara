@@ -38,8 +38,6 @@ export default function AdminLiquidacionesScreen() {
     }).catch(() => {});
   }, []);
 
-  const comisionFraccion = comisionPct / 100;
-
   async function confirmarPago() {
     if (!modalPago) return;
     setProcesando(modalPago.negocio_id);
@@ -115,17 +113,26 @@ export default function AdminLiquidacionesScreen() {
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={s.cardNeto}>Q{r.neto.toFixed(2)}</Text>
-                      <Text style={s.cardNetoLabel}>{(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% neto</Text>
+                      <Text style={s.cardNetoLabel}>{(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + propina</Text>
                     </View>
                   </View>
 
+                  {/* Desglose explícito: de dónde sale cada quetzal, nunca mezclado */}
                   <View style={s.cardFinRow}>
-                    <Text style={s.cardFinLabel}>Ventas brutas</Text>
+                    <Text style={s.cardFinLabel}>Ventas brutas (producto)</Text>
                     <Text style={s.cardFinVal}>Q{r.bruto.toFixed(2)}</Text>
                   </View>
                   <View style={s.cardFinRow}>
-                    <Text style={s.cardFinLabel}>Comisión Bocara ({comisionPct}%)</Text>
-                    <Text style={[s.cardFinVal, { color: Colors.orange }]}>Q{(r.bruto * comisionFraccion).toFixed(2)}</Text>
+                    <Text style={s.cardFinLabel}>− Comisión Bocara ({comisionPct}%)</Text>
+                    <Text style={[s.cardFinVal, { color: Colors.orange }]}>Q{r.comisionBocara.toFixed(2)}</Text>
+                  </View>
+                  <View style={s.cardFinRow}>
+                    <Text style={s.cardFinLabel}>Cargo de plataforma (3.5%, no afecta este pago)</Text>
+                    <Text style={[s.cardFinVal, { color: '#64748B' }]}>Q{r.cargoPlataforma.toFixed(2)}</Text>
+                  </View>
+                  <View style={s.cardFinRow}>
+                    <Text style={s.cardFinLabel}>+ Propinas (100% restaurante)</Text>
+                    <Text style={[s.cardFinVal, { color: Colors.green }]}>Q{r.propinas.toFixed(2)}</Text>
                   </View>
 
                   {/* Datos bancarios */}
@@ -183,6 +190,17 @@ export default function AdminLiquidacionesScreen() {
                     {liq.datos_transferencia?.referencia ? (
                       <Text style={s.histDetail}>Ref: {liq.datos_transferencia.referencia}</Text>
                     ) : null}
+                  </View>
+                  {/* Desglose de dónde salió el monto pagado — auditable sin ambigüedad */}
+                  <View style={[s.histDetails, { marginTop: 6 }]}>
+                    <Text style={s.histDetail}>Ventas: Q{(liq.ventas_brutas || 0).toFixed(2)}</Text>
+                    <Text style={s.histDetail}>Comisión Bocara: Q{(liq.comision_bocara || 0).toFixed(2)}</Text>
+                    {(liq.comision_plataforma || 0) > 0 && (
+                      <Text style={s.histDetail}>Cargo plataforma: Q{liq.comision_plataforma.toFixed(2)}</Text>
+                    )}
+                    {(liq.propinas || 0) > 0 && (
+                      <Text style={s.histDetail}>Propinas: Q{liq.propinas.toFixed(2)}</Text>
+                    )}
                   </View>
                 </View>
               ))

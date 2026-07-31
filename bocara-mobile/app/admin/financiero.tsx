@@ -72,8 +72,6 @@ export default function AdminFinancieroScreen() {
     }).catch(() => {});
   }, []);
 
-  const comisionFraccion = comisionPct / 100;
-
   async function exportarExcel() {
     if (!datos?.resumen?.length) return Alert.alert('Sin datos', 'No hay datos para exportar en este período.');
     if (!XLSX) return Alert.alert('Error', 'Librería XLSX no disponible.');
@@ -88,37 +86,48 @@ export default function AdminFinancieroScreen() {
         ['Métrica', 'Valor'],
         ['Ventas reales (pagadas)', datos.totales.pedidos],
         ['Ventas brutas (Q)', datos.totales.bruto],
-        [`Comisión Bocara ${comisionPct}% (Q)`, datos.totales.comision],
-        [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% (Q)`, datos.totales.neto],
+        [`Comisión Bocara ${comisionPct}% (Q)`, datos.totales.comisionBocara],
+        ['Cargo de plataforma 3.5% (Q)', datos.totales.cargoPlataforma],
+        ['Total Bocara (Q)', datos.totales.comision],
+        [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% (Q)`, datos.totales.neto - datos.totales.propinas],
+        ['Propinas recibidas (Q)', datos.totales.propinas],
+        ['Total a restaurantes (Q)', datos.totales.neto],
         ['Fecha exportación', new Date().toLocaleDateString('es-GT')],
       ];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja1), 'Dashboard');
 
       const hoja2: any[][] = [
-        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas (Q)', 'Comisión Bocara (Q)', 'Pago neto (Q)', 'Promedio por pedido (Q)'],
+        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas (Q)', 'Comisión Bocara (Q)', 'Cargo plataforma (Q)', 'Propinas (Q)', 'Pago a restaurante (Q)', 'Promedio por pedido (Q)'],
         ...datos.resumen.map((r: any) => [
           r.nombre, r.zona || '', r.pedidos,
           Number(r.bruto.toFixed(2)),
-          Number(r.comision.toFixed(2)),
+          Number(r.comisionBocara.toFixed(2)),
+          Number(r.cargoPlataforma.toFixed(2)),
+          Number(r.propinas.toFixed(2)),
           Number(r.neto.toFixed(2)),
           r.pedidos > 0 ? Number((r.bruto / r.pedidos).toFixed(2)) : 0,
         ]),
         ['TOTAL', '', datos.totales.pedidos,
           Number(datos.totales.bruto.toFixed(2)),
-          Number(datos.totales.comision.toFixed(2)),
+          Number(datos.totales.comisionBocara.toFixed(2)),
+          Number(datos.totales.cargoPlataforma.toFixed(2)),
+          Number(datos.totales.propinas.toFixed(2)),
           Number(datos.totales.neto.toFixed(2)), ''],
       ];
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja2), 'Por Restaurante');
 
       const hoja3: any[][] = [
-        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión (Q)', 'Estado', 'Liquidación'],
+        ['Código', 'Restaurante', 'Cliente', 'Fecha', 'Total (Q)', 'Comisión Bocara (Q)', 'Cargo plataforma (Q)', 'Propina (Q)', 'Pago restaurante (Q)', 'Estado', 'Liquidación'],
         ...pedidos.slice(0, 500).map((p: any) => [ // pedidos ya filtrados server-side: pagados, no cancelados
           p.codigo_recogida || '—',
           p.negocios?.nombre || '—',
           p.usuarios?.nombre || '—',
           new Date(p.created_at || p.creado_en || 0).toLocaleDateString('es-GT'),
           Number((p.total || 0).toFixed(2)),
-          Number(((p.total || 0) * comisionFraccion).toFixed(2)),
+          Number((p.comision_bocara || 0).toFixed(2)),
+          Number((p.comision_pasarela || 0).toFixed(2)),
+          Number((p.propina || 0).toFixed(2)),
+          Number((p.monto_neto_restaurante || 0).toFixed(2)),
           ESTADO_LABELS[p.estado] || p.estado,
           p.liquidacion_id ? 'Liquidado' : 'Por liquidar',
         ]),
@@ -155,8 +164,9 @@ export default function AdminFinancieroScreen() {
     </View>
   );
 
-  const totales = datos?.totales || { bruto: 0, comision: 0, neto: 0, pedidos: 0 };
+  const totales = datos?.totales || { bruto: 0, comision: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0 };
   const resumen = datos?.resumen || [];
+  const restaurante75Total = totales.neto - totales.propinas; // solo la parte del 75%, sin propina
 
   return (
     <SafeAreaView style={s.root}>
@@ -192,17 +202,21 @@ export default function AdminFinancieroScreen() {
         <Text style={s.sectionTitle}>Resumen del período</Text>
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
           {[
-            { label: 'Ventas reales (pagadas)', val: String(totales.pedidos), color: TEXT,  icon: 'bag-check'  as any },
-            { label: 'Ventas brutas',       val: `Q${totales.bruto.toFixed(2)}`,     color: TEXT,  icon: 'trending-up' as any },
-            { label: `Comisión Bocara (${comisionPct}%)`, val: `Q${totales.comision.toFixed(2)}`, color: GOLD,  icon: 'wallet'     as any },
-            { label: `Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${totales.neto.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
-          ].map(({ label, val, color, icon }, i, arr) => (
+            { label: 'Ventas reales (pagadas)',              val: String(totales.pedidos),                    color: TEXT,  icon: 'bag-check'    as any },
+            { label: 'Ventas brutas',                        val: `Q${totales.bruto.toFixed(2)}`,             color: TEXT,  icon: 'trending-up'  as any },
+            { label: `— Comisión Bocara (${comisionPct}%)`,   val: `Q${totales.comisionBocara.toFixed(2)}`,    color: GOLD,  icon: 'wallet'       as any },
+            { label: '— Cargo de plataforma (3.5%)',          val: `Q${totales.cargoPlataforma.toFixed(2)}`,   color: GOLD,  icon: 'card'         as any },
+            { label: 'Total Bocara',                          val: `Q${totales.comision.toFixed(2)}`,          color: GOLD,  icon: 'wallet'       as any, bold: true },
+            { label: `— Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${restaurante75Total.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
+            { label: '— Propinas (100% restaurante)',         val: `Q${totales.propinas.toFixed(2)}`,          color: GREEN, icon: 'cash'         as any },
+            { label: 'Total a restaurantes',                  val: `Q${totales.neto.toFixed(2)}`,              color: GREEN, icon: 'storefront'   as any, bold: true },
+          ].map(({ label, val, color, icon, bold }: any, i, arr) => (
             <View key={label} style={[s.totalRow, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: BORDER }]}>
               <View style={s.totalIconWrap}>
                 <Ionicons name={icon} size={18} color={color} />
               </View>
-              <Text style={s.totalLabel}>{label}</Text>
-              <Text style={[s.totalVal, { color }]}>{val}</Text>
+              <Text style={[s.totalLabel, bold && { fontWeight: '800', color: TEXT }]}>{label}</Text>
+              <Text style={[s.totalVal, { color }, bold && { fontSize: 17 }]}>{val}</Text>
             </View>
           ))}
         </View>
@@ -235,14 +249,17 @@ export default function AdminFinancieroScreen() {
             {expandido === r.negocio_id && (
               <View style={{ borderTopWidth: 1, borderTopColor: BORDER }}>
                 {[
-                  { label: 'Ventas brutas',              val: `Q${r.bruto.toFixed(2)}`,          color: TEXT  },
-                  { label: `Comisión Bocara (${comisionPct}%)`, val: `-Q${r.comision.toFixed(2)}`, color: '#DC2626' },
-                  { label: `Pago al restaurante (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${r.neto.toFixed(2)}`, color: GREEN },
+                  { label: 'Ventas brutas',                        val: `Q${r.bruto.toFixed(2)}`,                        color: TEXT },
+                  { label: `— Comisión Bocara (${comisionPct}%)`,   val: `-Q${r.comisionBocara.toFixed(2)}`,              color: '#DC2626' },
+                  { label: '— Cargo de plataforma (3.5%)',          val: `-Q${r.cargoPlataforma.toFixed(2)}`,             color: '#DC2626' },
+                  { label: `Pago al restaurante (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${(r.neto - r.propinas).toFixed(2)}`, color: GREEN },
+                  { label: '+ Propinas (100% restaurante)',         val: `Q${r.propinas.toFixed(2)}`,                     color: GREEN },
+                  { label: 'Total a recibir', val: `Q${r.neto.toFixed(2)}`, color: GREEN, bold: true },
                   { label: 'Promedio por pedido',        val: r.pedidos > 0 ? `Q${(r.bruto / r.pedidos).toFixed(2)}` : '—', color: TEXT2 },
-                ].map(({ label, val, color }, i, arr) => (
+                ].map(({ label, val, color, bold }: any, i, arr) => (
                   <View key={label} style={[s.detailRow, i < arr.length - 1 && { borderBottomWidth: 1, borderBottomColor: BORDER }]}>
-                    <Text style={s.detailLabel}>{label}</Text>
-                    <Text style={[s.detailVal, { color }]}>{val}</Text>
+                    <Text style={[s.detailLabel, bold && { fontWeight: '800', color: TEXT }]}>{label}</Text>
+                    <Text style={[s.detailVal, { color }, bold && { fontSize: 16 }]}>{val}</Text>
                   </View>
                 ))}
               </View>
@@ -278,7 +295,12 @@ export default function AdminFinancieroScreen() {
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={s.txTotal}>Q{(p.total || 0).toFixed(2)}</Text>
-                <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>-Q{((p.total || 0) * comisionFraccion).toFixed(2)}</Text>
+                <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 1 }}>
+                  -Q{(((p.comision_bocara || 0) + (p.comision_pasarela || 0))).toFixed(2)} Bocara
+                </Text>
+                {(p.propina || 0) > 0 && (
+                  <Text style={{ fontSize: 11, color: GREEN, marginTop: 1 }}>+Q{(p.propina || 0).toFixed(2)} propina</Text>
+                )}
                 <View style={[s.txEstado, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0', marginTop: 4 }]}>
                   <Text style={[s.txEstadoText, { color: '#166534' }]}>{ESTADO_LABELS[p.estado] || p.estado}</Text>
                 </View>

@@ -66,11 +66,11 @@ export default function GananciasScreen() {
           ))}
         </View>
 
-        {/* Card principal */}
+        {/* Card principal — 75% de la venta + propina íntegra, lo que realmente se paga */}
         <View style={s.mainCard}>
-          <Text style={s.mainCardLabel}>Lo que recibirás (75%)</Text>
-          <Text style={s.mainCardVal}>Q{(resumen.neto_restaurante || 0).toFixed(2)}</Text>
-          <Text style={s.mainCardSub}>{resumen.total_pedidos || 0} pedidos completados</Text>
+          <Text style={s.mainCardLabel}>Lo que recibirás</Text>
+          <Text style={s.mainCardVal}>Q{(resumen.total_a_recibir || 0).toFixed(2)}</Text>
+          <Text style={s.mainCardSub}>{resumen.total_pedidos || 0} pedidos</Text>
         </View>
 
         {/* Empty state cuando no hay ventas */}
@@ -86,12 +86,13 @@ export default function GananciasScreen() {
         {resumen.total_pedidos > 0 && <View style={s.desglose}>
           <Text style={s.desgloseTitle}>Desglose</Text>
           {[
-            { label: 'Ventas brutas',           val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
+            { label: 'Ventas brutas (producto)', val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
             { label: 'Comisión Bocara (25%)',    val: -(resumen.comision_bocara || 0),  color: Colors.error, neg: true },
-            { label: 'Tu ganancia neta',         val: resumen.neto_restaurante || 0,    color: Colors.green, bold: true },
+            { label: 'Tu ganancia por ventas (75%)', val: resumen.neto_restaurante || 0, color: Colors.textPrimary },
             ...(resumen.total_propinas > 0 ? [
-              { label: 'Propinas recibidas', val: resumen.total_propinas, color: '#22C55E' },
+              { label: 'Propinas recibidas (100%)', val: resumen.total_propinas, color: '#22C55E' },
             ] : []),
+            { label: 'Total a recibir',          val: resumen.total_a_recibir || 0,     color: Colors.green, bold: true },
           ].map(({ label, val, color, bold, neg }: any) => (
             <View key={label} style={s.desgloseRow}>
               <Text style={s.desgloseLabel}>{label}</Text>

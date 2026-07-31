@@ -260,19 +260,35 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   else if (periodo === 'mes')    desde = new Date(Date.now() - 30 * 86400000);
   // periodo === 'todo' → desde queda null, sin límite de fecha (histórico completo)
 
+  // Mismo criterio de "venta real" que el resto del sistema: dinero confirmado
+  // por Cubo (estado_pago='pagado', no cancelado, con token+identifier de Cubo),
+  // sin exigir que ya esté completado/recogido — el dinero ya entró aunque el
+  // cliente no haya pasado a recoger. Antes este endpoint solo filtraba por
+  // estado IN (completado,recogido) sin verificar pago real ni excluir cancelados.
   let query = supabase
     .from('pedidos')
-    .select('id,total,precio_bolsa,comision_bocara,monto_neto_restaurante,estado,created_at')
+    .select('id,total,precio_bolsa,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,created_at')
     .eq('negocio_id', negocio.id)
-    .in('estado', ['completado', 'recogido']);
+    .eq('estado_pago', 'pagado')
+    .neq('estado', 'cancelado')
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null);
   if (desde) query = query.gte('created_at', desde.toISOString());
   const { data: pedidos } = await query;
 
   const ventas = pedidos || [];
-  const bruto = ventas.reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
-  const totalPropinas = ventas.reduce((s, p) => s + (p.propina || 0), 0);
-  const comision = bruto * 0.25;
-  const neto = bruto * 0.75;
+  // Todo se suma desde el snapshot financiero guardado en cada pedido (comision_bocara,
+  // monto_neto_restaurante, propina) — nunca recalculado con el % de configuración
+  // actual, para que las cifras no cambien retroactivamente si la comisión cambia
+  // después de una venta. Antes esta ruta ni siquiera seleccionaba la columna
+  // `propina`, así que total_propinas siempre daba 0 aunque hubiera propinas reales,
+  // y usaba fracciones fijas 0.25/0.75 en vez de la comisión configurada.
+  const bruto           = ventas.reduce((s, p) => s + (p.precio_bolsa || 0), 0); // producto, sin propina
+  const comisionBocara  = ventas.reduce((s, p) => s + (p.comision_bocara   || 0), 0);
+  const cargoPlataforma = ventas.reduce((s, p) => s + (p.comision_pasarela || 0), 0); // informativo — nunca sale del restaurante
+  const totalPropinas   = ventas.reduce((s, p) => s + (p.propina || 0), 0);
+  const netoVentas       = bruto - comisionBocara; // 75% del producto, sin propina
+  const totalARecibir    = ventas.reduce((s, p) => s + (p.monto_neto_restaurante ?? ((p.precio_bolsa || 0) - (p.comision_bocara || 0) + (p.propina || 0))), 0); // 75% + propina íntegra
 
   // Liquidaciones históricas
   const { data: liquidaciones } = await supabase
@@ -287,10 +303,12 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
     negocio: { id: negocio.id, nombre: negocio.nombre, datos_bancarios: negocio.datos_bancarios },
     resumen: {
       total_pedidos: ventas.length,
-      ventas_brutas: parseFloat(bruto.toFixed(2)),
-      comision_bocara: parseFloat(comision.toFixed(2)),
-      neto_restaurante: parseFloat(neto.toFixed(2)),
+      ventas_brutas: parseFloat(bruto.toFixed(2)),          // producto, sin propina
+      comision_bocara: parseFloat(comisionBocara.toFixed(2)),
+      cargo_plataforma: parseFloat(cargoPlataforma.toFixed(2)), // no afecta el pago al restaurante — informativo
+      neto_restaurante: parseFloat(netoVentas.toFixed(2)),   // 75% del producto, sin propina
       total_propinas: parseFloat(totalPropinas.toFixed(2)),
+      total_a_recibir: parseFloat(totalARecibir.toFixed(2)), // 75% + propina — lo que realmente se le paga
     },
     liquidaciones: liquidaciones || [],
   });

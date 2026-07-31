@@ -347,23 +347,34 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
 
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
 
-    // Subtotal = suma de (precio_unitario × cantidad) + propina
+    // Precio del producto = suma de (precio_unitario × cantidad), SIN propina.
     const subtotalProductos = Math.round(
       cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
     ) / 100;
-    const subtotal = subtotalProductos + costoEnvio + propina;
+    // Base de la transacción para el cargo de plataforma: producto + envío + propina.
+    // El 3.5% se calcula sobre este monto completo — CON propina incluida — nunca solo
+    // sobre el producto. (Nombrar esta variable "subtotal" a secas escondía que ya
+    // incluye la propina; de ahí el nombre explícito.)
+    const baseTransaccion = subtotalProductos + costoEnvio + propina;
 
-    const COMISION_CUBO        = 0.035;
+    // Modelo de comisiones de Bocara:
+    //   · comisionBocara: 25% del producto (sin propina) → ingreso de Bocara.
+    //   · comisionPasarela ("cargo de plataforma"): 3.5% de baseTransaccion (producto +
+    //     envío + propina) → 100% ingreso de Bocara, cobrado aparte al cliente (se suma
+    //     a `total` abajo). NUNCA debe restarse de montoNetoRestaurante: el cliente ya
+    //     lo pagó aparte, así que descontárselo también al restaurante sería cobrarlo
+    //     dos veces y ese quetzal no quedaría asignado a nadie.
+    //   · El restaurante recibe 75% del producto + el 100% de la propina.
+    const COMISION_PLATAFORMA  = 0.035; // 3.5% — íntegro para Bocara, no para la pasarela
     const comisionFraccion     = await obtenerComisionFraccion();
     const comisionBocara       = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
-    const comisionPasarela     = Math.round(subtotal * COMISION_CUBO * 100) / 100;
-    const total                = Math.round((subtotal + comisionPasarela) * 100) / 100;
-    // Propina va 100% al restaurante (solo se descuenta comisión pasarela)
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela + propina) * 100) / 100;
+    const comisionPasarela     = Math.round(baseTransaccion * COMISION_PLATAFORMA * 100) / 100;
+    const total                = Math.round((baseTransaccion + comisionPasarela) * 100) / 100;
+    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara + propina) * 100) / 100;
 
     console.log('[PAGO] items recibidos:', JSON.stringify(cartItems));
     console.log('[PAGO] subtotalProductos:', subtotalProductos);
-    console.log('[PAGO] comisionPasarela:', comisionPasarela);
+    console.log('[PAGO] comisionPasarela (cargo de plataforma 3.5%, ingreso Bocara):', comisionPasarela);
     console.log('[PAGO] total:', total);
     console.log('[PAGO] amount Cubo (centavos):', Math.round(total * 100));
 
@@ -632,17 +643,22 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
     }
 
     const costoEnvio = tipo_entrega === 'envio' ? await getCostoEnvio() : 0;
+    // Precio del producto, SIN propina.
     const subtotalProductos = Math.round(
       cartItems.reduce((sum, item, i) => sum + bolsas[i].precio_descuento * item.cantidad, 0) * 100
     ) / 100;
-    const subtotal = subtotalProductos + costoEnvio + propina;
-    const COMISION_CUBO = 0.035;
+    // Base de la transacción para el cargo de plataforma: producto + envío + propina
+    // (el 3.5% incluye la propina en su base, nunca solo el producto).
+    const baseTransaccion = subtotalProductos + costoEnvio + propina;
+    const COMISION_PLATAFORMA = 0.035; // 3.5% — íntegro para Bocara (ver /cubopago para el detalle del modelo)
     const comisionFraccion = await obtenerComisionFraccion();
     const comisionBocara = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
-    const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const comisionPasarela = Math.round(baseTransaccion * COMISION_PLATAFORMA * 100) / 100;
     // Total sin descuento — se actualiza después de la reserva atómica del cupón
-    let total = Math.round((subtotal + comisionPasarela) * 100) / 100;
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara - comisionPasarela + propina) * 100) / 100;
+    let total = Math.round((baseTransaccion + comisionPasarela) * 100) / 100;
+    // No restar comisionPasarela: es 100% ingreso de Bocara y el cliente ya la paga
+    // aparte (incluida en `total`) — restarla aquí también sería cobrarla dos veces.
+    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara + propina) * 100) / 100;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
@@ -926,12 +942,14 @@ router.patch('/borrador/:id', authMiddleware, async (req, res) => {
     const subtotalProductos = Math.round(
       (pedidoItems || []).reduce((sum, pi) => sum + pi.precio_unitario * pi.cantidad, 0) * 100
     ) / 100;
-    const COMISION_CUBO = 0.035;
-    const subtotal = subtotalProductos + pedido.costo_envio + propina;
-    const comisionPasarela = Math.round(subtotal * COMISION_CUBO * 100) / 100;
+    const COMISION_PLATAFORMA = 0.035; // 3.5% — íntegro para Bocara (ver /cubopago para el detalle del modelo)
+    // Base del cargo de plataforma: producto + envío + propina (incluye propina, nunca solo el producto).
+    const baseTransaccion = subtotalProductos + pedido.costo_envio + propina;
+    const comisionPasarela = Math.round(baseTransaccion * COMISION_PLATAFORMA * 100) / 100;
     const descuentoCupon = Math.round((parseFloat(pedido.descuento_cupon) || 0) * 100) / 100;
-    const total = Math.round(Math.max(0, subtotal + comisionPasarela - descuentoCupon) * 100) / 100;
-    const montoNetoRestaurante = Math.round((subtotalProductos - pedido.comision_bocara - comisionPasarela + propina) * 100) / 100;
+    const total = Math.round(Math.max(0, baseTransaccion + comisionPasarela - descuentoCupon) * 100) / 100;
+    // No restar comisionPasarela: 100% ingreso de Bocara, ya pagado aparte por el cliente (incluido en `total`).
+    const montoNetoRestaurante = Math.round((subtotalProductos - pedido.comision_bocara + propina) * 100) / 100;
 
     const { error: updateErr } = await supabase.from('pedidos').update({
       propina, total, comision_pasarela: comisionPasarela, monto_neto_restaurante: montoNetoRestaurante,

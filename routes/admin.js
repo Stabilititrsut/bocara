@@ -17,7 +17,7 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const [usersRes, negociosRes, pedidosRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
     supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
-    supabase.from('pedidos').select('total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier'),
+    supabase.from('pedidos').select('total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,comision_bocara,comision_pasarela,monto_neto_restaurante,propina'),
   ]);
   const pedidos = pedidosRes.data || [];
   // 'cancelado' excluido explícitamente: /pedidos/:id/cancelar (admin, con reembolso)
@@ -31,13 +31,25 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   // se escriben juntos dentro de confirmar_pago_cubo, después de que el webhook
   // confirmó el pago con Cubo de forma independiente — es la única evidencia
   // confiable de que el dinero se movió de verdad.
+  //
+  // Los contadores de pedidos (total_pedidos, pedidos_completados) también deben
+  // filtrarse por `pagados`: un pedido en borrador/pendiente/cancelado nunca tuvo
+  // dinero real de por medio y no debe aparecer en ningún indicador del dashboard.
   const pagados = pedidos.filter(p =>
     p.estado_pago === 'pagado' && p.estado !== 'cancelado' &&
     p.cubo_payment_intent_token != null && p.cubo_identifier != null
   );
   const ingresos = pagados.reduce((s, p) => s + (p.total || 0), 0);
   const negocios = negociosRes.data || [];
-  const comision = ingresos * (await obtenerComisionFraccion());
+  // Comisión de Bocara sumada desde el snapshot financiero guardado en cada pedido
+  // (comision_bocara + comision_pasarela), no recalculada sobre `ingresos` con el
+  // % de configuración actual — así las cifras no se mueven retroactivamente si
+  // la comisión configurada cambia después de una venta.
+  const comisionBocara  = pagados.reduce((s, p) => s + (p.comision_bocara   || 0), 0);
+  const cargoPlataforma = pagados.reduce((s, p) => s + (p.comision_pasarela || 0), 0);
+  const propinasTotales = pagados.reduce((s, p) => s + (p.propina           || 0), 0);
+  const pagoRestaurantes = pagados.reduce((s, p) => s + (p.monto_neto_restaurante || 0), 0);
+  const comision = comisionBocara + cargoPlataforma; // total ingreso Bocara: 25% + 3.5%
   // Contar pendientes: estado_verificacion='pendiente' o activo=false y no verificado (legacy)
   const negocios_pendientes = negocios.filter(n =>
     n.estado_verificacion === 'pendiente' || (!n.verificado && n.activo === false && n.estado_verificacion !== 'rechazado')
@@ -47,10 +59,14 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
     total_negocios: negocios.length,
     negocios_activos: negocios.filter(n => n.activo !== false).length,
     negocios_sin_verificar: negocios_pendientes,
-    total_pedidos: pedidos.length,
-    pedidos_completados: pedidos.filter(p => p.estado === 'completado' || p.estado === 'recogido').length,
+    total_pedidos: pagados.length,
+    pedidos_completados: pagados.filter(p => p.estado === 'completado' || p.estado === 'recogido').length,
     ingresos_totales: ingresos,
     comision_generada: comision,
+    comision_bocara: comisionBocara,
+    cargo_plataforma: cargoPlataforma,
+    propinas_totales: propinasTotales,
+    pago_restaurantes: pagoRestaurantes,
   });
 });
 
@@ -340,7 +356,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   // evidencia confiable de un pago confirmado por Cubo (ver confirmar_pago_cubo).
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,negocios(id,nombre,zona)')
+    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,negocios(id,nombre,zona)')
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
     .not('cubo_payment_intent_token', 'is', null)
@@ -356,7 +372,7 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,cubo_payment_intent_token,cubo_identifier')
+    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,cubo_payment_intent_token,cubo_identifier')
       .eq('estado_pago', 'pagado').neq('estado', 'cancelado')
       .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null);
     data = r.data; error = r.error;
@@ -371,7 +387,13 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
     p.cubo_payment_intent_token != null && p.cubo_identifier != null
   );
 
-  // Agrupar por negocio
+  // Agrupar por negocio. Cada componente se suma desde el snapshot financiero
+  // guardado en el pedido (comision_bocara, comision_pasarela, monto_neto_restaurante,
+  // propina) — nunca recalculado desde `bruto` con el % de configuración actual,
+  // para que las cifras no cambien retroactivamente si la comisión configurada
+  // cambia después de una venta. Desglose explícito: comisión 25%, cargo de
+  // plataforma 3.5% (ambos ingreso de Bocara) y propinas (100% del restaurante,
+  // separadas de su 75%) — nunca mezclados en un solo número.
   const map = {};
   for (const p of (data || [])) {
     const nid = p.negocio_id;
@@ -382,30 +404,34 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
         zona: p.negocios?.zona || '',
         pedidos: 0,
         bruto: 0,
-        comision: 0,
+        comisionBocara: 0,
+        cargoPlataforma: 0,
+        propinas: 0,
         neto: 0,
       };
     }
     map[nid].pedidos += 1;
     map[nid].bruto += p.total || 0;
+    map[nid].comisionBocara  += p.comision_bocara   || 0;
+    map[nid].cargoPlataforma += p.comision_pasarela || 0;
+    map[nid].propinas        += p.propina           || 0;
+    map[nid].neto            += p.monto_neto_restaurante || 0;
   }
-  const comisionFraccion = await obtenerComisionFraccion();
-  const resumen = Object.values(map).map(r => ({
-    ...r,
-    comision: r.bruto * comisionFraccion,
-    neto: r.bruto * (1 - comisionFraccion),
-  })).sort((a, b) => b.bruto - a.bruto);
+  const resumen = Object.values(map)
+    .map(r => ({ ...r, comision: r.comisionBocara + r.cargoPlataforma })) // total ingreso Bocara (legado)
+    .sort((a, b) => b.bruto - a.bruto);
 
-  const totalBruto = resumen.reduce((s, r) => s + r.bruto, 0);
-  res.json({
-    resumen,
-    totales: {
-      bruto: totalBruto,
-      comision: totalBruto * comisionFraccion,
-      neto: totalBruto * (1 - comisionFraccion),
-      pedidos: resumen.reduce((s, r) => s + r.pedidos, 0),
-    },
-  });
+  const totales = resumen.reduce((acc, r) => ({
+    bruto:            acc.bruto            + r.bruto,
+    comisionBocara:   acc.comisionBocara   + r.comisionBocara,
+    cargoPlataforma:  acc.cargoPlataforma  + r.cargoPlataforma,
+    propinas:         acc.propinas         + r.propinas,
+    neto:             acc.neto             + r.neto,
+    pedidos:          acc.pedidos          + r.pedidos,
+  }), { bruto: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0 });
+  totales.comision = totales.comisionBocara + totales.cargoPlataforma; // total ingreso Bocara (legado)
+
+  res.json({ resumen, totales });
 });
 
 // GET /api/admin/pedidos-todos — ventas reales, verificadas por Cubo, para
@@ -421,7 +447,7 @@ router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   const { negocio_id, limite } = req.query;
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,monto_neto_restaurante,cubo_payment_intent_token,cubo_identifier,negocios(nombre),usuarios(nombre,email)')
+    .select('id,total,estado,estado_pago,codigo_recogida,created_at,creado_en,negocio_id,usuario_id,liquidacion_id,precio_bolsa,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,cubo_payment_intent_token,cubo_identifier,negocios(nombre),usuarios(nombre,email)')
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
     .not('cubo_payment_intent_token', 'is', null)
@@ -523,7 +549,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   // perdido, no solo una cifra mal mostrada.
   const { data: pedidos } = await supabase
     .from('pedidos')
-    .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
+    .select('negocio_id,precio_bolsa,total,monto_neto_restaurante,comision_bocara,comision_pasarela,propina,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
     .in('estado', ['completado', 'recogido'])
     .eq('estado_pago', 'pagado')
     .not('cubo_payment_intent_token', 'is', null)
@@ -538,7 +564,10 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     .limit(50);
   if (!liquidaciones) liquidaciones = [];
 
-  // Agrupar pedidos por negocio
+  // Agrupar pedidos por negocio. Desglose explícito para que la liquidación sea
+  // auditable sin ambigüedad: cuánto es venta bruta del producto, cuánto se quedó
+  // Bocara (comisión 25% + cargo de plataforma 3.5%, nunca mezclados) y cuánto de
+  // eso es propina (100% del restaurante, aparte de su 75%).
   const comisionFraccion = await obtenerComisionFraccion();
   const mapa = {};
   for (const p of (pedidos || [])) {
@@ -551,13 +580,23 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
         propietario_id: p.negocios?.propietario_id,
         pedidos: 0,
         bruto: 0,
+        comisionBocara: 0,
+        cargoPlataforma: 0,
+        propinas: 0,
         neto: 0,
       };
     }
     const bruto = p.precio_bolsa || p.total || 0;
     mapa[nid].pedidos += 1;
     mapa[nid].bruto += bruto;
-    mapa[nid].neto += p.monto_neto_restaurante || bruto * (1 - comisionFraccion);
+    mapa[nid].comisionBocara  += p.comision_bocara   || 0;
+    mapa[nid].cargoPlataforma += p.comision_pasarela || 0;
+    mapa[nid].propinas        += p.propina           || 0;
+    // Fallback solo para pedidos legacy sin monto_neto_restaurante calculado:
+    // 75% del bruto + propina íntegra — nunca restar el cargo de plataforma.
+    mapa[nid].neto += p.monto_neto_restaurante != null
+      ? p.monto_neto_restaurante
+      : bruto * (1 - comisionFraccion) + (p.propina || 0);
   }
 
   // Enriquecer con push token del propietario
@@ -572,7 +611,14 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     }
   }
   const pendientes = Object.values(mapa)
-    .map(r => ({ ...r, bruto: parseFloat(r.bruto.toFixed(2)), neto: parseFloat(r.neto.toFixed(2)) }))
+    .map(r => ({
+      ...r,
+      bruto:           parseFloat(r.bruto.toFixed(2)),
+      comisionBocara:  parseFloat(r.comisionBocara.toFixed(2)),
+      cargoPlataforma: parseFloat(r.cargoPlataforma.toFixed(2)),
+      propinas:        parseFloat(r.propinas.toFixed(2)),
+      neto:            parseFloat(r.neto.toFixed(2)),
+    }))
     .filter(r => r.neto > 0)
     .sort((a, b) => b.neto - a.neto);
 
@@ -589,7 +635,7 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
   // corresponderá con lo que el admin vio como pendiente.
   const { data: pedidosPend } = await supabase
     .from('pedidos')
-    .select('id,precio_bolsa,total,monto_neto_restaurante')
+    .select('id,precio_bolsa,total,monto_neto_restaurante,comision_bocara,comision_pasarela,propina')
     .eq('negocio_id', restaurante_id)
     .in('estado', ['completado', 'recogido'])
     .eq('estado_pago', 'pagado')
@@ -598,17 +644,28 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     .is('liquidacion_id', null);
 
   const comisionFraccion = await obtenerComisionFraccion();
-  const bruto = (pedidosPend || []).reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
-  const neto = monto || parseFloat(((pedidosPend || []).reduce((s, p) => s + (p.monto_neto_restaurante || (p.precio_bolsa || p.total || 0) * (1 - comisionFraccion)), 0)).toFixed(2));
+  const bruto           = (pedidosPend || []).reduce((s, p) => s + (p.precio_bolsa || p.total || 0), 0);
+  const comisionBocara  = (pedidosPend || []).reduce((s, p) => s + (p.comision_bocara   || 0), 0);
+  const cargoPlataforma = (pedidosPend || []).reduce((s, p) => s + (p.comision_pasarela || 0), 0);
+  const propinas        = (pedidosPend || []).reduce((s, p) => s + (p.propina           || 0), 0);
+  // Fallback (pedidos legacy sin monto_neto_restaurante): 75% + propina, nunca restando el cargo de plataforma.
+  const neto = monto || parseFloat(((pedidosPend || []).reduce((s, p) =>
+    s + (p.monto_neto_restaurante != null
+      ? p.monto_neto_restaurante
+      : (p.precio_bolsa || p.total || 0) * (1 - comisionFraccion) + (p.propina || 0)), 0)).toFixed(2));
 
-  // Crear liquidacion
+  // Crear liquidacion — desglose completo guardado para que el pago quede auditable
+  // sin ambigüedad: de dónde sale cada quetzal (venta, comisión, cargo de
+  // plataforma, propina), no solo el monto final transferido.
   const { data: liq, error: liqErr } = await supabase
     .from('liquidaciones')
     .insert([{
       negocio_id: restaurante_id,
       monto: neto,
       ventas_brutas: parseFloat(bruto.toFixed(2)),
-      comision_bocara: parseFloat((bruto * comisionFraccion).toFixed(2)),
+      comision_bocara: parseFloat(comisionBocara.toFixed(2)),
+      comision_plataforma: parseFloat(cargoPlataforma.toFixed(2)),
+      propinas: parseFloat(propinas.toFixed(2)),
       estado: 'pagado',
       datos_transferencia: datos_transferencia || null,
       total_pedidos: (pedidosPend || []).length,

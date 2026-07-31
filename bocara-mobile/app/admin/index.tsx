@@ -48,7 +48,7 @@ function BarChart({ data }: { data: { label: string; value: number }[] }) {
       {data.map((d) => (
         <View key={d.label} style={{ flex: 1, alignItems: 'center' }}>
           <Text style={{ fontSize: 8, color: TEXT2, marginBottom: 2, textAlign: 'center' }}>
-            {d.value > 0 ? (d.value > 999 ? `Q${(d.value/1000).toFixed(1)}k` : `Q${d.value.toFixed(0)}`) : ''}
+            {d.value > 0 ? (d.value > 999 ? `Q${(d.value/1000).toFixed(1)}k` : `Q${d.value.toFixed(2)}`) : ''}
           </Text>
           <View style={{ width: '100%', height: 80, justifyContent: 'flex-end' }}>
             <View style={{
@@ -144,8 +144,13 @@ export default function AdminDashboard() {
     setRefreshing(false);
   }, []);
 
-  const comision  = stats?.comision_generada || 0;
-  const ingresos  = stats?.ingresos_totales  || 0;
+  const comision         = stats?.comision_generada || 0; // total Bocara: comisión 25% + cargo plataforma 3.5%
+  const ingresos         = stats?.ingresos_totales  || 0;
+  const comisionBocaraQ  = stats?.comision_bocara   || 0;
+  const cargoPlataforma  = stats?.cargo_plataforma  || 0;
+  const propinas         = stats?.propinas_totales  || 0;
+  const pagoRestaurantes = stats?.pago_restaurantes || 0; // 75% + propinas
+  const restaurante75    = pagoRestaurantes - propinas;   // solo la parte del 75%, sin propina
   const resumen   = financiero?.resumen || [];
   const chartData = buildChartData(pedidos);
 
@@ -200,8 +205,8 @@ export default function AdminDashboard() {
               </View>
             ))
           ) : [
-            { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(0)}`,    sub: 'desde el inicio',     color: TEXT,   icon: 'trending-up'     as any },
-            { label: 'Comisión Bocara', val: `Q${comision.toFixed(0)}`,    sub: `${comisionPct}% · desde el inicio`, color: GOLD, icon: 'wallet' as any },
+            { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(2)}`,    sub: 'desde el inicio',     color: TEXT,   icon: 'trending-up'     as any },
+            { label: 'Comisión Bocara', val: `Q${comision.toFixed(2)}`,    sub: `${comisionPct}% + 3.5% plataforma`, color: GOLD, icon: 'wallet' as any },
             { label: 'Restaurantes',    val: stats?.negocios_activos || 0, sub: 'activos',             color: GREEN,  icon: 'storefront'      as any },
             { label: 'Pedidos totales', val: stats?.total_pedidos || 0,    sub: `${stats?.pedidos_completados || 0} completados`, color: BLUE, icon: 'bag-check' as any },
           ].map(({ label, val, sub, color, icon }) => (
@@ -232,16 +237,21 @@ export default function AdminDashboard() {
         <Text style={s.sectionTitle}>Resumen financiero — histórico total</Text>
         <Text style={s.sectionCaption}>
           Estas cifras son acumuladas desde el inicio y no coinciden con la tabla de abajo, que es solo de los últimos 30 días.
+          Desglose separado: nunca mezclar lo que se queda Bocara con lo que recibe el restaurante.
         </Text>
         <View style={[card(), { marginBottom: 20 }]}>
           {[
-            { label: 'Ventas brutas',                       val: `Q${ingresos.toFixed(2)}`,             color: TEXT   },
-            { label: `Comisión Bocara (${comisionPct}%)`,    val: `Q${comision.toFixed(2)}`,             color: GOLD   },
-            { label: `Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${(ingresos - comision).toFixed(2)}`, color: GREEN  },
-          ].map(({ label, val, color }, i, arr) => (
+            { label: 'Ventas brutas',                        val: `Q${ingresos.toFixed(2)}`,          color: TEXT  },
+            { label: `— Comisión Bocara (${comisionPct}%)`,   val: `Q${comisionBocaraQ.toFixed(2)}`,   color: GOLD  },
+            { label: '— Cargo de plataforma (3.5%)',          val: `Q${cargoPlataforma.toFixed(2)}`,   color: GOLD  },
+            { label: 'Total Bocara',                          val: `Q${comision.toFixed(2)}`,          color: GOLD, bold: true },
+            { label: `— Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)`, val: `Q${restaurante75.toFixed(2)}`, color: GREEN },
+            { label: '— Propinas (100% restaurante)',         val: `Q${propinas.toFixed(2)}`,          color: GREEN },
+            { label: 'Total a restaurantes',                  val: `Q${pagoRestaurantes.toFixed(2)}`,  color: GREEN, bold: true },
+          ].map(({ label, val, color, bold }, i, arr) => (
             <View key={label} style={[s.finRow, i < arr.length - 1 && s.finRowBorder]}>
-              <Text style={s.finLabel}>{label}</Text>
-              {skelStats ? <Sk h={16} w={80} r={4} /> : <Text style={[s.finVal, { color }]}>{val}</Text>}
+              <Text style={[s.finLabel, bold && { fontWeight: '800', color: TEXT }]}>{label}</Text>
+              {skelStats ? <Sk h={16} w={80} r={4} /> : <Text style={[s.finVal, { color }, bold && { fontSize: 17 }]}>{val}</Text>}
             </View>
           ))}
         </View>
@@ -277,8 +287,8 @@ export default function AdminDashboard() {
                   {r.zona ? <Text style={s.tdSub}>{r.zona}</Text> : null}
                 </View>
                 <Text style={s.td}>{r.pedidos}</Text>
-                <Text style={[s.td, { color: TEXT }]}>Q{r.bruto.toFixed(0)}</Text>
-                <Text style={[s.td, { color: GOLD, fontWeight: '700' }]}>Q{r.comision.toFixed(0)}</Text>
+                <Text style={[s.td, { color: TEXT }]}>Q{r.bruto.toFixed(2)}</Text>
+                <Text style={[s.td, { color: GOLD, fontWeight: '700' }]}>Q{r.comision.toFixed(2)}</Text>
               </TouchableOpacity>
             ))
           )}

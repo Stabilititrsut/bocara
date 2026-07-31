@@ -76,7 +76,10 @@ export default function DashboardRestauranteScreen() {
 
       setStats({
         hoy:     todayPagados.length,
-        ingresos: todayPagados.reduce((s: number, p: any) => s + (p.total || 0), 0),
+        // Ganancias = lo que le corresponde al restaurante (75% de la venta + propina
+        // íntegra), no el total que pagó el cliente — ese incluye la comisión de
+        // Bocara y el cargo de plataforma, que nunca son del restaurante.
+        ingresos: todayPagados.reduce((s: number, p: any) => s + (p.monto_neto_restaurante || 0), 0),
         activas,
       });
     } catch { } finally {
@@ -227,7 +230,7 @@ export default function DashboardRestauranteScreen() {
         <Text style={s.sectionTitle}>Resumen de hoy</Text>
         <View style={s.metricsRow}>
           <MetricCard emoji="📦" label="Pedidos"  value={loading ? '—' : (stats?.hoy || 0)}                          accent={GOLD} />
-          <MetricCard emoji="💰" label="Ganancias" value={loading ? '—' : `Q${(stats?.ingresos || 0).toFixed(0)}`}   accent='#22C55E' />
+          <MetricCard emoji="💰" label="Ganancias" value={loading ? '—' : `Q${(stats?.ingresos || 0).toFixed(2)}`}   accent='#22C55E' />
           <MetricCard emoji="⏱️" label="Activas"  value={loading ? '—' : (stats?.activas || 0)}                      accent='#60A5FA' />
         </View>
 

@@ -6,16 +6,25 @@ import {
 import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
-const COMISION = 0.25;
+// Neto del restaurante, para pedidos legacy sin monto_neto_restaurante calculado.
+function netoDe(p: any): number {
+  return p.monto_neto_restaurante != null
+    ? p.monto_neto_restaurante
+    : (p.precio_bolsa || 0) - (p.comision_bocara || 0) + (p.propina || 0);
+}
 
 type PedidoGrupo = {
   fecha: string;
   pedidos: any[];
   bruto: number;
   comision: number;
+  propinas: number;
   neto: number;
 };
 
+// Todo se suma desde el snapshot financiero guardado en cada pedido (precio_bolsa,
+// comision_bocara, monto_neto_restaurante, propina) — nunca recalculado sobre
+// `total` (que incluye el cargo de plataforma y la propina, no solo el producto).
 function agruparPorFecha(pedidos: any[]): PedidoGrupo[] {
   const map: Record<string, any[]> = {};
   for (const p of pedidos) {
@@ -24,16 +33,14 @@ function agruparPorFecha(pedidos: any[]): PedidoGrupo[] {
     if (!map[fecha]) map[fecha] = [];
     map[fecha].push(p);
   }
-  return Object.entries(map).map(([fecha, items]) => {
-    const bruto = items.reduce((s, p) => s + (p.total || 0), 0);
-    return {
-      fecha,
-      pedidos: items,
-      bruto,
-      comision: bruto * COMISION,
-      neto: bruto * (1 - COMISION),
-    };
-  });
+  return Object.entries(map).map(([fecha, items]) => ({
+    fecha,
+    pedidos: items,
+    bruto:    items.reduce((s, p) => s + (p.precio_bolsa   || 0), 0),
+    comision: items.reduce((s, p) => s + (p.comision_bocara || 0), 0),
+    propinas: items.reduce((s, p) => s + (p.propina || 0), 0),
+    neto:     items.reduce((s, p) => s + netoDe(p), 0),
+  }));
 }
 
 type Periodo = '7d' | '30d' | 'todo';
@@ -68,9 +75,10 @@ export default function HistorialRestauranteScreen() {
   const filtrados = filtrarPorPeriodo(pedidos);
   const grupos = agruparPorFecha(filtrados);
 
-  const totalBruto = filtrados.reduce((s, p) => s + (p.total || 0), 0);
-  const totalComision = totalBruto * COMISION;
-  const totalNeto = totalBruto * (1 - COMISION);
+  const totalBruto    = filtrados.reduce((s, p) => s + (p.precio_bolsa   || 0), 0);
+  const totalComision = filtrados.reduce((s, p) => s + (p.comision_bocara || 0), 0);
+  const totalPropinas = filtrados.reduce((s, p) => s + (p.propina || 0), 0);
+  const totalNeto     = filtrados.reduce((s, p) => s + netoDe(p), 0);
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
 
@@ -118,10 +126,17 @@ export default function HistorialRestauranteScreen() {
               <Text style={[s.resumenVal, { color: Colors.error }]}>-Q{totalComision.toFixed(2)}</Text>
               <Text style={s.resumenLabel}>Comisión Bocara (25%)</Text>
             </View>
+            {totalPropinas > 0 && (
+              <View style={s.resumenItem}>
+                <Text style={s.resumenEmoji}>💸</Text>
+                <Text style={[s.resumenVal, { color: Colors.green }]}>+Q{totalPropinas.toFixed(2)}</Text>
+                <Text style={s.resumenLabel}>Propinas (100%)</Text>
+              </View>
+            )}
             <View style={[s.resumenItem, s.resumenItemNeto]}>
               <Text style={s.resumenEmoji}>✅</Text>
               <Text style={[s.resumenVal, { color: Colors.green, fontSize: 22 }]}>Q{totalNeto.toFixed(2)}</Text>
-              <Text style={s.resumenLabel}>Tu ganancia neta</Text>
+              <Text style={s.resumenLabel}>Tu ganancia (75% + propina)</Text>
             </View>
           </View>
         </View>
@@ -158,7 +173,7 @@ export default function HistorialRestauranteScreen() {
                     </View>
                     <View style={s.pedidoMontos}>
                       <Text style={s.pedidoBruto}>Q{(p.total || 0).toFixed(2)}</Text>
-                      <Text style={s.pedidoNeto}>→ Q{((p.total || 0) * (1 - COMISION)).toFixed(2)}</Text>
+                      <Text style={s.pedidoNeto}>→ Q{netoDe(p).toFixed(2)}</Text>
                     </View>
                   </View>
                 ))}

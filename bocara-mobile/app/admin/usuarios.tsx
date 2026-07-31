@@ -158,7 +158,7 @@ export default function AdminUsuariosScreen() {
               <View style={s.stats}>
                 <Text style={s.statItem}>📦 {u.total_bolsas_salvadas || 0} bolsas</Text>
                 <Text style={s.statItem}>⭐ {u.puntos || 0} pts</Text>
-                <Text style={s.statItem}>💰 Q{(u.total_ahorrado || 0).toFixed(0)}</Text>
+                <Text style={s.statItem}>💰 Q{(u.total_ahorrado || 0).toFixed(2)}</Text>
               </View>
 
               {errores[u.id] ? (
