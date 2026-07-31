@@ -49,6 +49,9 @@ router.get('/', async (req, res) => {
     let jwtUser;
     try { jwtUser = jwt.verify(auth.split(' ')[1], process.env.JWT_SECRET); }
     catch { return res.status(401).json({ error: 'Token inválido' }); }
+    if (await authMiddleware.estaSuspendido(jwtUser.id)) {
+      return res.status(401).json({ error: authMiddleware.MENSAJE_SUSPENDIDO });
+    }
     nIdOwner = await getNegocioIdParaUsuario(jwtUser.id);
     if (!nIdOwner) return res.status(404).json({ error: 'Negocio no encontrado' });
   }

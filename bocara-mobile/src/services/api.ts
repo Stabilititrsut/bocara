@@ -39,9 +39,10 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
     // middleware/auth.js (y su duplicado en routes/bolsas.js) son los únicos
-    // lugares del backend que devuelven exactamente "Token inválido" — significa
-    // que SÍ se mandó un token y el backend lo rechazó (expiró, secreto rotado,
-    // firma inválida). Es la señal correcta de "la sesión murió".
+    // lugares del backend que devuelven estos dos mensajes exactos con 401 —
+    // ambos significan que SÍ se mandó un token y el backend lo rechazó
+    // (expirado, secreto rotado, firma inválida, o cuenta suspendida/inactiva
+    // detectada en el propio request). Es la señal correcta de "la sesión murió".
     //
     // A propósito NO reaccionamos a "No autenticado" (no se mandó token) ni a
     // ningún otro 401 del backend (ej. /auth/login con credenciales incorrectas,
@@ -50,13 +51,17 @@ api.interceptors.response.use(
     // había una sesión activa, y tratarlos igual causaría que un login fallido
     // redirija a /login con un mensaje engañoso de "tu sesión expiró".
     //
-    // Nota: hoy el backend nunca distingue "cuenta suspendida" en este mensaje —
-    // authMiddleware solo verifica la firma/expiración del JWT, no vuelve a
-    // consultar el rol del usuario en cada request. Una cuenta suspendida sigue
-    // funcionando con su token ya emitido hasta que expire naturalmente; la
-    // suspensión hoy solo bloquea obtener un token NUEVO (401/403 en /auth/login).
-    if (err.response.status === 401 && err.response?.data?.error === 'Token inválido') {
-      emitSessionInvalid('Tu sesión expiró, inicia sesión de nuevo.');
+    // Estos dos strings deben coincidir EXACTO con middleware/auth.js — son
+    // proyectos/bundles separados (backend Node vs. app Expo), no se pueden
+    // importar directo, así que si cambian allá hay que actualizarlos acá.
+    const MENSAJES_SESION_MUERTA: Record<string, string> = {
+      'Token inválido': 'Tu sesión expiró, inicia sesión de nuevo.',
+      'Tu cuenta fue suspendida. Contáctanos al +502 5107-7949':
+        'Tu cuenta fue suspendida. Contáctanos al +502 5107-7949',
+    };
+    if (err.response.status === 401) {
+      const uiMessage = MENSAJES_SESION_MUERTA[err.response?.data?.error];
+      if (uiMessage) emitSessionInvalid(uiMessage);
     }
 
     const msg = err.response?.data?.error || err.message || 'Error del servidor';

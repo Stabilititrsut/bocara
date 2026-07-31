@@ -81,6 +81,7 @@ router.put('/usuarios/:id', authMiddleware, adminOnly, async (req, res) => {
   if (!rol) return res.status(400).json({ error: 'rol requerido' });
   const { data, error } = await supabase.from('usuarios').update({ rol }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+  authMiddleware.invalidateSuspensionCache(req.params.id);
   res.json(data);
 });
 
@@ -92,6 +93,7 @@ router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res
   if (u.rol === 'admin') return res.status(403).json({ error: 'No se puede suspender a un administrador' });
   const { data, error } = await supabase.from('usuarios').update({ rol: 'suspendido' }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+  authMiddleware.invalidateSuspensionCache(req.params.id);
 
   // Cascada: si el usuario suspendido es dueño de un restaurante, apagar también
   // su negocio (mismo campo `activo` que ya usa el toggle de negocios) — de lo
@@ -134,6 +136,7 @@ router.put('/usuarios/:id/rehabilitar', authMiddleware, adminOnly, async (req, r
 
   const { data, error } = await supabase.from('usuarios').update({ rol: rolFinal }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
+  authMiddleware.invalidateSuspensionCache(req.params.id);
 
   // Cascada inversa a la de suspender: si el dueño estaba realmente suspendido
   // y esa suspensión fue la que apagó su negocio (negocios.activo=false), al
