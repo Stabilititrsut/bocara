@@ -64,7 +64,7 @@ export default function LoginScreen() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: 'https://bocara.vercel.app/auth/callback'
+        redirectTo: 'https://bocarafood.com/auth/callback'
       }
     })
     if (error) console.error(error.message)
