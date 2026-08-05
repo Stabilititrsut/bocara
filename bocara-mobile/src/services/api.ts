@@ -10,8 +10,10 @@ export const API_BASE_URL: string =
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  // 35 s cubre el cold start de Render free tier (~20-50 s)
-  timeout: 35000,
+  // 75 s: el cold start de Render free tier puede superar los 90 s medidos
+  // en producción (no los ~20-50 s asumidos originalmente), y encima algunos
+  // endpoints además esperan un envío de correo (Nodemailer/Gmail).
+  timeout: 75000,
   headers: { 'Content-Type': 'application/json' },
 });
 

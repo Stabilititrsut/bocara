@@ -46,7 +46,13 @@ export default function ForgotPasswordScreen() {
       setStage('verify');
       startCountdown();
     } catch (e: any) {
-      setErrorMsg(e.message || 'No se pudo enviar el código. Intenta de nuevo.');
+      // status null = no hubo respuesta del backend (timeout/red), lo más probable
+      // tras 15 min de inactividad es que el servidor gratuito estaba "dormido".
+      setErrorMsg(
+        e.status === null
+          ? 'El servidor estaba iniciando y tardó más de lo normal. Intenta de nuevo en un momento.'
+          : (e.message || 'No se pudo enviar el código. Intenta de nuevo.')
+      );
     } finally {
       setLoading(false);
     }
@@ -135,6 +141,11 @@ export default function ForgotPasswordScreen() {
             >
               <Text style={s.btnText}>{loading ? 'Enviando código...' : 'Enviar código'}</Text>
             </TouchableOpacity>
+            {loading ? (
+              <Text style={s.loadingHint}>
+                Puede tardar unos segundos si es tu primer intento en un rato — nuestro servidor gratuito se está despertando.
+              </Text>
+            ) : null}
           </>
         ) : (
           <>
@@ -206,6 +217,7 @@ const s = StyleSheet.create({
   title: { fontSize: 28, fontWeight: '900', color: Colors.brown, marginBottom: 8 },
   subtitle: { fontSize: 15, color: Colors.textSecondary, lineHeight: 22, marginBottom: 28 },
   hint: { fontSize: 12, color: Colors.textLight, marginBottom: 20, marginTop: -16 },
+  loadingHint: { fontSize: 12, color: Colors.textLight, textAlign: 'center', marginTop: 12, lineHeight: 17 },
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   input: {
     backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border,

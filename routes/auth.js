@@ -710,11 +710,17 @@ router.post('/forgot-password', otpSendLimiter, async (req, res) => {
     const codigo = String(Math.floor(100000 + Math.random() * 900000));
     resetOtpStore.set(emailLower, { codigo, expiresAt: Date.now() + 15 * 60 * 1000 });
 
-    await enviarEmail({
+    const resultado = await enviarEmail({
       to: emailLower,
       subject: 'Código para restablecer tu contraseña — Bocara Food',
       html: templateOlvidoContrasena(dbUser.nombre || 'Usuario', codigo),
     });
+
+    if (!resultado.ok) {
+      // No dejar un código "vivo" que el usuario nunca va a recibir.
+      resetOtpStore.delete(emailLower);
+      return res.status(502).json({ error: 'No pudimos enviar el correo. Intenta de nuevo en unos minutos.' });
+    }
 
     res.json({ ok: true });
   } catch (err) {
