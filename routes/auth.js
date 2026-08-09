@@ -103,6 +103,24 @@ router.post('/registro', registroLimiter, async (req, res) => {
 } = req.body;
   if (!email || !password || !nombre || !rol)
     return res.status(400).json({ error: 'email, password, nombre y rol son requeridos' });
+
+  // 2026-08-09 — deshabilitado para todo rol que no sea 'restaurante'. Este
+  // endpoint aceptaba cualquier valor de `rol` sin validar y creaba la cuenta
+  // de inmediato: (1) era el único registro de cliente que no pedía verificar
+  // el correo (el registro real de clientes pasa por /enviar-otp-email +
+  // /verificar-otp-email, que sí exige un código válido antes de crear la
+  // cuenta), y (2) más grave — nada impedía mandar rol:"admin" y recibir un
+  // JWT de administrador sin autenticarse. adminOnly (routes/admin.js) ya no
+  // confía en el rol del JWT por esto mismo (ver middleware/auth.js,
+  // esAdminReal). El registro de restaurantes sigue pasando por aquí porque
+  // es el único camino que existe hoy (registro-restaurante.tsx) — sigue sin
+  // verificar el correo del dueño, señalado pero no resuelto en este cambio.
+  if (rol !== 'restaurante') {
+    return res.status(403).json({
+      error: 'Este método de registro ya no está disponible. Crea tu cuenta verificando tu correo electrónico.',
+    });
+  }
+
   try {
     const hash = await bcrypt.hash(password, 10);
     const insertData = { email: email.toLowerCase().trim(), password_hash: hash, nombre, telefono };
