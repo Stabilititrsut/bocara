@@ -1,45 +1,106 @@
-const nodemailer = require('nodemailer');
+const axios = require('axios');
 
 // Diagnóstico de vars de entorno al cargar el módulo
-console.log('EMAIL_USER:', process.env.EMAIL_USER ? 'configurado' : 'FALTA');
-console.log('EMAIL_PASS:', process.env.EMAIL_PASS ? 'configurado' : 'FALTA');
+console.log('RESEND_API_KEY:', process.env.RESEND_API_KEY ? 'configurada' : 'FALTA');
 
-let transporter = null;
+// Render bloquea/degrada las conexiones SMTP salientes (medido en producción:
+// ~7 de cada 8 envíos por Gmail SMTP fallaban con "Connection timeout" tras
+// colgarse los 120s del connectionTimeout default de Nodemailer — muy por
+// encima de cualquier timeout razonable del frontend). Resend usa su API HTTP
+// en vez de SMTP, así que ese bloqueo no lo afecta.
+const RESEND_FROM = 'Bocara Food <no-reply@bocarafood.com>';
+const RESEND_TIMEOUT_MS = 10000;
+const RESEND_MAX_INTENTOS = 3;
 
-function getTransporter() {
-  if (transporter) return transporter;
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
-  if (!user || !pass) return null;
-  transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user, pass },
-  });
-  return transporter;
+const resendClient = axios.create({
+  baseURL: 'https://api.resend.com',
+  timeout: RESEND_TIMEOUT_MS,
+  headers: {
+    Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+    'Content-Type': 'application/json',
+  },
+});
+
+function esperar(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Solo vale la pena reintentar fallos transitorios (timeout, red caída, 5xx de
+// Resend). Un 4xx (API key inválida, dominio no verificado, payload mal
+// formado) va a fallar igual las veces que se reintente.
+function esTransitorio(err) {
+  if (!err.response) return true;
+  return err.response.status >= 500;
 }
 
 async function enviarEmail({ to, subject, html }) {
-  const t = getTransporter();
   const dest = Array.isArray(to) ? to.join(', ') : to;
-  if (!t) {
-    console.warn(`[email] ⚠️  EMAIL_USER/EMAIL_PASS no configuradas en .env — email NO enviado a: ${dest} | asunto: "${subject}"`);
+  if (!process.env.RESEND_API_KEY) {
+    console.warn(`[email] ⚠️  RESEND_API_KEY no configurada — email NO enviado a: ${dest} | asunto: "${subject}"`);
     return { ok: false };
   }
-  try {
-    console.log(`[email] → Enviando a: ${dest} | asunto: "${subject}"`);
-    await t.sendMail({
-      from: `"Bocara Food" <${process.env.EMAIL_USER}>`,
-      to: dest,
-      subject,
-      html,
-    });
-    console.log(`[email] ✓ Email enviado correctamente a: ${dest}`);
-    return { ok: true };
-  } catch (e) {
-    console.error(`[email] ✗ Error al enviar a ${dest}:`, e.message);
-    return { ok: false };
+
+  console.log(`[email] → Enviando a: ${dest} | asunto: "${subject}"`);
+  const toArr = Array.isArray(to) ? to : [to];
+
+  for (let intento = 1; intento <= RESEND_MAX_INTENTOS; intento++) {
+    try {
+      await resendClient.post('/emails', { from: RESEND_FROM, to: toArr, subject, html });
+      console.log(`[email] ✓ Email enviado correctamente a: ${dest} (Resend, intento ${intento}/${RESEND_MAX_INTENTOS})`);
+      return { ok: true };
+    } catch (e) {
+      const detalle = e.response?.data?.message || e.message;
+      const transitorio = esTransitorio(e);
+      console.error(`[email] ✗ Error al enviar a ${dest} (intento ${intento}/${RESEND_MAX_INTENTOS}): ${detalle}`);
+      if (!transitorio || intento === RESEND_MAX_INTENTOS) return { ok: false };
+      await esperar(500 * intento);
+    }
   }
+  return { ok: false };
 }
+
+// ─── Respaldo: envío por Gmail SMTP (Nodemailer) ───────────────────────────
+// Desactivado porque Render bloquea/degrada las conexiones SMTP salientes
+// (ver nota arriba). Si algún día hace falta volver a este camino: instalar
+// `nodemailer` (sigue en package.json), descomentar este bloque, comentar el
+// enviarEmail() de arriba, y configurar EMAIL_USER/EMAIL_PASS en Render
+// (Contraseña de Aplicación de Google — ver .env.example).
+//
+// const nodemailer = require('nodemailer');
+// let transporter = null;
+// function getTransporter() {
+//   if (transporter) return transporter;
+//   const user = process.env.EMAIL_USER;
+//   const pass = process.env.EMAIL_PASS;
+//   if (!user || !pass) return null;
+//   transporter = nodemailer.createTransport({
+//     service: 'gmail',
+//     auth: { user, pass },
+//   });
+//   return transporter;
+// }
+// async function enviarEmailGmailSMTP({ to, subject, html }) {
+//   const t = getTransporter();
+//   const dest = Array.isArray(to) ? to.join(', ') : to;
+//   if (!t) {
+//     console.warn(`[email] ⚠️  EMAIL_USER/EMAIL_PASS no configuradas en .env — email NO enviado a: ${dest} | asunto: "${subject}"`);
+//     return { ok: false };
+//   }
+//   try {
+//     console.log(`[email] → Enviando a: ${dest} | asunto: "${subject}"`);
+//     await t.sendMail({
+//       from: `"Bocara Food" <${process.env.EMAIL_USER}>`,
+//       to: dest,
+//       subject,
+//       html,
+//     });
+//     console.log(`[email] ✓ Email enviado correctamente a: ${dest}`);
+//     return { ok: true };
+//   } catch (e) {
+//     console.error(`[email] ✗ Error al enviar a ${dest}:`, e.message);
+//     return { ok: false };
+//   }
+// }
 
 function templateAprobado(nombreNegocio, nombrePropietario) {
   return `

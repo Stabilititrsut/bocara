@@ -26,6 +26,10 @@ services:
         generateValue: false  # set manually in Render dashboard
         sync: false
 
+      # Email (Resend — reemplaza Gmail SMTP, bloqueado/degradado en Render)
+      - key: RESEND_API_KEY
+        sync: false
+
       # Stripe
       - key: STRIPE_SECRET_KEY
         sync: false
