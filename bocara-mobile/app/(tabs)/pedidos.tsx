@@ -28,6 +28,7 @@ interface ResenaState {
   calificacion: number;
   comentario: string;
   enviando: boolean;
+  error: string | null;
 }
 
 function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void }) {
@@ -135,6 +136,7 @@ function ResenaModal({ state, onClose, onEnviar, onChange }: {
             onChangeText={(v) => onChange('comentario', v)}
             multiline numberOfLines={4} textAlignVertical="top"
           />
+          {state.error && <Text style={s.errorText}>{state.error}</Text>}
           <TouchableOpacity style={[s.btnEnviar, state.enviando && s.btnDisabled]} onPress={onEnviar} disabled={state.enviando}>
             <Text style={s.btnEnviarText}>{state.enviando ? 'Enviando...' : 'Enviar reseña'}</Text>
           </TouchableOpacity>
@@ -152,7 +154,7 @@ export default function PedidosScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [resenasEnviadas, setResenasEnviadas] = useState<Set<string>>(new Set());
-  const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false });
+  const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
   const pollingRef = useRef<any>(null);
 
   useEffect(() => {
@@ -201,7 +203,7 @@ export default function PedidosScreen() {
 
   async function enviarResena() {
     if (!resena.pedido) return;
-    setResena((r) => ({ ...r, enviando: true }));
+    setResena((r) => ({ ...r, enviando: true, error: null }));
     try {
       await resenasAPI.crear({
         pedido_id: resena.pedido.id,
@@ -212,10 +214,13 @@ export default function PedidosScreen() {
       const nuevas = new Set([...resenasEnviadas, resena.pedido.id]);
       setResenasEnviadas(nuevas);
       await AsyncStorage.setItem(RESENAS_KEY, JSON.stringify([...nuevas]));
-      setResena({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false });
+      setResena({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
       Alert.alert('¡Gracias!', 'Tu reseña fue enviada 🌟');
     } catch (e: any) {
-      setResena((r) => ({ ...r, enviando: false }));
+      // Alert.alert no muestra nada en web (react-native-web no lo implementa),
+      // así que el error también se refleja inline en el modal para que el
+      // usuario no crea que la reseña se guardó cuando en realidad falló.
+      setResena((r) => ({ ...r, enviando: false, error: e.message || 'No se pudo enviar la reseña' }));
       Alert.alert('Error', e.message || 'No se pudo enviar la reseña');
     }
   }
@@ -259,13 +264,13 @@ export default function PedidosScreen() {
           {activos.length > 0 && (
             <>
               <Text style={s.seccionLabel}>En curso</Text>
-              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
+              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           {historial.length > 0 && (
             <>
               <Text style={s.seccionLabel}>Historial</Text>
-              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false })} onCancelar={confirmarCancelacion} />)}
+              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} />)}
             </>
           )}
           <View style={{ height: 30 }} />
@@ -339,6 +344,7 @@ const s = StyleSheet.create({
   estrellaBtn: { padding: 4 },
   estrellaLabel: { textAlign: 'center', fontSize: 13, color: Colors.textSecondary, fontWeight: '600', marginBottom: 22 },
   comentarioInput: { backgroundColor: Colors.surface, borderRadius: 16, padding: 16, fontSize: 14, color: Colors.textPrimary, height: 100, marginBottom: 18 },
+  errorText: { color: Colors.error, fontSize: 13, fontWeight: '600', textAlign: 'center', marginBottom: 14 },
   btnEnviar: { backgroundColor: Colors.primary, borderRadius: 50, paddingVertical: 17, alignItems: 'center', marginBottom: 10, elevation: 3, shadowColor: Colors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 8 },
   btnDisabled: { backgroundColor: Colors.textLight, elevation: 0, shadowOpacity: 0 },
   btnEnviarText: { color: Colors.white, fontWeight: '800', fontSize: 16 },

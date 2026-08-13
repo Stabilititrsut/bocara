@@ -72,7 +72,6 @@ router.post('/', authMiddleware, async (req, res) => {
     .insert([{
       pedido_id,
       negocio_id,
-      bolsa_id: pedido.bolsa_id || null,
       usuario_id: req.usuario.id,
       calificacion,
       comentario,
