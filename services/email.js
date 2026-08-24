@@ -654,4 +654,257 @@ function templateRehabilitadoUsuario(nombreUsuario, emailUsuario) {
 </html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario };
+// ─── Confirmación de pedido (cliente) ──────────────────────────────────────
+// Único respaldo escrito de la compra: Bocara es solo recogida en local con
+// código, y hoy todo el ciclo del pedido depende del push. Si el push falla,
+// este correo es lo único que prueba la compra frente al restaurante.
+function formatQ(n) {
+  return `Q${(Math.round((parseFloat(n) || 0) * 100) / 100).toFixed(2)}`;
+}
+
+function formatHorario(inicio, fin) {
+  if (inicio && fin) return `${inicio} – ${fin}`;
+  if (inicio) return `A partir de las ${inicio}`;
+  return 'Consulta el horario con el restaurante';
+}
+
+function filaItemsHtml(items) {
+  if (!items || items.length === 0) return '';
+  return items.map(it => `
+    <tr>
+      <td style="padding:8px 0;font-size:14px;color:#1A1A1A">${it.cantidad} × ${it.nombre}</td>
+      <td style="padding:8px 0;font-size:14px;color:#1A1A1A;text-align:right">${formatQ(it.subtotal)}</td>
+    </tr>`).join('');
+}
+
+function filaMontoHtml(label, valor, opts = {}) {
+  if (!valor) return '';
+  const color = opts.negativo ? '#22C55E' : '#64748B';
+  const signo = opts.negativo ? '-' : '';
+  return `
+    <tr>
+      <td style="padding:4px 0;font-size:13px;color:${color}">${label}</td>
+      <td style="padding:4px 0;font-size:13px;color:${color};text-align:right">${signo}${formatQ(valor)}</td>
+    </tr>`;
+}
+
+function templateConfirmacionPedidoCliente({ nombreCliente, codigoRecogida, nombreNegocio, direccionNegocio, horarioRecogida, items, subtotal, costoEnvio, propina, descuentoCupon, total }) {
+  const itemsHtml = filaItemsHtml(items);
+  const desgloseHtml = `
+    ${filaMontoHtml('Subtotal', subtotal)}
+    ${filaMontoHtml('Envío', costoEnvio)}
+    ${filaMontoHtml('Propina', propina)}
+    ${filaMontoHtml('Descuento cupón', descuentoCupon, { negativo: true })}`;
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F5F0EB;font-family:'Helvetica Neue',Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08)">
+
+        <tr>
+          <td style="background:#1A1A1A;padding:36px 40px;text-align:center">
+            <div style="font-size:32px;font-weight:900;letter-spacing:-1px;color:#C8A97E;margin-bottom:4px">
+              Bocara <span style="color:#FFFFFF">Food</span>
+            </div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center">
+            <div style="display:inline-block;background:#F5F0EB;border-radius:50%;width:80px;height:80px;line-height:80px;font-size:40px;margin-bottom:8px">🎉</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 40px 8px;text-align:center">
+            <h1 style="margin:0;font-size:26px;font-weight:900;color:#1A1A1A;letter-spacing:-0.5px">¡Tu pedido está confirmado!</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 40px 28px;text-align:center">
+            <p style="margin:0;font-size:15px;color:#64748B;line-height:23px">
+              Hola, <strong style="color:#1A1A1A">${nombreCliente}</strong>. Tu pago en
+              <strong style="color:#C8A97E">${nombreNegocio}</strong> fue confirmado. Guarda este correo — es tu comprobante de compra.
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px 28px;text-align:center">
+            <div style="font-size:12px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Tu código de recogida</div>
+            <div style="display:inline-block;background:#FFFBEB;border:2.5px solid #C8A97E;border-radius:20px;padding:18px 44px">
+              <span style="font-size:38px;font-weight:900;letter-spacing:8px;color:#C8A97E;font-family:monospace">${codigoRecogida}</span>
+            </div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px">
+            <div style="height:2px;background:linear-gradient(90deg,transparent,#C8A97E,transparent)"></div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:28px 40px 0">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;border-radius:16px;border-left:4px solid #C8A97E">
+              <tr><td style="padding:20px 24px">
+                <div style="font-size:13px;font-weight:700;color:#C8A97E;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">📍 Recoge en</div>
+                <div style="font-size:17px;font-weight:800;color:#1A1A1A;margin-bottom:4px">${nombreNegocio}</div>
+                <div style="font-size:14px;color:#64748B;line-height:20px;margin-bottom:10px">${direccionNegocio || 'Dirección no disponible'}</div>
+                <div style="font-size:13px;font-weight:700;color:#1A1A1A">🕐 ${horarioRecogida}</div>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:28px 40px 32px">
+            <div style="font-size:13px;font-weight:700;color:#1A1A1A;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">🧾 Desglose de tu pedido</div>
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #F0EBE5">
+              <tr><td colspan="2" style="height:8px"></td></tr>
+              ${itemsHtml}
+              <tr><td colspan="2" style="padding-top:8px;border-top:1px solid #F0EBE5"></td></tr>
+              ${desgloseHtml}
+              <tr>
+                <td style="padding:12px 0 0;font-size:16px;font-weight:900;color:#1A1A1A;border-top:2px solid #1A1A1A">Total pagado</td>
+                <td style="padding:12px 0 0;font-size:16px;font-weight:900;color:#1A1A1A;text-align:right;border-top:2px solid #1A1A1A">${formatQ(total)}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px 36px;text-align:center">
+            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+              Ver mi pedido →
+            </a>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              Presenta este código en el restaurante para recoger tu pedido.
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+// ─── Nuevo pedido (restaurante) ─────────────────────────────────────────────
+function templateNuevoPedidoNegocio({ nombrePropietario, nombreNegocio, codigoRecogida, nombreCliente, horarioRecogida, items, montoNetoRestaurante, total }) {
+  const itemsHtml = filaItemsHtml(items);
+
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F5F0EB;font-family:'Helvetica Neue',Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08)">
+
+        <tr>
+          <td style="background:#1A1A1A;padding:36px 40px;text-align:center">
+            <div style="font-size:32px;font-weight:900;letter-spacing:-1px;color:#C8A97E;margin-bottom:4px">
+              Bocara <span style="color:#FFFFFF">Food</span>
+            </div>
+            <div style="font-size:13px;color:rgba(200,169,126,0.7);letter-spacing:2px;text-transform:uppercase;margin-top:6px">Panel para Restaurantes</div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center">
+            <div style="display:inline-block;background:#F5F0EB;border-radius:50%;width:80px;height:80px;line-height:80px;font-size:40px;margin-bottom:8px">🛍️</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 40px 8px;text-align:center">
+            <h1 style="margin:0;font-size:26px;font-weight:900;color:#1A1A1A;letter-spacing:-0.5px">¡Tienes un nuevo pedido!</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 40px 28px;text-align:center">
+            <p style="margin:0;font-size:15px;color:#64748B;line-height:23px">
+              Hola, <strong style="color:#1A1A1A">${nombrePropietario}</strong>. <strong style="color:#C8A97E">${nombreNegocio}</strong> recibió un pedido nuevo, ya pagado.
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px 28px;text-align:center">
+            <div style="font-size:12px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Código de recogida del cliente</div>
+            <div style="display:inline-block;background:#FFFBEB;border:2.5px solid #C8A97E;border-radius:20px;padding:18px 44px">
+              <span style="font-size:38px;font-weight:900;letter-spacing:8px;color:#C8A97E;font-family:monospace">${codigoRecogida}</span>
+            </div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px">
+            <div style="height:2px;background:linear-gradient(90deg,transparent,#C8A97E,transparent)"></div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:28px 40px 0">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;border-radius:16px;border-left:4px solid #C8A97E">
+              <tr><td style="padding:20px 24px">
+                <div style="font-size:13px;font-weight:700;color:#C8A97E;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Cliente</div>
+                <div style="font-size:16px;font-weight:800;color:#1A1A1A;margin-bottom:10px">${nombreCliente}</div>
+                <div style="font-size:13px;font-weight:700;color:#1A1A1A">🕐 Recoge: ${horarioRecogida}</div>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:28px 40px 12px">
+            <div style="font-size:13px;font-weight:700;color:#1A1A1A;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">🧾 Productos del pedido</div>
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #F0EBE5">
+              <tr><td colspan="2" style="height:8px"></td></tr>
+              ${itemsHtml}
+              <tr>
+                <td style="padding:12px 0 0;font-size:15px;font-weight:900;color:#1A1A1A;border-top:2px solid #1A1A1A">Total del pedido</td>
+                <td style="padding:12px 0 0;font-size:15px;font-weight:900;color:#1A1A1A;text-align:right;border-top:2px solid #1A1A1A">${formatQ(total)}</td>
+              </tr>
+              <tr>
+                <td style="padding:4px 0 0;font-size:13px;color:#22C55E">Lo que recibirás</td>
+                <td style="padding:4px 0 0;font-size:13px;color:#22C55E;text-align:right">${formatQ(montoNetoRestaurante)}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:16px 40px 36px;text-align:center">
+            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+              Ver en mi panel →
+            </a>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              El cliente recogerá su pedido con el código mostrado arriba.
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateConfirmacionPedidoCliente, templateNuevoPedidoNegocio };

@@ -17,6 +17,7 @@
 
 const supabase = require('../config/supabase');
 const { enviarNotificacionPush } = require('./notificaciones');
+const { enviarEmail, templateConfirmacionPedidoCliente, templateNuevoPedidoNegocio } = require('./email');
 
 const MAX_INTENTOS        = 5;
 const ABANDONO_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutos
@@ -203,9 +204,36 @@ async function _procesarSumarPuntos(evento) {
   console.log('[PAGO_EVENTOS] sumar_puntos:', resultado, '| puntos:', puntos, '| pedido:', evento.pedido_id);
 }
 
-// Notifica al cliente (push + notificación persistente idempotente).
+// Reúne pedido + negocio + items para armar los correos de confirmación.
+// Best-effort: cualquier fallo devuelve null y el llamador simplemente omite el correo
+// (nunca debe bloquear la notificación push/persistente, que es la garantía obligatoria).
+async function _obtenerDetallePedidoParaEmail(pedidoId) {
+  const { data: pedido } = await supabase
+    .from('pedidos')
+    .select('total, costo_envio, propina, descuento_cupon, monto_neto_restaurante, hora_recogida_inicio, hora_recogida_fin, negocio_id')
+    .eq('id', pedidoId).single();
+  if (!pedido) return null;
+
+  const { data: negocio } = await supabase
+    .from('negocios').select('nombre, direccion, zona, ciudad, propietario_id').eq('id', pedido.negocio_id).single();
+
+  const { data: pedidoItems } = await supabase
+    .from('pedido_items').select('cantidad, precio_unitario, subtotal, bolsas(nombre)').eq('pedido_id', pedidoId);
+
+  const items = (pedidoItems || []).map(pi => ({
+    cantidad: pi.cantidad,
+    nombre: pi.bolsas?.nombre || 'Producto',
+    subtotal: pi.subtotal != null ? pi.subtotal : (pi.precio_unitario || 0) * (pi.cantidad || 1),
+  }));
+  const subtotal = items.reduce((s, it) => s + (parseFloat(it.subtotal) || 0), 0);
+  const direccionNegocio = negocio ? [negocio.direccion, negocio.zona ? `Zona ${negocio.zona}` : null, negocio.ciudad].filter(Boolean).join(', ') : '';
+
+  return { pedido, negocio, items, subtotal, direccionNegocio };
+}
+
+// Notifica al cliente (push + notificación persistente idempotente + correo).
 // SIN FALLBACK: si clave_idempotencia no existe en notificaciones, lanza error.
-// Push es best-effort (fallo no bloquea el evento).
+// Push y correo son best-effort (fallo no bloquea el evento).
 // Notificación persistente es obligatoria e idempotente.
 async function _procesarNotificacionCliente(evento) {
   const { pedido_id, usuario_id, tipo_entrega, codigo_recogida } = evento.payload || {};
@@ -214,7 +242,7 @@ async function _procesarNotificacionCliente(evento) {
   }
 
   const { data: cliente } = await supabase
-    .from('usuarios').select('expo_push_token').eq('id', usuario_id).single();
+    .from('usuarios').select('expo_push_token, email, nombre').eq('id', usuario_id).single();
 
   const mensaje = tipo_entrega === 'recogida'
     ? `Código de recogida: ${codigo_recogida} — ¡Ya puedes ir!`
@@ -226,6 +254,31 @@ async function _procesarNotificacionCliente(evento) {
     { pedidoId: pedido_id, screen: 'pedidos' }
   ).catch(err => console.warn('[PAGO_EVENTOS] Push cliente (best-effort) falló:', err.message));
 
+  // Correo: único respaldo escrito de la compra si el push falla — best-effort
+  if (cliente?.email) {
+    try {
+      const detalle = await _obtenerDetallePedidoParaEmail(pedido_id);
+      if (detalle) {
+        const html = templateConfirmacionPedidoCliente({
+          nombreCliente: cliente.nombre || 'cliente',
+          codigoRecogida: codigo_recogida,
+          nombreNegocio: detalle.negocio?.nombre || 'el restaurante',
+          direccionNegocio: detalle.direccionNegocio,
+          horarioRecogida: _formatHorarioRecogida(detalle.pedido.hora_recogida_inicio, detalle.pedido.hora_recogida_fin),
+          items: detalle.items,
+          subtotal: detalle.subtotal,
+          costoEnvio: detalle.pedido.costo_envio,
+          propina: detalle.pedido.propina,
+          descuentoCupon: detalle.pedido.descuento_cupon,
+          total: detalle.pedido.total,
+        });
+        await enviarEmail({ to: cliente.email, subject: `✅ Pedido confirmado — código ${codigo_recogida}`, html });
+      }
+    } catch (err) {
+      console.warn('[PAGO_EVENTOS] Correo cliente (best-effort) falló:', err.message);
+    }
+  }
+
   // Notificación persistente: idempotente obligatoria — lanza si infraestructura ausente
   await _guardarNotificacionIdempotente(
     usuario_id, 'pago_confirmado', '✅ Pago confirmado', mensaje,
@@ -233,7 +286,13 @@ async function _procesarNotificacionCliente(evento) {
   );
 }
 
-// Notifica al restaurante (push + notificación persistente idempotente).
+function _formatHorarioRecogida(inicio, fin) {
+  if (inicio && fin) return `${inicio} – ${fin}`;
+  if (inicio) return `A partir de las ${inicio}`;
+  return 'Consulta el horario con el restaurante';
+}
+
+// Notifica al restaurante (push + notificación persistente idempotente + correo).
 // SIN FALLBACK: misma semántica que _procesarNotificacionCliente.
 async function _procesarNotificacionRestaurante(evento) {
   const { pedido_id, negocio_id, codigo_recogida, total } = evento.payload || {};
@@ -242,7 +301,7 @@ async function _procesarNotificacionRestaurante(evento) {
   }
 
   const { data: negocio } = await supabase
-    .from('negocios').select('propietario_id').eq('id', negocio_id).single();
+    .from('negocios').select('propietario_id, nombre').eq('id', negocio_id).single();
 
   const propietarioId = negocio?.propietario_id;
   if (!propietarioId) {
@@ -252,7 +311,7 @@ async function _procesarNotificacionRestaurante(evento) {
   }
 
   const { data: propietario } = await supabase
-    .from('usuarios').select('expo_push_token').eq('id', propietarioId).single();
+    .from('usuarios').select('expo_push_token, email, nombre').eq('id', propietarioId).single();
 
   const mensajeRest = `Pedido ${codigo_recogida} — Q${total}`;
 
@@ -261,6 +320,41 @@ async function _procesarNotificacionRestaurante(evento) {
     propietario?.expo_push_token, '🛍️ Nuevo pedido', mensajeRest,
     { pedidoId: pedido_id, screen: 'restaurante' }
   ).catch(err => console.warn('[PAGO_EVENTOS] Push restaurante (best-effort) falló:', err.message));
+
+  // Correo: respaldo del pedido si el push falla — best-effort
+  if (propietario?.email) {
+    try {
+      const { data: pedidoRow } = await supabase
+        .from('pedidos')
+        .select('usuario_id, monto_neto_restaurante, hora_recogida_inicio, hora_recogida_fin')
+        .eq('id', pedido_id).single();
+      const { data: pedidoItems } = await supabase
+        .from('pedido_items').select('cantidad, precio_unitario, subtotal, bolsas(nombre)').eq('pedido_id', pedido_id);
+      const { data: clienteRow } = pedidoRow?.usuario_id
+        ? await supabase.from('usuarios').select('nombre, apellido').eq('id', pedidoRow.usuario_id).single()
+        : { data: null };
+
+      const items = (pedidoItems || []).map(pi => ({
+        cantidad: pi.cantidad,
+        nombre: pi.bolsas?.nombre || 'Producto',
+        subtotal: pi.subtotal != null ? pi.subtotal : (pi.precio_unitario || 0) * (pi.cantidad || 1),
+      }));
+
+      const html = templateNuevoPedidoNegocio({
+        nombrePropietario: propietario.nombre || 'equipo',
+        nombreNegocio: negocio.nombre || 'tu negocio',
+        codigoRecogida: codigo_recogida,
+        nombreCliente: clienteRow ? `${clienteRow.nombre || ''} ${clienteRow.apellido || ''}`.trim() || 'Cliente' : 'Cliente',
+        horarioRecogida: _formatHorarioRecogida(pedidoRow?.hora_recogida_inicio, pedidoRow?.hora_recogida_fin),
+        items,
+        montoNetoRestaurante: pedidoRow?.monto_neto_restaurante,
+        total,
+      });
+      await enviarEmail({ to: propietario.email, subject: `🛍️ Nuevo pedido — código ${codigo_recogida}`, html });
+    } catch (err) {
+      console.warn('[PAGO_EVENTOS] Correo restaurante (best-effort) falló:', err.message);
+    }
+  }
 
   // Notificación persistente: idempotente obligatoria
   await _guardarNotificacionIdempotente(
