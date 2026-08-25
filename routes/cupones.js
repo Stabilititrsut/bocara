@@ -109,7 +109,7 @@ router.get('/mi-referido', authMiddleware, async (req, res) => {
       .eq('id', req.usuario.id)
       .single();
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://bocarafood.com';
     const codigo = usuario?.codigo_referido || null;
     res.json({
       codigo,

@@ -54,7 +54,7 @@ services:
       - key: API_BASE_URL
         value: https://bocara.onrender.com
       - key: FRONTEND_URL
-        value: https://bocara.vercel.app
+        value: https://bocarafood.com
 
       # Expo Push Notifications
       - key: EXPO_ACCESS_TOKEN

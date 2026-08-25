@@ -112,7 +112,7 @@ function templateAprobado(nombreNegocio, nombrePropietario) {
 <p>Tu negocio <b>${nombreNegocio}</b> ha sido aprobado y ya está activo en <b>Bocara Food</b>.</p>
 <p>Ya puedes iniciar sesión en tu panel y publicar tus primeras ofertas.</p>
 <div style="text-align:center;margin:28px 0">
-  <a href="https://bocara.vercel.app" style="background:#C8A97E;color:white;padding:14px 28px;border-radius:50px;text-decoration:none;font-weight:700;font-size:16px">
+  <a href="https://bocarafood.com" style="background:#C8A97E;color:white;padding:14px 28px;border-radius:50px;text-decoration:none;font-weight:700;font-size:16px">
     Ir a mi panel →
   </a>
 </div>
@@ -282,7 +282,7 @@ function templateBienvenidaRestaurante(nombrePropietario, nombreNegocio) {
         <!-- CTA Button -->
         <tr>
           <td style="padding:0 40px 36px;text-align:center">
-            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+            <a href="https://bocarafood.com" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
               Ir a mi panel →
             </a>
           </td>
@@ -292,7 +292,7 @@ function templateBienvenidaRestaurante(nombrePropietario, nombreNegocio) {
         <tr>
           <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
             <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
-              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com<br>
               Si tienes alguna duda, responde este correo y te ayudaremos.
             </div>
           </td>
@@ -408,7 +408,7 @@ function templateSuspendido(nombreNegocio, nombrePropietario, motivo) {
         <tr>
           <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
             <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
-              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com<br>
               Este mensaje fue enviado porque eres propietario de un negocio registrado en Bocara.
             </div>
           </td>
@@ -563,7 +563,7 @@ function templateSuspendidoUsuario(nombreUsuario, emailUsuario, motivo) {
         <tr>
           <td style="background:#1A1A1A;padding:22px 40px;text-align:center">
             <div style="font-size:12px;color:rgba(255,255,255,0.5);line-height:20px">
-              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com
             </div>
           </td>
         </tr>
@@ -633,7 +633,7 @@ function templateRehabilitadoUsuario(nombreUsuario, emailUsuario) {
 
         <tr>
           <td style="padding:0 40px 36px;text-align:center">
-            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+            <a href="https://bocarafood.com" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
               Ir a la app →
             </a>
           </td>
@@ -642,7 +642,7 @@ function templateRehabilitadoUsuario(nombreUsuario, emailUsuario) {
         <tr>
           <td style="background:#1A1A1A;padding:22px 40px;text-align:center">
             <div style="font-size:12px;color:rgba(255,255,255,0.5);line-height:20px">
-              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com
             </div>
           </td>
         </tr>
@@ -777,7 +777,7 @@ function templateConfirmacionPedidoCliente({ nombreCliente, codigoRecogida, nomb
 
         <tr>
           <td style="padding:0 40px 36px;text-align:center">
-            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+            <a href="https://bocarafood.com" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
               Ver mi pedido →
             </a>
           </td>
@@ -786,7 +786,7 @@ function templateConfirmacionPedidoCliente({ nombreCliente, codigoRecogida, nomb
         <tr>
           <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
             <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
-              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com<br>
               Presenta este código en el restaurante para recoger tu pedido.
             </div>
           </td>
@@ -885,7 +885,7 @@ function templateNuevoPedidoNegocio({ nombrePropietario, nombreNegocio, codigoRe
 
         <tr>
           <td style="padding:16px 40px 36px;text-align:center">
-            <a href="https://bocara.vercel.app" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+            <a href="https://bocarafood.com" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
               Ver en mi panel →
             </a>
           </td>
@@ -894,7 +894,7 @@ function templateNuevoPedidoNegocio({ nombrePropietario, nombreNegocio, codigoRe
         <tr>
           <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
             <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
-              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocara.vercel.app<br>
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com<br>
               El cliente recogerá su pedido con el código mostrado arriba.
             </div>
           </td>

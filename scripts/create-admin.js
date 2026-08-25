@@ -75,7 +75,7 @@ async function main() {
     console.log('   Pass  :', PASSWORD);
   }
 
-  console.log('\n🚀 Ya puedes hacer login en bocara.vercel.app con esas credenciales.\n');
+  console.log('\n🚀 Ya puedes hacer login en bocarafood.com con esas credenciales.\n');
 }
 
 main().catch(err => {

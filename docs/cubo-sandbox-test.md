@@ -2,7 +2,7 @@
 
 **Proyecto:** Bocara  
 **Backend:** https://bocara.onrender.com  
-**Frontend:** https://bocara.vercel.app  
+**Frontend:** https://bocarafood.com  
 **Webhook URL (configurar en Cubo Admin):** `https://bocara.onrender.com/api/webhooks/cubo`
 
 ---

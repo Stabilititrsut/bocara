@@ -239,14 +239,14 @@ export default function ProductoScreen() {
   async function compartir() {
     if (!bolsa) return;
     Share.share({
-      message: `🛍️ ¡Mira esta bolsa en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocara.vercel.app/producto/${bolsa.id}`,
+      message: `🛍️ ¡Mira esta bolsa en Bocara!\n${bolsa.negocios?.nombre} — ${bolsa.nombre}\nSolo Q${bolsa.precio_descuento} (antes Q${bolsa.precio_original})\nhttps://bocarafood.com/producto/${bolsa.id}`,
     });
   }
 
   function compartirWhatsApp() {
     if (!bolsa) return;
     const texto = encodeURIComponent(
-      `🛍️ ¡Mira esta oferta en Bocara!\n${bolsa.nombre} por Q${bolsa.precio_descuento}\n👉 https://bocara.vercel.app/producto/${bolsa.id}`
+      `🛍️ ¡Mira esta oferta en Bocara!\n${bolsa.nombre} por Q${bolsa.precio_descuento}\n👉 https://bocarafood.com/producto/${bolsa.id}`
     );
     Linking.openURL(`https://wa.me/?text=${texto}`);
   }

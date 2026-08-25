@@ -443,7 +443,7 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     const { data: usuario } = await supabase
       .from('usuarios').select('nombre,apellido,email,telefono').eq('id', req.usuario.id).single();
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://bocarafood.com';
     const redirectUri = `${frontendUrl}/pago-retorno?pedidoId=${pedido.id}`;
     console.log('[CUBO] redirectUri:', redirectUri);
 
@@ -531,7 +531,7 @@ router.post('/cubo/crear-link-test', authMiddleware, async (req, res) => {
   const payload = {
     description: 'Prueba Bocara Dev',
     amount: 100,
-    redirectUri: 'https://bocara.vercel.app/pago-retorno',
+    redirectUri: 'https://bocarafood.com/pago-retorno',
     metadata: { orderId: 'TEST-CUBO-001', source: 'bocara', environment: 'dev' },
     clientName: 'Cliente Prueba',
     clientEmail: 'test@bocara.com',
@@ -796,7 +796,7 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
     const { data: pedidoItems } = await supabase
       .from('pedido_items').select('*, bolsas(nombre)').eq('pedido_id', pedidoId);
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://bocara.vercel.app';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://bocarafood.com';
     const redirectUri = `${frontendUrl}/pago-retorno?pedidoId=${pedido.id}`;
 
     const items = pedidoItems || [];
