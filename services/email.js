@@ -907,4 +907,115 @@ function templateNuevoPedidoNegocio({ nombrePropietario, nombreNegocio, codigoRe
 </html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateConfirmacionPedidoCliente, templateNuevoPedidoNegocio };
+// ─── Liquidación pagada (restaurante) ───────────────────────────────────────
+// Único respaldo escrito del pago si el restaurante no tiene push configurado
+// (frecuente en negocios nuevos que nunca abrieron la app en un celular) —
+// sin esto, el pago solo queda como un aviso silencioso dentro de la app.
+function templateLiquidacionPagada({ nombrePropietario, nombreNegocio, monto, ventasBrutas, comisionBocara, cargoPlataforma, propinas, totalPedidos, referencia, banco }) {
+  return `<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F5F0EB;font-family:'Helvetica Neue',Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#F5F0EB;padding:32px 0">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border-radius:24px;overflow:hidden;box-shadow:0 4px 32px rgba(0,0,0,0.08)">
+
+        <tr>
+          <td style="background:#1A1A1A;padding:36px 40px;text-align:center">
+            <div style="font-size:32px;font-weight:900;letter-spacing:-1px;color:#C8A97E;margin-bottom:4px">
+              Bocara <span style="color:#FFFFFF">Food</span>
+            </div>
+            <div style="font-size:13px;color:rgba(200,169,126,0.7);letter-spacing:2px;text-transform:uppercase;margin-top:6px">Panel para Restaurantes</div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:40px 40px 0;text-align:center">
+            <div style="display:inline-block;background:#F0FDF4;border-radius:50%;width:80px;height:80px;line-height:80px;font-size:40px;margin-bottom:8px">💸</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 40px 8px;text-align:center">
+            <h1 style="margin:0;font-size:26px;font-weight:900;color:#1A1A1A;letter-spacing:-0.5px">¡Recibiste un pago!</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:8px 40px 28px;text-align:center">
+            <p style="margin:0;font-size:15px;color:#64748B;line-height:23px">
+              Hola, <strong style="color:#1A1A1A">${nombrePropietario}</strong>. Bocara transfirió el pago de
+              <strong style="color:#C8A97E">${nombreNegocio}</strong> por ${totalPedidos} pedido${totalPedidos !== 1 ? 's' : ''} completado${totalPedidos !== 1 ? 's' : ''}.
+            </p>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px 28px;text-align:center">
+            <div style="font-size:12px;font-weight:700;color:#94A3B8;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Monto transferido</div>
+            <div style="display:inline-block;background:#F0FDF4;border:2.5px solid #22C55E;border-radius:20px;padding:18px 44px">
+              <span style="font-size:38px;font-weight:900;color:#16A34A;font-family:monospace">${formatQ(monto)}</span>
+            </div>
+            ${banco ? `<div style="margin-top:10px;font-size:13px;color:#64748B">${banco}</div>` : ''}
+            ${referencia ? `<div style="font-size:12px;color:#94A3B8">Referencia: ${referencia}</div>` : ''}
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px">
+            <div style="height:2px;background:linear-gradient(90deg,transparent,#C8A97E,transparent)"></div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:28px 40px 32px">
+            <div style="font-size:13px;font-weight:700;color:#1A1A1A;text-transform:uppercase;letter-spacing:1px;margin-bottom:12px">🧾 Desglose del pago</div>
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #F0EBE5">
+              <tr><td colspan="2" style="height:8px"></td></tr>
+              <tr>
+                <td style="padding:8px 0;font-size:14px;color:#1A1A1A">Ventas brutas (producto)</td>
+                <td style="padding:8px 0;font-size:14px;color:#1A1A1A;text-align:right">${formatQ(ventasBrutas)}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0;font-size:13px;color:#64748B">− Comisión Bocara</td>
+                <td style="padding:8px 0;font-size:13px;color:#64748B;text-align:right">-${formatQ(comisionBocara)}</td>
+              </tr>
+              ${cargoPlataforma ? `<tr>
+                <td style="padding:8px 0;font-size:12px;color:#94A3B8">Cargo de plataforma (no afecta este pago)</td>
+                <td style="padding:8px 0;font-size:12px;color:#94A3B8;text-align:right">${formatQ(cargoPlataforma)}</td>
+              </tr>` : ''}
+              ${propinas ? `<tr>
+                <td style="padding:8px 0;font-size:14px;color:#22C55E">+ Propinas (100% restaurante)</td>
+                <td style="padding:8px 0;font-size:14px;color:#22C55E;text-align:right">${formatQ(propinas)}</td>
+              </tr>` : ''}
+              <tr>
+                <td style="padding:12px 0 0;font-size:16px;font-weight:900;color:#1A1A1A;border-top:2px solid #1A1A1A">Total transferido</td>
+                <td style="padding:12px 0 0;font-size:16px;font-weight:900;color:#16A34A;text-align:right;border-top:2px solid #1A1A1A">${formatQ(monto)}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 40px 36px;text-align:center">
+            <a href="https://bocarafood.com" style="display:inline-block;background:#1A1A1A;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:15px;padding:16px 36px;border-radius:50px;letter-spacing:0.3px">
+              Ver mis liquidaciones →
+            </a>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="background:#1A1A1A;padding:24px 40px;text-align:center">
+            <div style="font-size:13px;color:rgba(255,255,255,0.5);line-height:20px">
+              <strong style="color:#C8A97E">Equipo Bocara Food</strong> &nbsp;|&nbsp; bocarafood.com<br>
+              Si el monto no coincide con tu cuenta bancaria, respóndenos este correo.
+            </div>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
+}
+
+module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateConfirmacionPedidoCliente, templateNuevoPedidoNegocio, templateLiquidacionPagada };

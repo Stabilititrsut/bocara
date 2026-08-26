@@ -3,7 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
-const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario } = require('../services/email');
+const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateLiquidacionPagada } = require('../services/email');
 const { obtenerConfig, obtenerComisionFraccion, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
 const router = express.Router();
 
@@ -726,7 +726,9 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     await supabase.from('pedidos').update({ liquidacion_id: liq.id }).in('id', ids);
   }
 
-  // Push al propietario
+  // Push + correo al propietario — el push es best-effort y muchos negocios
+  // nuevos nunca abrieron la app en un celular (sin expo_push_token), así que
+  // el correo es el único respaldo escrito de que el pago realmente llegó.
   const { data: negocio } = await supabase
     .from('negocios')
     .select('nombre,propietario_id')
@@ -734,7 +736,7 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     .single();
   if (negocio?.propietario_id) {
     const { data: propUser } = await supabase
-      .from('usuarios').select('expo_push_token').eq('id', negocio.propietario_id).single();
+      .from('usuarios').select('expo_push_token,email,nombre').eq('id', negocio.propietario_id).single();
     if (propUser?.expo_push_token) {
       await enviarNotificacionPush(
         propUser.expo_push_token,
@@ -742,6 +744,25 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
         `Recibiste Q${neto.toFixed(2)} por ${(pedidosPend || []).length} pedidos. Revisa tu cuenta bancaria.`,
         { tipo: 'liquidacion_pagada', monto: neto }
       );
+    }
+    if (propUser?.email) {
+      try {
+        const html = templateLiquidacionPagada({
+          nombrePropietario: propUser.nombre || 'equipo',
+          nombreNegocio: negocio.nombre || 'tu negocio',
+          monto: neto,
+          ventasBrutas: bruto,
+          comisionBocara,
+          cargoPlataforma,
+          propinas,
+          totalPedidos: pedidosConDesglose.length,
+          referencia: datos_transferencia?.referencia || null,
+          banco: datos_transferencia?.banco || null,
+        });
+        await enviarEmail({ to: propUser.email, subject: `💸 Pago recibido — Q${neto.toFixed(2)}`, html });
+      } catch (err) {
+        console.warn('[LIQUIDACIONES PAGAR] Correo restaurante (best-effort) falló:', err.message);
+      }
     }
     await guardarNotificacion(supabase, negocio.propietario_id, 'liquidacion', '¡Pago recibido!', `Q${neto.toFixed(2)} transferidos a tu cuenta.`, { monto: neto });
   }
