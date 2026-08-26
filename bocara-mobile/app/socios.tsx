@@ -76,7 +76,7 @@ export default function SociosScreen() {
   }
 
   function contactarWhatsApp() {
-    Linking.openURL('https://wa.me/50200000000?text=Hola%2C%20quiero%20unirme%20a%20Bocara%20como%20socio%20restaurante').catch(() => {});
+    Linking.openURL('https://wa.me/50251077949?text=Hola%2C%20quiero%20registrar%20mi%20restaurante%20como%20socio%20de%20Bocara').catch(() => {});
   }
 
   return (
