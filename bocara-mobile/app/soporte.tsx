@@ -51,7 +51,7 @@ export default function SoporteScreen() {
   }
 
   function abrirEmail() {
-    Linking.openURL('mailto:soporte@bocara.gt?subject=Ayuda%20Bocara%20Food');
+    Linking.openURL('mailto:bocara@bocarafood.com?subject=Ayuda%20Bocara%20Food');
   }
 
   return (
@@ -86,7 +86,7 @@ export default function SoporteScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={s.contactLabel}>Email</Text>
-            <Text style={s.contactSub}>soporte@bocara.gt</Text>
+            <Text style={s.contactSub}>bocara@bocarafood.com</Text>
           </View>
           <Text style={s.rowArrow}>›</Text>
         </TouchableOpacity>

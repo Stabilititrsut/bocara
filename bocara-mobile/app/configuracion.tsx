@@ -78,7 +78,7 @@ export default function ConfiguracionScreen() {
       '¿Estás seguro? Esta acción no se puede deshacer. Se eliminarán todos tus datos, puntos e historial de pedidos.',
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Eliminar', style: 'destructive', onPress: () => Alert.alert('Solicitud enviada', 'Contacta a soporte@bocara.gt para confirmar la eliminación de tu cuenta.') },
+        { text: 'Eliminar', style: 'destructive', onPress: () => Alert.alert('Solicitud enviada', 'Contacta a bocara@bocarafood.com para confirmar la eliminación de tu cuenta.') },
       ]
     );
   }

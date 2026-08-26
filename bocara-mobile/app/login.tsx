@@ -98,7 +98,7 @@ export default function LoginScreen() {
               <Text style={s.darkLabel}>Correo electrónico</Text>
               <View style={[s.inputWrap, { backgroundColor: '#334155' }]}>
                 <Ionicons name="mail-outline" size={18} color="#64748B" />
-                <TextInput style={[s.input, { color: '#fff' }]} placeholder="admin@bocara.gt"
+                <TextInput style={[s.input, { color: '#fff' }]} placeholder="admin@bocarafood.com"
                   placeholderTextColor="#475569" keyboardType="email-address" autoCapitalize="none"
                   value={email} onChangeText={(v) => { setEmail(v); setErrorMsg(''); }} />
               </View>
