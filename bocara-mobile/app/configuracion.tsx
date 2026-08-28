@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, Switch, Alert, Linking,
@@ -52,9 +51,14 @@ function RowItem({
 export default function ConfiguracionScreen() {
   const { usuario } = useAuth();
   const router = useRouter();
-  const [notifPedidos, setNotifPedidos] = useState(true);
-  const [notifPromos, setNotifPromos] = useState(true);
-  const [notifNuevasBolsas, setNotifNuevasBolsas] = useState(false);
+
+  // Toggles de notificaciones por categoría — pendiente: no existe columna en
+  // usuarios ni endpoint que lea/guarde esta preferencia, así que se quitaron
+  // de la UI en vez de dejar un control que no hace nada. Reactivar cuando
+  // haya backend real:
+  // const [notifPedidos, setNotifPedidos] = useState(true);
+  // const [notifPromos, setNotifPromos] = useState(true);
+  // const [notifNuevasBolsas, setNotifNuevasBolsas] = useState(false);
 
   function handlePrivacidad() {
     Alert.alert(
@@ -92,7 +96,7 @@ export default function ConfiguracionScreen() {
             emoji="✏️"
             label="Editar perfil"
             sublabel={`${usuario?.nombre} ${usuario?.apellido || ''}`}
-            onPress={() => router.push('/(tabs)/perfil')}
+            onPress={() => router.push('/editar-perfil')}
           />
           <RowItem
             emoji="📧"
@@ -102,7 +106,9 @@ export default function ConfiguracionScreen() {
           />
         </Section>
 
-        {/* Notificaciones */}
+        {/* Notificaciones — pendiente: sin backend que respalde estas preferencias
+            (ver nota junto a los useState comentados arriba). Quitado de la UI para
+            no prometerle al usuario un control que no existe.
         <Section title="🔔 Notificaciones">
           <RowItem
             emoji="📦"
@@ -130,6 +136,7 @@ export default function ConfiguracionScreen() {
             isLast
           />
         </Section>
+        */}
 
         {/* Idioma y región */}
         <Section title="🌎 Idioma y región">
