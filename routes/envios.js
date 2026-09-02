@@ -8,7 +8,15 @@ router.get('/cotizar', async (req, res) => {
   const { zona } = req.query;
   const zonaStr = zona || '';
   const zonasBaratas = ['Zona 1','Zona 4','Zona 9','Zona 10','Zona 11','Zona 12','Zona 13'];
-  const zonasMedianas = ['Zona 2','Zona 3','Zona 5','Zona 6','Zona 7','Zona 8','Zona 14','Zona 15'];
+  // Zona 16 y 17 se agregan por ser contiguas a la zona 5/15 (ya medianas). Zona 18
+  // se agrega igual — es la zona más poblada de la ciudad y colinda con la 17. Zona 21
+  // se agrega por colindar directamente con las zonas 12 y 13 (baratas), aunque se
+  // extiende hacia municipios vecinos (Villa Canales, San Miguel Petapa) por lo que no
+  // baja a "barata". Zona 19, 24 y 25 se dejan fuera a propósito y caen en la tarifa por
+  // defecto (interior): la 19 es un enclave dentro de Mixco (mismo trato que Mixco/Villa
+  // Nueva, que tampoco están en esta lista), y la 24/25 son periferia real — colindan con
+  // Santa Catarina Pinula, San José Pinula y Palencia, municipios fuera de la ciudad.
+  const zonasMedianas = ['Zona 2','Zona 3','Zona 5','Zona 6','Zona 7','Zona 8','Zona 14','Zona 15','Zona 16','Zona 17','Zona 18','Zona 21'];
   let costo = parseFloat(process.env.DELIVERY_BASE_FEE_INTERIOR || 50);
   let tiempo = '2-3 días';
   if (zonasBaratas.includes(zonaStr)) { costo = parseFloat(process.env.DELIVERY_BASE_FEE_GTM_CITY || 15); tiempo = '1-2 horas'; }

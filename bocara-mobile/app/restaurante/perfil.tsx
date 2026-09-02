@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { negociosAPI, uploadsAPI, adminAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
+import { ZONAS_GT } from '@/constants/zonas';
 import { pickImage } from '@/src/utils/pickImage';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
@@ -489,14 +490,24 @@ export default function PerfilRestauranteScreen() {
         </View>
         {[
           { key: 'direccion', label: 'Dirección', placeholder: '5a Calle 10-35', campo: 'direccion' },
-          { key: 'zona',      label: 'Zona / Colonia', placeholder: 'Zona 10' },
-          { key: 'ciudad',    label: 'Ciudad', placeholder: 'Guatemala' },
         ].map(({ key, label, placeholder, campo }: any) => (
           <View key={key}>
             <Text style={[s.label, campo && isRejected(campo) && s.labelRejected]}>{label}{campo && isRejected(campo) ? ' ⚠️' : ''}</Text>
             <TextInput style={[s.input, campo && isRejected(campo) && s.inputRejected]} placeholder={placeholder} placeholderTextColor={Colors.textLight} value={form[key]} onChangeText={set(key)} />
           </View>
         ))}
+
+        <Text style={s.label}>Zona / Sector</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }} contentContainerStyle={{ gap: 8 }}>
+          {ZONAS_GT.map((z) => (
+            <TouchableOpacity key={z} style={[s.chip, form.zona === z && s.chipActive]} onPress={() => set('zona')(z)}>
+              <Text style={[s.chipText, form.zona === z && s.chipTextActive]}>{z}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        <Text style={s.label}>Ciudad</Text>
+        <TextInput style={s.input} placeholder="Guatemala" placeholderTextColor={Colors.textLight} value={form.ciudad} onChangeText={set('ciudad')} />
 
         {/* Coordenadas */}
         <Text style={s.sectionTitle}>Ubicación en el mapa 📍</Text>
