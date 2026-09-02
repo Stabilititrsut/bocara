@@ -34,6 +34,18 @@ const FILTROS: { key: FilterKey; label: string }[] = [
   { key: 'precio',          label: 'Precio más bajo' },
 ];
 
+// ─── Sanitizadores y Helpers ──────────────────────────────────────────────────
+function formatZona(zona: string | number | undefined | null) {
+  if (!zona) return '';
+  const str = String(zona).trim();
+  return /^zona\b/i.test(str) ? str : `Zona ${str}`;
+}
+
+function limpiarTexto(txt: string | undefined | null) {
+  if (!txt) return '';
+  return txt.replace(/[\u0000-\u001F\u007F-\u009F\uFFFD]/g, '').trim();
+}
+
 // ─── Product Card ─────────────────────────────────────────────────────────────
 function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => void }) {
   const router = useRouter();
@@ -58,6 +70,7 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
             source={{ uri: bolsa.imagen_url }}
             style={StyleSheet.absoluteFill}
             contentFit="cover"
+            contentPosition="center"
             transition={180}
           />
         ) : (
@@ -87,7 +100,9 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
       </TouchableOpacity>
 
       <View style={pc.body}>
-        <Text style={pc.nombre} numberOfLines={2}>{bolsa.nombre}</Text>
+        <Text style={pc.nombre} numberOfLines={2}>
+          {limpiarTexto(bolsa.nombre)}
+        </Text>
         <View style={pc.bottomRow}>
           <View>
             <Text style={pc.precio}>Q{bolsa.precio_descuento?.toFixed(2)}</Text>
@@ -140,13 +155,10 @@ export default function TiendaScreen() {
   const filtradas = useMemo(() => {
     switch (filtro) {
       case 'descuentos':
-        // Usa flag o detecta automáticamente por precio
         return bolsas.filter(b => b.es_descuento || b.precio_original > b.precio_descuento);
       case 'tiempo_limitado':
-        // Usa flag o infiere por tipo
         return bolsas.filter(b => b.es_tiempo_limitado || b.tipo !== 'cupon');
       case 'promociones':
-        // Usa flag o infiere por tipo cupon
         return bolsas.filter(b => b.es_promocion || b.tipo === 'cupon');
       case 'mas_vendidos':
         return bolsas
@@ -234,9 +246,9 @@ export default function TiendaScreen() {
               )}
             </View>
 
-            <Text style={s.negNombre}>{negocio?.nombre}</Text>
+            <Text style={s.negNombre}>{limpiarTexto(negocio?.nombre)}</Text>
             <Text style={s.negMeta}>
-              {[negocio?.categoria, negocio?.zona && `Zona ${negocio.zona}`].filter(Boolean).join(' · ')}
+              {[negocio?.categoria, formatZona(negocio?.zona)].filter(Boolean).join(' · ')}
             </Text>
 
             <View style={s.retiroBadge}>
