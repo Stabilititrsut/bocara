@@ -27,28 +27,23 @@ const CAMPO_LABELS_ES: Record<string, string> = {
 };
 const BANCOS_GT  = ['Banrural', 'Banco Industrial', 'BAC Credomatic', 'Agromercantil', 'G&T Continental', 'Bantrab', 'Banpaís', 'Otro'];
 const TIPOS_CUENTA = ['Monetaria', 'Ahorro', 'Empresarial'];
+// Las 22 zonas oficiales de la Ciudad de Guatemala son 1-19, 21, 24 y 25
+// (20, 22 y 23 nunca se incorporaron a la ciudad). Mixco y Villa Nueva se
+// incluyen aparte porque son municipios vecinos donde también operan negocios.
 const ZONAS_GT = [
   'Zona 1','Zona 2','Zona 3','Zona 4','Zona 5','Zona 6','Zona 7','Zona 8',
-  'Zona 9','Zona 10','Zona 11','Zona 12','Zona 13','Zona 14','Zona 15','Mixco','Villa Nueva',
+  'Zona 9','Zona 10','Zona 11','Zona 12','Zona 13','Zona 14','Zona 15','Zona 16',
+  'Zona 17','Zona 18','Zona 19','Zona 21','Zona 24','Zona 25','Mixco','Villa Nueva',
 ];
 
 const DRAFT_KEY = 'bocara_registro_restaurante_draft';
 
-// Longitud de dígitos aceptada por tipo de cuenta (bancos GT: 8-20 dígitos según tipo)
-const LONGITUD_CUENTA: Record<string, { min: number; max: number }> = {
-  Monetaria: { min: 10, max: 16 },
-  Ahorro: { min: 10, max: 16 },
-  Empresarial: { min: 10, max: 20 },
-};
-
+// La longitud de un número de cuenta varía por banco y tipo (monetaria/ahorro),
+// así que no se restringe — solo que no esté vacío y que sean puros dígitos.
 function validarNumeroCuenta(numero: string, tipoCuenta: string): string | null {
   const limpio = numero.replace(/[\s-]/g, '');
   if (!limpio) return 'El número de cuenta es obligatorio';
   if (!/^\d+$/.test(limpio)) return 'El número de cuenta solo debe contener dígitos';
-  const rango = LONGITUD_CUENTA[tipoCuenta] || LONGITUD_CUENTA.Monetaria;
-  if (limpio.length < rango.min || limpio.length > rango.max) {
-    return `Para cuenta ${tipoCuenta.toLowerCase()} debe tener entre ${rango.min} y ${rango.max} dígitos (ingresaste ${limpio.length})`;
-  }
   return null;
 }
 
