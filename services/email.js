@@ -62,7 +62,7 @@ async function enviarEmail({ to, subject, html }) {
 // ─── Respaldo: envío por Gmail SMTP (Nodemailer) ───────────────────────────
 // Desactivado porque Render bloquea/degrada las conexiones SMTP salientes
 // (ver nota arriba). Si algún día hace falta volver a este camino: instalar
-// `nodemailer` (sigue en package.json), descomentar este bloque, comentar el
+// una versión segura de `nodemailer`, descomentar este bloque, comentar el
 // enviarEmail() de arriba, y configurar EMAIL_USER/EMAIL_PASS en Render
 // (Contraseña de Aplicación de Google — ver .env.example).
 //

@@ -4,7 +4,6 @@ import { NotificacionesRestauranteProvider, useNotificacionesRestaurante } from 
 
 const PRIMARY = '#0A2A2A';
 const GOLD    = '#C8960C';
-const WHITE   = '#FFFFFF';
 const DIM     = 'rgba(255,255,255,0.4)';
 const BORDER  = 'rgba(255,255,255,0.08)';
 

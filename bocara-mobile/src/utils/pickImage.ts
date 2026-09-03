@@ -47,6 +47,7 @@ function pickImageWeb(): Promise<PickedImage | null> {
 
 async function pickImageNative(): Promise<PickedImage | null> {
   let ImagePicker: any;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   try { ImagePicker = require('expo-image-picker'); } catch { return null; }
 
   const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();

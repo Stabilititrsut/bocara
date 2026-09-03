@@ -94,7 +94,7 @@ export default function AdminDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const pollingRef = useRef<any>(null);
-  const { logout, usuario } = useAuth();
+  const { logout } = useAuth();
   const router = useRouter();
 
   useEffect(() => {

@@ -96,7 +96,7 @@ export function LocationProvider({ children }: { children: React.ReactNode }) {
         await requestPermission();
       }
     })();
-  }, []);
+  }, [fetchLocation, requestPermission]);
 
   function formatDistancia(km: number | null | undefined): string | null {
     if (km === null || km === undefined) return null;

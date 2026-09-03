@@ -200,7 +200,7 @@ export default function AdminVerificacionScreen() {
               {/* Confirmación inline de aprobación */}
               {confirmandoId === n.id ? (
                 <View style={s.confirmCard}>
-                  <Text style={s.confirmText}>¿Aprobar "{n.nombre}"? Se notificará al propietario y el negocio quedará activo.</Text>
+                  <Text style={s.confirmText}>¿Aprobar “{n.nombre}”? Se notificará al propietario y el negocio quedará activo.</Text>
                   <View style={s.confirmBtns}>
                     <TouchableOpacity style={s.confirmNo} onPress={() => setConfirmandoId(null)}>
                       <Text style={s.confirmNoText}>Cancelar</Text>

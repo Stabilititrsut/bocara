@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  Dimensions, Linking, ActivityIndicator, Platform, StatusBar,
+  Linking, ActivityIndicator, Platform, StatusBar,
   ImageBackground,
 } from 'react-native';
 import { Image } from 'expo-image';
@@ -18,7 +18,6 @@ const DARK  = '#0A2A2A';
 const SURF  = '#F4F7F7';
 const GRAY  = '#5A7070';
 
-const { width: SW } = Dimensions.get('window');
 const COVER_H   = 220;
 const LOGO_SIZE = 70;
 const LOGO_R    = LOGO_SIZE / 2;  // 35
@@ -80,7 +79,7 @@ export default function NegocioDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
-  const { items: cartItems, total, cantidad, agregar } = useCart();
+  const { total, cantidad, agregar } = useCart();
 
   const [negocio,        setNegocio]        = useState<any>(null);
   const [tiempoLimitado, setTiempoLimitado] = useState<any[]>([]);
@@ -121,7 +120,7 @@ export default function NegocioDetailScreen() {
   // Si previos se vacía y el filtro activo es 'previos', reset
   useEffect(() => {
     if (filtro === 'previos' && previos.length === 0) setFiltro('todos');
-  }, [previos]);
+  }, [previos, filtro]);
 
   // Aplicar filtro reactivamente
   useEffect(() => {

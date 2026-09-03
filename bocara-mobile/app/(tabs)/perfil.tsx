@@ -6,7 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
-import { authAPI, pedidosAPI } from '@/src/services/api';
+import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
 const MENU_ITEMS = [
@@ -20,7 +20,7 @@ const MENU_ITEMS = [
 ];
 
 export default function PerfilScreen() {
-  const { usuario, logout, actualizarUsuario } = useAuth();
+  const { usuario, logout } = useAuth();
   const router = useRouter();
   const [resumen, setResumen] = useState({ bolsas_rescatadas: 0, total_ahorrado: 0 });
 

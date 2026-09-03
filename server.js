@@ -46,6 +46,7 @@ const morgan = require('morgan');
 
 const supabase = require('./config/supabase');
 const { enviarNotificacionPush, guardarNotificacion } = require('./services/notificaciones');
+const { procesarEventosFallidos } = require('./services/pagoEventos');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -115,18 +116,27 @@ async function enviarRecordatoriosRecogida() {
     const en30 = new Date(ahora.getTime() + 30 * 60 * 1000);
     const en28 = new Date(ahora.getTime() + 28 * 60 * 1000);
 
-    const pad = (n) => String(n).padStart(2, '0');
-    const timeDesde = `${pad(en28.getHours())}:${pad(en28.getMinutes())}:00`;
-    const timeHasta = `${pad(en30.getHours())}:${pad(en30.getMinutes())}:59`;
+    const horaGuatemala = (fecha, segundos) => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Guatemala', hour: '2-digit', minute: '2-digit',
+        hourCycle: 'h23',
+      }).formatToParts(fecha);
+      const get = type => parts.find(p => p.type === type)?.value || '00';
+      return `${get('hour')}:${get('minute')}:${segundos}`;
+    };
+    const timeDesde = horaGuatemala(en28, '00');
+    const timeHasta = horaGuatemala(en30, '59');
 
-    const { data: pedidos } = await supabase
+    let query = supabase
       .from('pedidos')
-      .select('id,codigo_recogida,hora_recogida_inicio,usuario_id,usuarios(expo_push_token)')
+      .select('id,codigo_recogida,hora_recogida_inicio,hora_recogida_fin,usuario_id,usuarios(expo_push_token)')
       .eq('estado', 'confirmado')
       .eq('estado_pago', 'pagado')
-      .eq('tipo_entrega', 'recogida')
-      .gte('hora_recogida_inicio', timeDesde)
-      .lte('hora_recogida_inicio', timeHasta);
+      .eq('tipo_entrega', 'recogida');
+    query = timeDesde <= timeHasta
+      ? query.gte('hora_recogida_inicio', timeDesde).lte('hora_recogida_inicio', timeHasta)
+      : query.or(`hora_recogida_inicio.gte.${timeDesde},hora_recogida_inicio.lte.${timeHasta}`);
+    const { data: pedidos } = await query;
 
     for (const p of (pedidos || [])) {
       if (recordatoriosEnviados.has(p.id)) continue;
@@ -169,6 +179,12 @@ app.listen(PORT, () => {
   setInterval(enviarRecordatoriosRecogida, 60 * 1000);
   console.log('⏰ Cron de recordatorios de recogida activo');
 
+  // Los eventos viven en PostgreSQL; este proceso reintenta notificaciones y
+  // puntos que hayan fallado tras confirmar un pago. La operación es idempotente.
+  setInterval(() => procesarEventosFallidos(20), 60 * 1000);
+  setTimeout(() => procesarEventosFallidos(20), 5 * 1000);
+  console.log('🔁 Reintentos post-pago activos (cada minuto)');
+
   setInterval(async () => {
     try {
       const hace2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
@@ -199,52 +215,9 @@ app.listen(PORT, () => {
   }, 60 * 60 * 1000);
   console.log('⏰ Cron de limpieza de borradores activo (cada hora)');
 
-  // Resta n días hábiles (lunes-viernes) a una fecha, para calcular el corte de
-  // "hace 5 días hábiles" sin contar fines de semana.
-  function restarDiasHabiles(fecha, n) {
-    const d = new Date(fecha);
-    let restados = 0;
-    while (restados < n) {
-      d.setDate(d.getDate() - 1);
-      const diaSemana = d.getDay(); // 0 = domingo, 6 = sábado
-      if (diaSemana !== 0 && diaSemana !== 6) restados++;
-    }
-    return d;
-  }
-
-  setInterval(async () => {
-    try {
-      const corte = restarDiasHabiles(new Date(), 5).toISOString();
-      const { data: candidatas, error } = await supabase
-        .from('bolsas')
-        .select('id, nombre')
-        .not('inactivo_desde', 'is', null)
-        .lte('inactivo_desde', corte);
-      if (error) {
-        // Columna inactivo_desde aún no existe — ver sql/limpieza-automatica-bolsas.sql
-        if (!/inactivo_desde/.test(error.message || '')) console.error('[CLEANUP BOLSAS] error:', error.message);
-        return;
-      }
-      if (!candidatas?.length) return;
-
-      // Borrado real (no soft-delete) uno por uno: si una bolsa tiene un pedido
-      // real apuntándole, el FK pedidos_bolsa_id_fkey rechaza ese DELETE — se
-      // captura por fila para que no aborte el resto del lote.
-      let borradas = 0;
-      for (const b of candidatas) {
-        const { error: delErr } = await supabase.from('bolsas').delete().eq('id', b.id);
-        if (delErr) {
-          console.warn('[CLEANUP BOLSAS] no se pudo borrar (probablemente tiene pedidos reales):', b.nombre, b.id, '-', delErr.message);
-        } else {
-          borradas++;
-        }
-      }
-      if (borradas > 0) console.log('[CLEANUP BOLSAS] rechazadas/inactivas borradas (5+ días hábiles):', borradas, 'de', candidatas.length, 'candidatas');
-    } catch (err) {
-      console.error('[CLEANUP BOLSAS] error limpiando bolsas rechazadas/inactivas:', err.message);
-    }
-  }, 60 * 60 * 1000);
-  console.log('⏰ Cron de limpieza de bolsas rechazadas/inactivas activo (cada hora, borra tras 5 días hábiles)');
+  // Las publicaciones se conservan aunque estén ocultas o rechazadas. Nunca se
+  // borran automáticamente: `activo=false` funciona como archivo recuperable.
+  console.log('🗃️ Conservación de publicaciones activa (sin borrado automático)');
 });
 
 module.exports = app;

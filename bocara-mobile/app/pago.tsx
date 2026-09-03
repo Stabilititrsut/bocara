@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, SafeAreaView, Image, Modal, TextInput,
@@ -39,6 +39,9 @@ const TIPOS_TARJETA: TipoTarjeta[] = ['VISA', 'Mastercard', 'AmEx', 'Otro'];
 const PROPINAS = [0, 3, 5, 10, 15] as const;
 const STORAGE_TARJETAS = 'bocara_tarjetas_guardadas';
 const MAX_TARJETAS = 3;
+// Cubo todavía no entrega a Bocara un token reutilizable de la tarjeta.
+// Mantener esta función oculta evita presentar referencias locales como pagos guardados.
+const SAVED_CARDS_ENABLED = false;
 
 const TIPO_COLORS: Record<string, string> = {
   VISA: '#1A1F71',
@@ -72,6 +75,7 @@ export default function PagoScreen() {
   const [loadingCupon, setLoadingCupon] = useState(false);
 
   const pedidoDataRef = useRef<{ pedidoId: string; codigoRecogida: string; token?: string } | null>(null);
+  const preparacionInicialRef = useRef(false);
 
   // Propina
   const [propinaMode, setPropinaMode] = useState<number | 'otro'>(0);
@@ -115,12 +119,6 @@ export default function PagoScreen() {
     ? serverTotal
     : Math.max(0, total + comisionServicio + propina - descuentoCupon);
 
-  // Al montar: preparar pedido borrador (sin cupón)
-  useEffect(() => {
-    if (items.length === 0 || noPuedeComprarPorRol) return;
-    prepararPedido(null);
-  }, []);
-
   // PATCH propina en borrador cuando cambia — captura el total recalculado por el servidor
   useEffect(() => {
     if (!pedidoId || fase !== 'listo') return;
@@ -134,7 +132,7 @@ export default function PagoScreen() {
         .catch(() => {});
     }, delay);
     return () => clearTimeout(t);
-  }, [propina, pedidoId]);
+  }, [propina, pedidoId, fase, propinaMode]);
 
   function irAQR() {
     const d = pedidoDataRef.current;
@@ -157,7 +155,7 @@ export default function PagoScreen() {
       setFacturaLoading(false);
       setFacturaVisible(false);
       // Si hay menos de MAX_TARJETAS, ofrecer guardar
-      if (tarjetas.length < MAX_TARJETAS) {
+      if (SAVED_CARDS_ENABLED && tarjetas.length < MAX_TARJETAS) {
         setNuevaTarjeta({ ultimos4: '', tipo: 'VISA', banco: '' });
         setGuardarModal(true);
       } else {
@@ -168,7 +166,7 @@ export default function PagoScreen() {
 
   function omitirFactura() {
     setFacturaVisible(false);
-    if (tarjetas.length < MAX_TARJETAS) {
+    if (SAVED_CARDS_ENABLED && tarjetas.length < MAX_TARJETAS) {
       setNuevaTarjeta({ ultimos4: '', tipo: 'VISA', banco: '' });
       setGuardarModal(true);
     } else {
@@ -206,7 +204,7 @@ export default function PagoScreen() {
   }
 
   // ── Preparar pedido borrador ─────────────────────────────────────────────
-  async function prepararPedido(cupon: CuponAplicado | null) {
+  const prepararPedido = useCallback(async (cupon: CuponAplicado | null) => {
     setFase('preparando');
     setErrorMsg('');
     setServerTotal(null);
@@ -242,7 +240,14 @@ export default function PagoScreen() {
       setFase('error');
       setErrorMsg(e.message || 'Error al preparar el pedido.');
     }
-  }
+  }, [items, propina]);
+
+  // Preparar una sola vez el pedido borrador cuando el carrito esté disponible.
+  useEffect(() => {
+    if (preparacionInicialRef.current || items.length === 0 || noPuedeComprarPorRol) return;
+    preparacionInicialRef.current = true;
+    prepararPedido(null);
+  }, [items.length, noPuedeComprarPorRol, prepararPedido]);
 
   // ── Generar link y navegar al pago (se llama al presionar Pagar) ─────────
   async function handlePagar() {
@@ -402,7 +407,7 @@ export default function PagoScreen() {
       </Modal>
 
       {/* ── Modal guardar tarjeta ── */}
-      <Modal visible={guardarModal} transparent animationType="slide" onRequestClose={omitirGuardar}>
+      <Modal visible={SAVED_CARDS_ENABLED && guardarModal} transparent animationType="slide" onRequestClose={omitirGuardar}>
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
             <View style={s.modalIconRow}>
@@ -466,7 +471,7 @@ export default function PagoScreen() {
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
         {/* ── Mis tarjetas guardadas ── */}
-        {tarjetas.length > 0 && (
+        {SAVED_CARDS_ENABLED && tarjetas.length > 0 && (
           <View style={s.sectionCard}>
             <Text style={s.sectionCardTitle}>Mis tarjetas guardadas</Text>
             <View style={s.tarjetasList}>
@@ -675,10 +680,7 @@ export default function PagoScreen() {
             activeOpacity={0.85}
           >
             <Text style={s.btnPagarText}>
-              {tarjetaSelId
-                ? `💳  Pagar con •••• ${tarjetas.find(t => t.id === tarjetaSelId)?.ultimos4} · Q${totalFinal.toFixed(2)}`
-                : `💳  Pagar Q${totalFinal.toFixed(2)}`
-              }
+              {`Pagar de forma segura con Cubo · Q${totalFinal.toFixed(2)}`}
             </Text>
           </TouchableOpacity>
         )}

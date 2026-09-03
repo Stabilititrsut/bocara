@@ -31,7 +31,7 @@ export default function GananciasScreen() {
     }
   }, [periodo]);
 
-  useEffect(() => { cargar(periodo); }, [periodo]);
+  useEffect(() => { cargar(periodo); }, [periodo, cargar]);
 
   if (loading) return (
     <View style={s.loading}>
@@ -138,7 +138,7 @@ export default function GananciasScreen() {
           <View style={s.sinBancoCard}>
             <Text style={{ fontSize: 28, marginBottom: 8 }}>🏦</Text>
             <Text style={s.sinBancoTitle}>Sin datos bancarios</Text>
-            <Text style={s.sinBancoSub}>Agrega tu cuenta bancaria desde "Mi negocio" para recibir pagos.</Text>
+            <Text style={s.sinBancoSub}>Agrega tu cuenta bancaria desde “Mi negocio” para recibir pagos.</Text>
           </View>
         )}
 
@@ -229,4 +229,3 @@ const s = StyleSheet.create({
   liqDetail: { fontSize: 12, color: Colors.textSecondary },
   liqRef: { fontSize: 11, color: Colors.textLight, marginTop: 4 },
 });
-

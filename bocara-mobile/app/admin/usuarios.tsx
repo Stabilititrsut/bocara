@@ -168,9 +168,9 @@ export default function AdminUsuariosScreen() {
               {confirmando?.id === u.id ? (
                 <View style={s.confirmCard}>
                   <Text style={s.confirmText}>
-                    {confirmando.accion === 'suspender' && `¿Suspender a "${confirmando.nombre}"? No podrá iniciar sesión.`}
-                    {confirmando.accion === 'rehabilitar' && `¿Rehabilitar a "${confirmando.nombre}" como ${confirmando.rol}?`}
-                    {confirmando.accion === 'cambiar_rol' && `¿Cambiar a "${confirmando.nombre}" al rol "${confirmando.rol}"?`}
+                    {confirmando?.accion === 'suspender' && `¿Suspender a "${confirmando.nombre}"? No podrá iniciar sesión.`}
+                    {confirmando?.accion === 'rehabilitar' && `¿Rehabilitar a "${confirmando.nombre}" como ${confirmando.rol}?`}
+                    {confirmando?.accion === 'cambiar_rol' && `¿Cambiar a "${confirmando.nombre}" al rol "${confirmando.rol}"?`}
                   </Text>
                   <View style={s.confirmRow}>
                     <TouchableOpacity style={s.confirmNo} onPress={() => setConfirmando(null)}>

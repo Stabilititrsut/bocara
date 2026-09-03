@@ -16,8 +16,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY
 );
 
-const EMAIL    = process.env.ADMIN_EMAIL    || 'admin@bocarafood.com';
-const PASSWORD = process.env.ADMIN_PASSWORD || 'Admin1234';
+const EMAIL = process.env.ADMIN_EMAIL;
+const PASSWORD = process.env.ADMIN_PASSWORD;
+
+if (!EMAIL || !PASSWORD) {
+  console.error('ADMIN_EMAIL y ADMIN_PASSWORD son obligatorias. No se usarán credenciales predeterminadas.');
+  process.exit(1);
+}
+if (PASSWORD.length < 12) {
+  console.error('ADMIN_PASSWORD debe tener al menos 12 caracteres.');
+  process.exit(1);
+}
 
 async function main() {
   console.log(`\n🔑 Configurando usuario admin: ${EMAIL}\n`);
@@ -52,7 +61,6 @@ async function main() {
     console.log('\n✅ Usuario admin actualizado correctamente');
     console.log('   Email :', data.email);
     console.log('   Rol   :', data.rol);
-    console.log('   Pass  :', PASSWORD);
   } else {
     if (fetchErr && !fetchErr.message.includes('No rows')) {
       console.error('✗ Error consultando:', fetchErr.message);
@@ -72,7 +80,6 @@ async function main() {
     console.log('\n✅ Usuario admin creado correctamente');
     console.log('   Email :', data.email);
     console.log('   Rol   :', data.rol);
-    console.log('   Pass  :', PASSWORD);
   }
 
   console.log('\n🚀 Ya puedes hacer login en bocarafood.com con esas credenciales.\n');

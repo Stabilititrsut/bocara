@@ -6,7 +6,7 @@ import {
 import { Image } from 'expo-image';
 import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { negociosAPI, uploadsAPI, adminAPI } from '@/src/services/api';
+import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { ZONAS_GT } from '@/constants/zonas';
@@ -18,7 +18,6 @@ const CAMBIO_CERRADO_KEY = 'bocara_cambio_perfil_cerrado';
 export default function PerfilRestauranteScreen() {
   const [negocio, setNegocio] = useState<any>(null);
   const [form, setForm] = useState<any>({});
-  const [originalForm, setOriginalForm] = useState<any>({});
   const [camposPendientes, setCamposPendientes] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -87,7 +86,6 @@ export default function PerfilRestauranteScreen() {
       // desaparecía sin ningún error visible.
       if (camposPendientesRef.current.size === 0) {
         setForm(loaded);
-        setOriginalForm(loaded);
         setCamposPendientes(new Set());
       }
       setDpiUrl(res.data.dpi_foto_url || res.data.datos_bancarios?.dpi_foto_url || '');
@@ -115,7 +113,7 @@ export default function PerfilRestauranteScreen() {
     // restaurante/notificaciones.tsx.
     pollingRef.current = setInterval(cargarSolicitud, 30000);
     return () => clearInterval(pollingRef.current);
-  }, []);
+  }, [cargarNegocio, cargarSolicitud]);
 
   function cerrarSolicitud() {
     if (!solicitudPendiente) return;
@@ -244,7 +242,6 @@ export default function PerfilRestauranteScreen() {
         payload.estado_verificacion = 'pendiente';
         await negociosAPI.actualizar(negocio.id, payload);
         setCamposPendientes(new Set());
-        setOriginalForm({ ...form });
         setNegocio((n: any) => ({ ...n, estado_verificacion: 'pendiente' }));
         setRechazoInfo(null);
         showToast('✅ Solicitud re-enviada. El equipo de Bocara la revisará en 24-48h.');

@@ -133,7 +133,7 @@ export default function AdminCuponesScreen() {
     }
   }, []);
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { cargar(); }, [cargar]);
 
   // ── Abrir modal ─────────────────────────────────────────────────────────────
 

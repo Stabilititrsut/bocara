@@ -25,6 +25,8 @@ services:
       - key: JWT_SECRET
         generateValue: false  # set manually in Render dashboard
         sync: false
+      - key: JWT_EXPIRES_IN
+        value: 100d
 
       # Email (Resend — reemplaza Gmail SMTP, bloqueado/degradado en Render)
       - key: RESEND_API_KEY
@@ -50,7 +52,7 @@ services:
 
       # App
       - key: BOCARA_COMMISSION_PERCENT
-        value: "15"
+        value: "25"
       - key: API_BASE_URL
         value: https://bocara.onrender.com
       - key: FRONTEND_URL

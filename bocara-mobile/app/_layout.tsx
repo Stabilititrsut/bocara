@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Platform, StyleSheet, Text } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
@@ -24,7 +24,9 @@ let Notifications: any = null;
 let Device: any = null;
 if (Platform.OS !== 'web') {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Notifications = require('expo-notifications');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     Device = require('expo-device');
   } catch { }
 }
@@ -91,7 +93,7 @@ function BocaraSplash({ fast, onDone }: { fast: boolean; onDone: () => void }) {
         Animated.timing(screenOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
       ]).start(() => onDone());
     }
-  }, []);
+  }, [fast, onDone, screenOpacity, textOpacity]);
 
   return (
     <Animated.View style={[ss.splash, { opacity: screenOpacity }]}>
@@ -119,6 +121,7 @@ function AuthGuard() {
   const [onboardingChecked, setOnboardingChecked] = useState(false);
   const [onboardingDone, setOnboardingDone]       = useState(true);
   const [splashDone, setSplashDone]               = useState(false);
+  const handleSplashDone = useCallback(() => setSplashDone(true), []);
 
   useEffect(() => {
     if (Platform.OS === 'web') {
@@ -180,7 +183,7 @@ function AuthGuard() {
         router.replace(rutaDestino as any);
       }
     }
-  }, [usuario, loading, segments, onboardingChecked, onboardingDone]);
+  }, [usuario, loading, segments, onboardingChecked, onboardingDone, router]);
 
   // El splash nativo cubre la UI mientras carga la sesión
   if (loading || !onboardingChecked) return null;
@@ -215,7 +218,7 @@ function AuthGuard() {
       {!splashDone && (
         <BocaraSplash
           fast={!!usuario}
-          onDone={() => setSplashDone(true)}
+          onDone={handleSplashDone}
         />
       )}
     </>

@@ -82,7 +82,7 @@ export default function RegistroTelefonoScreen() {
       await authAPI.sendPhoneOtp(digitsOnly);
       setReenvioSegundos(60);
       startCountdown();
-    } catch (e: any) {
+    } catch {
       setErrors({ otp: 'No se pudo reenviar el código.' });
     } finally {
       setLoading(false);

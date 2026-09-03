@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import {
-  View, Text, ScrollView, TouchableOpacity, StyleSheet,
+  View, Text, TouchableOpacity, StyleSheet,
   SafeAreaView, Linking, Animated, Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
