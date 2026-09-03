@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert } from 'react-native';
 import { Bolsa, CartItem } from '../types';
 
 export const CART_KEY_PREFIX = 'carrito_';
@@ -37,22 +38,28 @@ export function CartProvider({ children, userId }: CartProviderProps) {
       }
       setLoaded(true);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [cartKey]);
 
   // Persistir carrito cuando cambia (solo después de cargar)
   useEffect(() => {
     if (loaded) {
       AsyncStorage.setItem(cartKey, JSON.stringify(items));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, loaded]);
+  }, [items, loaded, cartKey]);
 
   const total = items.reduce((sum, i) => sum + i.bolsa.precio_descuento * i.cantidad, 0);
   const cantidad = items.reduce((sum, i) => sum + i.cantidad, 0);
 
-  function agregar(bolsa: Bolsa) {
+  const agregar = useCallback((bolsa: Bolsa) => {
     setItems((prev) => {
+      const negocioActual = prev[0]?.bolsa.negocio_id;
+      if (negocioActual && negocioActual !== bolsa.negocio_id) {
+        Alert.alert(
+          'Un restaurante por pedido',
+          'Finaliza o vacía tu carrito actual antes de agregar productos de otro restaurante.'
+        );
+        return prev;
+      }
       const existe = prev.find((i) => i.bolsa.id === bolsa.id);
       if (existe) {
         const max = bolsa.cantidad_disponible || 99;
@@ -64,9 +71,9 @@ export function CartProvider({ children, userId }: CartProviderProps) {
       }
       return [...prev, { bolsa, cantidad: 1 }];
     });
-  }
+  }, []);
 
-  function quitar(bolsaId: string) {
+  const quitar = useCallback((bolsaId: string) => {
     setItems((prev) => {
       const item = prev.find((i) => i.bolsa.id === bolsaId);
       if (!item) return prev;
@@ -75,14 +82,19 @@ export function CartProvider({ children, userId }: CartProviderProps) {
         i.bolsa.id === bolsaId ? { ...i, cantidad: i.cantidad - 1 } : i
       );
     });
-  }
+  }, []);
 
-  function limpiar() {
+  const limpiar = useCallback(() => {
     setItems([]);
-  }
+  }, []);
+
+  const value = useMemo(
+    () => ({ items, total, cantidad, loaded, agregar, quitar, limpiar }),
+    [items, total, cantidad, loaded, agregar, quitar, limpiar]
+  );
 
   return (
-    <CartContext.Provider value={{ items, total, cantidad, loaded, agregar, quitar, limpiar }}>
+    <CartContext.Provider value={value}>
       {children}
     </CartContext.Provider>
   );

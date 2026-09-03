@@ -137,7 +137,6 @@ export default function ProductoScreen() {
   const [esFavorito, setEsFavorito] = useState(false);
   const [toggleandoFav, setToggleandoFav] = useState(false);
   const [horario, setHorario] = useState<ReturnType<typeof calcularEstadoHorario> | null>(null);
-  const [retryCount, setRetryCount] = useState(0);
   const [tab, setTab] = useState<'info' | 'resenas'>('info');
   const { agregar, items } = useCart();
   const { usuario } = useAuth();
@@ -164,7 +163,7 @@ export default function ProductoScreen() {
     } finally {
       setLoading(false);
     }
-  }, [id, retryCount]);
+  }, [id, usuario]);
 
   useEffect(() => { cargarBolsa(); }, [cargarBolsa]);
 
@@ -199,7 +198,7 @@ export default function ProductoScreen() {
           <Text style={s.errorTitle}>No se pudo cargar</Text>
           <Text style={s.errorSub}>{errorMsg || 'Bolsa no encontrada.'}</Text>
           <Text style={s.errorHint}>Si el servidor está despertando puede tardar unos segundos.</Text>
-          <TouchableOpacity style={s.retryBtn} onPress={() => setRetryCount(c => c + 1)}>
+          <TouchableOpacity style={s.retryBtn} onPress={cargarBolsa}>
             <Ionicons name="refresh" size={16} color={Colors.white} />
             <Text style={s.retryText}>Reintentar</Text>
           </TouchableOpacity>

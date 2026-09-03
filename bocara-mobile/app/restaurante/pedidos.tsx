@@ -6,16 +6,7 @@ import {
 } from 'react-native';
 import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
-
-let CameraView: any = null;
-let useCameraPermissions: any = null;
-if (Platform.OS !== 'web') {
-  try {
-    const cam = require('expo-camera');
-    CameraView = cam.CameraView;
-    useCameraPermissions = cam.useCameraPermissions;
-  } catch {}
-}
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 // 'cancelado' fuera de las pestañas a propósito: los pedidos cancelados/no
 // confirmados no deben mostrarse en ningún panel — ver filtro en cargar().
@@ -33,7 +24,7 @@ const ESTADO_COLORS: Record<string, string> = {
 function QRScannerModal({ visible, onClose, onScanned }: {
   visible: boolean; onClose: () => void; onScanned: (code: string) => void;
 }) {
-  const [permStatus, requestPerm] = useCameraPermissions ? useCameraPermissions() : [null, () => {}];
+  const [permStatus, requestPerm] = useCameraPermissions();
   const [manualCodigo, setManualCodigo] = useState('');
   const scannedRef = useRef(false);
 
@@ -43,7 +34,7 @@ function QRScannerModal({ visible, onClose, onScanned }: {
       setManualCodigo('');
       if (permStatus && !permStatus.granted) requestPerm();
     }
-  }, [visible]);
+  }, [visible, permStatus, requestPerm]);
 
   function handleBarcode({ data }: { data: string }) {
     if (scannedRef.current) return;
@@ -56,8 +47,6 @@ function QRScannerModal({ visible, onClose, onScanned }: {
     if (!codigo) return Alert.alert('Error', 'Ingresa un código');
     onScanned(codigo);
   }
-
-  if (!CameraView) return null;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>

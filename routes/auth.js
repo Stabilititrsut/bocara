@@ -11,6 +11,7 @@ const {
   otpVerifyLimiter, setupLimiter, checkEmailLimiter,
 } = require('../middleware/rateLimit');
 const router = express.Router();
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 async function generarCodigoReferido(usuarioId) {
   // Retry hasta 3 veces ante colisión de código (UNIQUE)
@@ -216,7 +217,7 @@ router.post('/registro', registroLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: resolvedRol },
       process.env.JWT_SECRET,
-      { expiresIn: '100d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     const { password_hash, ...u } = usuario;
     res.status(201).json({ token, usuario: { ...u, rol: resolvedRol }, esNuevo: true });
@@ -269,7 +270,7 @@ router.post('/registro-completo', registroLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '100d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     const { password_hash, ...u } = usuario;
     res.status(201).json({ token, usuario: u, esNuevo: true });
@@ -344,7 +345,7 @@ router.post('/verificar-otp-email', otpVerifyLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '100d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     const { password_hash, ...u } = usuario;
     res.status(201).json({ token, usuario: u, esNuevo: true });
@@ -446,7 +447,7 @@ router.post('/verify-phone-otp', otpVerifyLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email || '', rol: usuario.rol || 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '100d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     const { password_hash, ...u } = usuario;
     res.json({ token, usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, ...u } });
@@ -500,7 +501,7 @@ router.post('/oauth-complete', async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol: usuario.rol || 'cliente' },
       process.env.JWT_SECRET,
-      { expiresIn: '100d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     const { password_hash, ...u } = usuario;
     res.json({
@@ -545,7 +546,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol },
       process.env.JWT_SECRET,
-      { expiresIn: '100d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
     const { password_hash, ...u } = usuario;
     res.json({ token, usuario: { puntos: 0, total_bolsas_salvadas: 0, total_ahorrado: 0, rol, ...u } });
@@ -611,16 +612,23 @@ router.put('/perfil', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// POST /api/auth/setup-demo — crea o resetea el usuario demo@bocara.gt (rol: cliente)
+// POST /api/auth/setup-demo — crea o resetea un usuario demo (rol: cliente)
 router.post('/setup-demo', setupLimiter, async (req, res) => {
+  if (process.env.NODE_ENV === 'production')
+    return res.status(404).json({ error: 'Ruta no disponible' });
   const { secret } = req.body;
   if (!process.env.ADMIN_SETUP_SECRET)
     return res.status(503).json({ error: 'Endpoint deshabilitado: ADMIN_SETUP_SECRET no está configurado en el servidor.' });
   if (!compararSecreto(secret, process.env.ADMIN_SETUP_SECRET))
     return res.status(403).json({ error: 'Secret incorrecto' });
 
-  const demoEmail = 'demo@bocara.gt';
-  const demoPassword = 'Demo1234!';
+  const demoEmail = process.env.DEMO_EMAIL?.toLowerCase().trim();
+  const demoPassword = process.env.DEMO_PASSWORD;
+  if (!demoEmail || !demoPassword || demoPassword.length < 12) {
+    return res.status(503).json({
+      error: 'Modo demo deshabilitado: configura DEMO_EMAIL y DEMO_PASSWORD (mínimo 12 caracteres).',
+    });
+  }
 
   try {
     const hash = await bcrypt.hash(demoPassword, 10);
@@ -638,7 +646,7 @@ router.post('/setup-demo', setupLimiter, async (req, res) => {
         .select('id,email,rol')
         .single();
       if (error) return res.status(400).json({ error: error.message });
-      return res.json({ ok: true, action: 'updated', usuario: data, password: demoPassword });
+      return res.json({ ok: true, action: 'updated', usuario: data });
     }
 
     const { data, error } = await supabase
@@ -647,7 +655,7 @@ router.post('/setup-demo', setupLimiter, async (req, res) => {
       .select('id,email,rol')
       .single();
     if (error) return res.status(400).json({ error: error.message });
-    res.json({ ok: true, action: 'created', usuario: data, password: demoPassword });
+    res.json({ ok: true, action: 'created', usuario: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -663,6 +671,8 @@ router.post('/setup-admin', setupLimiter, async (req, res) => {
   }
   if (!email || !password)
     return res.status(400).json({ error: 'email y password son requeridos' });
+  if (password.length < 12)
+    return res.status(400).json({ error: 'La contraseña de administrador debe tener al menos 12 caracteres' });
   const adminEmail = email.toLowerCase().trim();
   const adminPassword = password;
 

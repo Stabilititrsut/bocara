@@ -13,6 +13,8 @@ import { ZONAS_GT } from '@/constants/zonas';
 import { Image } from 'expo-image';
 
 let ImagePicker: any = null;
+// Carga condicional: el selector nativo no debe ejecutarse durante el render web.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 try { ImagePicker = require('expo-image-picker'); } catch { }
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otro'];
@@ -859,4 +861,3 @@ const sc = StyleSheet.create({
   btn:          { backgroundColor: Colors.primary, borderRadius: 14, padding: 16, alignItems: 'center', width: '100%', marginBottom: 20 },
   btnText:      { color: Colors.white, fontWeight: '900', fontSize: 16 },
 });
-

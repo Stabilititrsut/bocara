@@ -3,73 +3,12 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
-const { obtenerComisionFraccion, obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
-// POST /api/pedidos/crear — confirmar pedido directamente (sin pasarela de pago)
-router.post('/crear', authMiddleware, soloCliente, async (req, res) => {
-  try {
-    const { bolsa_id, tipo_entrega, direccion_envio } = req.body;
-    if (!bolsa_id) return res.status(400).json({ error: 'bolsa_id requerido' });
-
-    const { data: bolsa, error: bolsaErr } = await supabase
-      .from('bolsas')
-      .select('*, negocios(id,nombre,propietario_id)')
-      .eq('id', bolsa_id)
-      .single();
-    if (bolsaErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-    if (bolsa.cantidad_disponible < 1) return res.status(400).json({ error: 'Bolsa agotada' });
-
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
-      chars[Math.floor(Math.random() * chars.length)]
-    ).join('');
-
-    const costoEnvio = tipo_entrega === 'envio' ? await obtenerConfigNumerica('costo_envio_fijo') : 0;
-    const precioBolsa = bolsa.precio_descuento;
-    const total = precioBolsa + costoEnvio;
-    const comisionFraccion = await obtenerComisionFraccion();
-    const comisionBocara = Math.round(precioBolsa * comisionFraccion * 100) / 100;
-    const montoNetoRestaurante = Math.round((precioBolsa - comisionBocara) * 100) / 100;
-
-    const insertData = {
-      usuario_id: req.usuario.id,
-      bolsa_id,
-      negocio_id: bolsa.negocios.id,
-      estado: 'confirmado',
-      estado_pago: 'pagado',
-      codigo_recogida: codigoRecogida,
-      total,
-      costo_envio: costoEnvio,
-      precio_bolsa: precioBolsa,
-      comision_bocara: comisionBocara,
-      comision_pasarela: 0,
-      monto_neto_restaurante: montoNetoRestaurante,
-      hora_recogida_inicio: bolsa.hora_recogida_inicio,
-      hora_recogida_fin: bolsa.hora_recogida_fin,
-    };
-    if (tipo_entrega) insertData.tipo_entrega = tipo_entrega;
-    if (tipo_entrega === 'envio' && direccion_envio) insertData.direccion_envio = direccion_envio;
-
-    const { data: pedido, error } = await supabase
-      .from('pedidos').insert([insertData]).select().single();
-    if (error) return res.status(400).json({ error: error.message });
-
-    await supabase.from('bolsas')
-      .update({ cantidad_disponible: bolsa.cantidad_disponible - 1 })
-      .eq('id', bolsa_id);
-
-    // Push al restaurante
-    const { data: propietario } = await supabase
-      .from('usuarios').select('expo_push_token').eq('id', bolsa.negocios.propietario_id).single();
-    const mensajeRest = `Pedido ${codigoRecogida} — Q${total}`;
-    await enviarNotificacionPush(propietario?.expo_push_token, '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id, screen: 'restaurante' });
-    await guardarNotificacion(supabase, bolsa.negocios.propietario_id, 'nuevo_pedido', '🛍️ Nuevo pedido', mensajeRest, { pedidoId: pedido.id });
-
-    res.status(201).json({ pedidoId: pedido.id, codigoRecogida, total });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// Ruta heredada retirada: ningún cliente puede crear un pedido pagado sin una
+// confirmación verificable de Cubo. Se mantiene el 410 para versiones antiguas.
+router.post('/crear', authMiddleware, soloCliente, (_req, res) => {
+  res.status(410).json({ error: 'Este flujo fue retirado. Realiza el pago mediante Cubo.' });
 });
 
 // Estados que se muestran al cliente — borrador y pendiente son registros técnicos
@@ -260,12 +199,13 @@ router.get('/resumen-cliente', authMiddleware, async (req, res) => {
 router.get('/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase
     .from('pedidos')
-    .select('*, bolsas(*), negocios(*)')
+    .select('*, bolsas(id,nombre,descripcion,imagen_url), negocios(id,nombre,direccion,zona,ciudad,telefono,categoria,imagen_url,punto_referencia,google_maps_url,waze_url,latitud,longitud,propietario_id)')
     .eq('id', req.params.id)
     .single();
   if (error || !data) return res.status(404).json({ error: 'Pedido no encontrado' });
   if (data.usuario_id !== req.usuario.id && data.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
+  if (data.negocios) delete data.negocios.propietario_id;
   res.json(data);
 });
 
@@ -330,16 +270,10 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   }
 
   if (estado === 'completado' || estado === 'recogido') {
-    try {
-      const { data: cfg } = await supabase.from('configuracion').select('valor').eq('clave', 'puntos_por_pedido').single();
-      const puntos = cfg ? parseInt(cfg.valor) : 10;
-      await supabase.rpc('sumar_puntos', { user_id: pedido.usuario_id, puntos });
-    } catch { }
-
     await enviarNotificacionPush(tokenCliente, '⭐ ¡Bolsa rescatada!',
-      `¡Gracias por rescatar tu bolsa! Ganaste puntos Bocara.`,
+      '¡Gracias por rescatar tu bolsa! Tus puntos Bocara ya están en tu cuenta.',
       { pedidoId: req.params.id, screen: 'pedidos' });
-    await guardarNotificacion(supabase, pedido.usuario_id, 'bolsa_recogida', '⭐ ¡Bolsa rescatada!', 'Ganaste puntos por rescatar comida.', { pedidoId: req.params.id });
+    await guardarNotificacion(supabase, pedido.usuario_id, 'bolsa_recogida', '⭐ ¡Bolsa rescatada!', 'Tus puntos Bocara ya están en tu cuenta.', { pedidoId: req.params.id });
   }
 
   res.json(data);

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { pagosAPI } from '@/src/services/api';
@@ -11,17 +11,7 @@ export default function PagoRetorno() {
   const intentosRef = useRef(0);
   const timerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    console.log('[PAGO RETORNO] pedidoId:', pedidoId);
-    if (!pedidoId) {
-      router.replace('/(tabs)/pedidos' as any);
-      return;
-    }
-    verificar(pedidoId);
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [pedidoId]);
-
-  async function verificar(id: string) {
+  const verificar = useCallback(async function verificarPago(id: string) {
     intentosRef.current++;
     if (intentosRef.current > 10) {
       console.log('[PAGO RETORNO] timeout tras 10 intentos → pedidos');
@@ -46,12 +36,22 @@ export default function PagoRetorno() {
           params: { pedidoId: id, status: 'FAILED' },
         } as any);
       } else {
-        timerRef.current = setTimeout(() => verificar(id), 3000);
+        timerRef.current = setTimeout(() => verificarPago(id), 3000);
       }
     } catch {
-      timerRef.current = setTimeout(() => verificar(id), 3000);
+      timerRef.current = setTimeout(() => verificarPago(id), 3000);
     }
-  }
+  }, [limpiar]);
+
+  useEffect(() => {
+    console.log('[PAGO RETORNO] pedidoId:', pedidoId);
+    if (!pedidoId) {
+      router.replace('/(tabs)/pedidos' as any);
+      return;
+    }
+    verificar(pedidoId);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, [pedidoId, verificar]);
 
   return (
     <View style={s.root}>

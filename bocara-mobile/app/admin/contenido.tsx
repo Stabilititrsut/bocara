@@ -307,7 +307,7 @@ export default function AdminContenidoScreen() {
       <Modal visible={!!modalCambios} transparent animationType="slide" onRequestClose={() => setModalCambios(null)}>
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>⚠️ Pedir cambios en "{modalCambios?.nombre}"</Text>
+            <Text style={s.modalTitle}>⚠️ Pedir cambios en “{modalCambios?.nombre}”</Text>
             <Text style={s.modalSub}>El restaurante recibirá una notificación con qué debe corregir antes de publicar.</Text>
             <TextInput
               style={s.modalInput}
@@ -334,7 +334,7 @@ export default function AdminContenidoScreen() {
       <Modal visible={!!modalRechazo} transparent animationType="slide" onRequestClose={() => setModalRechazo(null)}>
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>Rechazar "{modalRechazo?.nombre}"</Text>
+            <Text style={s.modalTitle}>Rechazar “{modalRechazo?.nombre}”</Text>
             <Text style={s.modalSub}>Escribe el motivo para notificar al propietario (opcional).</Text>
             <TextInput
               style={s.modalInput}

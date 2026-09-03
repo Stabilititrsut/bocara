@@ -34,6 +34,9 @@ export interface Negocio {
   latitud?: number | null;
   longitud?: number | null;
   permite_envio?: boolean;
+  punto_referencia?: string;
+  google_maps_url?: string;
+  waze_url?: string;
 }
 
 export interface Bolsa {
@@ -59,7 +62,7 @@ export interface Bolsa {
   distancia_km?: number | null;
 }
 
-export type EstadoPedido = 'pendiente' | 'confirmado' | 'listo' | 'recogido' | 'cancelado';
+export type EstadoPedido = 'pendiente' | 'confirmado' | 'en_preparacion' | 'listo' | 'completado' | 'recogido' | 'cancelado';
 
 export interface Pedido {
   id: string;

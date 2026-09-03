@@ -12,11 +12,11 @@ const FAQS = [
   },
   {
     pregunta: '¿Cómo funciona el proceso de pago?',
-    respuesta: 'Pagas directamente en la app con tarjeta de crédito o débito. El pago es seguro y procesado con Stripe. Una vez confirmado, recibes un código de recogida o tu pedido se envía a domicilio.',
+    respuesta: 'Pagas con tarjeta de crédito o débito mediante la plataforma segura de Cubo. Bocara confirma el pago antes de generar tu código de recogida.',
   },
   {
     pregunta: '¿Puedo cancelar mi pedido?',
-    respuesta: 'Sí, puedes cancelar pedidos en estado pendiente o confirmado directamente desde la sección "Mis pedidos". Una vez en preparación, ya no es posible cancelar. Si tuviste algún problema con el pago, escríbenos al +502 5107-7949.',
+    respuesta: 'Para cancelar una compra pagada y gestionar la devolución, solicítalo desde "Mis pedidos" o escríbenos al +502 5107-7949. Bocara confirmará el reembolso antes de cancelar el pedido.',
   },
   {
     pregunta: '¿Qué hago si el restaurante está cerrado?',

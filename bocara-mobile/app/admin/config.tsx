@@ -3,10 +3,10 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, TextInput, Alert, ActivityIndicator,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI, API_BASE_URL } from '@/src/services/api';
+import { getAuthToken } from '@/src/services/authTokenStorage';
 
 const BG     = '#FAFAFA';
 const CARD   = '#FFFFFF';
@@ -15,13 +15,13 @@ const TEXT   = '#0A2A2A';
 const TEXT2  = '#5A7070';
 const GOLD   = '#C8960C';
 
-const CAMPOS: Array<{
+const CAMPOS: {
   clave: string;
   label: string;
   descripcion: string;
   icon: any;
   unidad?: string;
-}> = [
+}[] = [
   { clave: 'comision_porcentaje',        label: 'Comisión Bocara',       descripcion: 'Porcentaje que Bocara retiene de cada venta',              icon: 'trending-up',     unidad: '%'  },
   { clave: 'puntos_por_pedido',           label: 'Puntos por pedido',     descripcion: 'Puntos otorgados al cliente al completar un pedido',      icon: 'star',            unidad: 'pts' },
   { clave: 'costo_envio_fijo',            label: 'Costo de envío',        descripcion: 'Costo fijo de envío a domicilio (0 = gratuito)',          icon: 'bicycle',         unidad: 'Q'   },
@@ -97,7 +97,7 @@ export default function AdminConfigScreen() {
     setGeoMsg('Geocodificando... espera un momento');
     setGeoSinResultado([]);
     try {
-      const token = await AsyncStorage.getItem('bocara_token');
+      const token = await getAuthToken();
       const res = await fetch(`${API_BASE_URL}/admin/geocodificar`, {
         method: 'POST',
         headers: {

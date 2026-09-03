@@ -172,11 +172,13 @@ export default function BolsasRestauranteScreen() {
   }
 
   function alertar(msg: string) {
-    Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Error', msg);
+    if (Platform.OS === 'web') (window as any).alert(msg);
+    else Alert.alert('Error', msg);
   }
 
   function avisar(msg: string) {
-    Platform.OS === 'web' ? (window as any).alert(msg) : Alert.alert('Listo', msg);
+    if (Platform.OS === 'web') (window as any).alert(msg);
+    else Alert.alert('Listo', msg);
   }
 
   function mensajeGuardado(data: any, esEdicion: boolean) {

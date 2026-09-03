@@ -134,7 +134,7 @@ export default function TiendaScreen() {
   const { id }   = useLocalSearchParams<{ id: string }>();
   const router   = useRouter();
   const insets   = useSafeAreaInsets();
-  const { items: cartItems, total, cantidad, agregar } = useCart();
+  const { total, cantidad, agregar } = useCart();
 
   const [negocio, setNegocio] = useState<any>(null);
   const [bolsas,  setBolsas]  = useState<any[]>([]);

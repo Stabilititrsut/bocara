@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, Alert, Modal, TextInput,
@@ -25,12 +25,7 @@ export default function RestauranteDetalleScreen() {
   const [rechazarModal, setRechazarModal] = useState(false);
   const [motivo,     setMotivo]     = useState('');
 
-  useEffect(() => {
-    if (!id) return;
-    cargar();
-  }, [id]);
-
-  async function cargar() {
+  const cargar = useCallback(async () => {
     setLoading(true);
     try {
       // Usa el listado admin (autenticado, adminOnly) en vez del endpoint público
@@ -52,7 +47,12 @@ export default function RestauranteDetalleScreen() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    cargar();
+  }, [id, cargar]);
 
   async function aprobar() {
     if (!negocio) return;

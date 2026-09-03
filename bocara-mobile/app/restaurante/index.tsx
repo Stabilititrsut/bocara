@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl, ActivityIndicator,
+  SafeAreaView, RefreshControl,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { negociosAPI, pedidosAPI, bolsasAPI } from '@/src/services/api';
@@ -125,7 +125,7 @@ export default function DashboardRestauranteScreen() {
             </View>
 
             <View style={s.divider} />
-            <Text style={s.statusHint}>Te notificaremos cuando tu negocio sea aprobado. También puedes actualizar tu información desde "Mi negocio".</Text>
+            <Text style={s.statusHint}>Te notificaremos cuando tu negocio sea aprobado. También puedes actualizar tu información desde “Mi negocio”.</Text>
 
             <TouchableOpacity style={s.refreshBtn} onPress={() => { setRefreshing(true); cargar(); }}>
               <Text style={s.refreshBtnText}>↻ Verificar estado</Text>
@@ -180,7 +180,7 @@ export default function DashboardRestauranteScreen() {
                 <Text style={s.motivoText}>{motivoTexto}</Text>
               </View>
             ) : null}
-            <Text style={s.statusHint}>Corrige los datos desde "Mi negocio" y vuelve a enviar tu solicitud.</Text>
+            <Text style={s.statusHint}>Corrige los datos desde “Mi negocio” y vuelve a enviar tu solicitud.</Text>
             <TouchableOpacity style={s.corregirBtn} onPress={() => router.push('/restaurante/perfil' as any)}>
               <Text style={s.corregirBtnText}>✏️ Corregir y reenviar →</Text>
             </TouchableOpacity>

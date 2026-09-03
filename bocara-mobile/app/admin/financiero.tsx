@@ -3,12 +3,10 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, RefreshControl, ActivityIndicator, Share, Alert, Platform,
 } from 'react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as XLSX from 'xlsx';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
-
-let XLSX: any = null;
-try { XLSX = require('xlsx'); } catch {}
 
 const BG     = '#F8FAFC';
 const CARD   = '#FFFFFF';
@@ -74,8 +72,6 @@ export default function AdminFinancieroScreen() {
 
   async function exportarExcel() {
     if (!datos?.resumen?.length) return Alert.alert('Sin datos', 'No hay datos para exportar en este período.');
-    if (!XLSX) return Alert.alert('Error', 'Librería XLSX no disponible.');
-
     setExporting(true);
     try {
       const wb = XLSX.utils.book_new();

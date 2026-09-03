@@ -6,7 +6,6 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { cuponesAPI } from '@/src/services/api';
-import { Colors } from '@/constants/Colors';
 
 const TEAL = '#1A5C5C';
 const ERR  = '#C0392B';

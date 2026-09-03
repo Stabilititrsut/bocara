@@ -168,7 +168,7 @@ export default function AdminCambiosPerfilScreen() {
       <Modal visible={!!modalRechazo} transparent animationType="slide" onRequestClose={() => setModalRechazo(null)}>
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>Rechazar cambios de "{modalRechazo?.nombre}"</Text>
+            <Text style={s.modalTitle}>Rechazar cambios de “{modalRechazo?.nombre}”</Text>
             <Text style={s.modalSub}>El restaurante recibirá una notificación con el motivo (opcional).</Text>
             <TextInput
               style={s.modalInput}
@@ -194,7 +194,7 @@ export default function AdminCambiosPerfilScreen() {
       <Modal visible={!!modalCambios} transparent animationType="slide" onRequestClose={() => setModalCambios(null)}>
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>⚠️ Pedir cambios en "{modalCambios?.nombre}"</Text>
+            <Text style={s.modalTitle}>⚠️ Pedir cambios en “{modalCambios?.nombre}”</Text>
             <Text style={s.modalSub}>El restaurante recibirá una notificación con qué debe corregir antes de reenviar.</Text>
             <TextInput
               style={s.modalInput}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, Platform, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -15,11 +15,7 @@ export default function AuthCallbackScreen() {
   const { setSession } = useAuth();
   const router = useRouter();
 
-  useEffect(() => {
-    processCallback();
-  }, []);
-
-  async function processCallback() {
+  const processCallback = useCallback(async () => {
     try {
       const intentRaw = await AsyncStorage.getItem('bocara_pending_intent');
       const intent = intentRaw ? JSON.parse(intentRaw) : null;
@@ -137,7 +133,11 @@ export default function AuthCallbackScreen() {
       setState('error');
       setTimeout(() => router.replace('/login'), 4000);
     }
-  }
+  }, [router, setSession]);
+
+  useEffect(() => {
+    processCallback();
+  }, [processCallback]);
 
   if (state === 'confirmed') {
     const esRestaurante = intentRole === 'restaurante';

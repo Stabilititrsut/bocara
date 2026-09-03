@@ -8,6 +8,38 @@ const { getReservadoPendiente, getReservasMap } = require('../services/stock');
 const { obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
+function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
+  if (datos.nombre !== undefined && (typeof datos.nombre !== 'string' || datos.nombre.trim().length < 2 || datos.nombre.trim().length > 120))
+    return 'El nombre debe tener entre 2 y 120 caracteres';
+
+  for (const campo of ['precio_original', 'precio_descuento']) {
+    if (datos[campo] !== undefined && (!Number.isFinite(Number(datos[campo])) || Number(datos[campo]) <= 0))
+      return `${campo} debe ser mayor que cero`;
+  }
+  if (datos.precio_original !== undefined && datos.precio_descuento !== undefined &&
+      Number(datos.precio_descuento) > Number(datos.precio_original))
+    return 'El precio con descuento no puede ser mayor que el precio original';
+
+  if (datos.cantidad_disponible !== undefined) {
+    const cantidad = Number(datos.cantidad_disponible);
+    const minimo = permiteCantidadCero ? 0 : 1;
+    if (!Number.isInteger(cantidad) || cantidad < minimo || cantidad > 999)
+      return `La cantidad debe ser un entero entre ${minimo} y 999`;
+  }
+  if (datos.peso_estimado_kg !== undefined && datos.peso_estimado_kg !== '' &&
+      (!Number.isFinite(Number(datos.peso_estimado_kg)) || Number(datos.peso_estimado_kg) <= 0 || Number(datos.peso_estimado_kg) > 100))
+    return 'El peso estimado debe ser mayor que 0 y menor o igual a 100 kg';
+
+  const timeRe = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
+  if (datos.hora_recogida_inicio && !timeRe.test(datos.hora_recogida_inicio)) return 'Hora de inicio inválida';
+  if (datos.hora_recogida_fin && !timeRe.test(datos.hora_recogida_fin)) return 'Hora de finalización inválida';
+  if (datos.hora_recogida_inicio && datos.hora_recogida_fin && datos.hora_recogida_inicio >= datos.hora_recogida_fin)
+    return 'La hora de finalización debe ser posterior a la hora de inicio';
+  if (datos.fecha_caducidad && !/^\d{4}-\d{2}-\d{2}$/.test(datos.fecha_caducidad))
+    return 'La fecha de caducidad debe usar el formato AAAA-MM-DD';
+  return null;
+}
+
 async function getNegocioIdParaUsuario(usuarioId) {
   const { data } = await supabase.from('negocios').select('id').eq('propietario_id', usuarioId).single();
   return data?.id || null;
@@ -67,7 +99,7 @@ router.get('/', async (req, res) => {
 
   let query = supabase
     .from('bolsas')
-    .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)`)
+    .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,activo,estado_verificacion)`)
     .order('created_at', { ascending: false });
 
   if (mi_negocio !== 'true') {
@@ -90,8 +122,8 @@ router.get('/', async (req, res) => {
     // Fallback sin columnas opcionales (estado_aprobacion puede no existir aún)
     let q2 = supabase
       .from('bolsas')
-      .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url)`)
-      .gt('cantidad_disponible', 0);
+      .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,activo,estado_verificacion)`);
+    if (mi_negocio !== 'true') q2 = q2.eq('activo', true).gt('cantidad_disponible', 0);
     if (nIdOwner) q2 = q2.eq('negocio_id', nIdOwner);
     else if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
     const r = await q2;
@@ -105,7 +137,8 @@ router.get('/', async (req, res) => {
 
   // Solo bolsas de negocios activos/aprobados (excepto cuando el restaurante consulta sus propias bolsas)
   if (mi_negocio !== 'true') {
-    resultado = resultado.filter(b => b.negocios?.activo !== false);
+    resultado = resultado.filter(b => b.negocios?.activo === true &&
+      (b.negocios?.estado_verificacion === 'aprobado' || b.negocios?.estado_verificacion == null));
   }
 
   // Inyectar cantidad_disponible_real = cantidad_disponible DB − reservas de pedidos pendientes
@@ -241,6 +274,16 @@ router.post('/', authMiddleware, async (req, res) => {
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
+  const errorValidacion = validarDatosBolsa({
+    nombre, precio_original, precio_descuento,
+    cantidad_disponible: cantidad_disponible ?? 1,
+    peso_estimado_kg: peso_estimado_kg ?? 0.5,
+    hora_recogida_inicio: hora_recogida_inicio || '18:00',
+    hora_recogida_fin: hora_recogida_fin || '20:00',
+    fecha_caducidad,
+  });
+  if (errorValidacion) return res.status(400).json({ error: errorValidacion });
+
   const { data: negocio } = await supabase
     .from('negocios').select('id,categoria').eq('propietario_id', req.usuario.id).single();
   // Admins pueden especificar negocio_id; restaurantes solo pueden usar su propio negocio
@@ -280,10 +323,10 @@ router.post('/', authMiddleware, async (req, res) => {
   let { data, error } = await supabase
     .from('bolsas')
     .insert([{
-      negocio_id: nId, nombre, descripcion, contenido,
+      negocio_id: nId, nombre: nombre.trim(), descripcion, contenido,
       precio_original: parseFloat(precio_original),
       precio_descuento: parseFloat(precio_descuento),
-      cantidad_disponible: parseInt(cantidad_disponible) || 1,
+      cantidad_disponible: cantidad_disponible == null ? 1 : Number(cantidad_disponible),
       tipo: tipo || 'bolsa', categoria,
       hora_recogida_inicio: hora_recogida_inicio || '18:00',
       hora_recogida_fin: hora_recogida_fin || '20:00',
@@ -312,10 +355,10 @@ router.post('/', authMiddleware, async (req, res) => {
     const r = await supabase
       .from('bolsas')
       .insert([{
-        negocio_id: nId, nombre, descripcion, contenido,
+        negocio_id: nId, nombre: nombre.trim(), descripcion, contenido,
         precio_original: parseFloat(precio_original),
         precio_descuento: parseFloat(precio_descuento),
-        cantidad_disponible: parseInt(cantidad_disponible) || 1,
+        cantidad_disponible: cantidad_disponible == null ? 1 : Number(cantidad_disponible),
         tipo: tipo || 'bolsa', categoria,
         hora_recogida_inicio: hora_recogida_inicio || '18:00',
         hora_recogida_fin: hora_recogida_fin || '20:00',
@@ -349,7 +392,7 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa, error: bolsaErr } = await supabase
     .from('bolsas')
-    .select('negocio_id, estado_aprobacion, motivo_rechazo, peso_estimado_kg, categoria_alimento')
+    .select('negocio_id, estado_aprobacion, motivo_rechazo, peso_estimado_kg, categoria_alimento, nombre, precio_original, precio_descuento, cantidad_disponible, hora_recogida_inicio, hora_recogida_fin, fecha_caducidad')
     .eq('id', req.params.id)
     .single();
   console.log('[PUT /bolsas/:id] id=%s usuario=%s error=%s', req.params.id, req.usuario?.id, bolsaErr?.message);
@@ -383,6 +426,14 @@ router.put('/:id', authMiddleware, async (req, res) => {
     'es_destacado','es_mas_vendido','es_precio_bajo','peso_estimado_kg'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
+
+  const datosResultantes = { ...bolsa, ...updates };
+  const errorValidacion = validarDatosBolsa(datosResultantes, { permiteCantidadCero: true });
+  if (errorValidacion) return res.status(400).json({ error: errorValidacion });
+  if (updates.nombre !== undefined) updates.nombre = updates.nombre.trim();
+  for (const campo of ['precio_original', 'precio_descuento', 'cantidad_disponible', 'peso_estimado_kg']) {
+    if (updates[campo] !== undefined && updates[campo] !== '') updates[campo] = Number(updates[campo]);
+  }
 
   // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
   // de limpieza (server.js) — se setea al apagar el switch de visibilidad y se

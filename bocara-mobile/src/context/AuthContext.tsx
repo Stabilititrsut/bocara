@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authAPI } from '../services/api';
 import { onSessionInvalid } from '../services/sessionEvents';
+import { deleteAuthToken, getAuthToken, setAuthToken } from '../services/authTokenStorage';
 import { CART_KEY_PREFIX } from './CartContext';
 import { Usuario } from '../types';
 
@@ -39,10 +40,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [usuario]);
 
   async function handleSessionInvalid(message: string) {
-    const keysToRemove = ['bocara_token', PERFIL_KEY];
+    const keysToRemove = [PERFIL_KEY];
     if (usuario?.id) keysToRemove.push(`${CART_KEY_PREFIX}${usuario.id}`);
     try {
-      await AsyncStorage.multiRemove(keysToRemove);
+      await Promise.all([AsyncStorage.multiRemove(keysToRemove), deleteAuthToken()]);
       await AsyncStorage.setItem(SESSION_MESSAGE_KEY, message);
     } catch (error) {
       console.warn('handleSessionInvalid: fallo al limpiar AsyncStorage', error);
@@ -58,7 +59,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function cargarSesion() {
     try {
       const [t, perfilJson] = await Promise.all([
-        AsyncStorage.getItem('bocara_token'),
+        getAuthToken(),
         AsyncStorage.getItem(PERFIL_KEY),
       ]);
       if (!t) return;
@@ -81,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(res.data));
     } catch {
       await Promise.all([
-        AsyncStorage.removeItem('bocara_token'),
+        deleteAuthToken(),
         AsyncStorage.removeItem(PERFIL_KEY),
       ]);
     } finally {
@@ -100,7 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     }
     await Promise.all([
-      AsyncStorage.setItem('bocara_token', t),
+      setAuthToken(t),
       AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
     ]);
     setToken(t);
@@ -111,7 +112,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await authAPI.registroCliente(data);
     const { token: t, usuario: u } = res.data;
     await Promise.all([
-      AsyncStorage.setItem('bocara_token', t),
+      setAuthToken(t),
       AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
     ]);
     setToken(t);
@@ -122,26 +123,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await authAPI.registroRestaurante(data);
     const { token: t, usuario: u } = res.data;
     await Promise.all([
-      AsyncStorage.setItem('bocara_token', t),
+      setAuthToken(t),
       AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
     ]);
     setToken(t);
     setUsuario(u);
   }
 
-  async function setSession(t: string, u: Usuario) {
+  const setSession = useCallback(async (t: string, u: Usuario) => {
     await Promise.all([
-      AsyncStorage.setItem('bocara_token', t),
+      setAuthToken(t),
       AsyncStorage.setItem(PERFIL_KEY, JSON.stringify(u)),
     ]);
     setToken(t);
     setUsuario(u);
-  }
+  }, []);
 
  async function logout() {
     try {
       await Promise.all([
-        AsyncStorage.removeItem('bocara_token'),
+        deleteAuthToken(),
         AsyncStorage.removeItem(PERFIL_KEY),
       ]);
     } catch (error) {

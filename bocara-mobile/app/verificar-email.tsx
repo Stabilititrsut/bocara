@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -68,7 +68,7 @@ export default function VerificarEmailScreen() {
     setReenvioSegundos(60);
     try {
       await authAPI.enviarOtpEmail(email);
-    } catch (e: any) {
+    } catch {
       setErrorMsg('No se pudo reenviar el código. Intenta más tarde.');
     }
   }

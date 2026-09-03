@@ -1,7 +1,6 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
 import { emitSessionInvalid } from './sessionEvents';
+import { getAuthToken } from './authTokenStorage';
 
 // La URL de producción es siempre el fallback — __DEV__ nunca se usa para la URL
 // para evitar que bocara.vercel.app apunte a localhost por error de bundler.
@@ -18,7 +17,7 @@ const api = axios.create({
 });
 
 api.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('bocara_token');
+  const token = await getAuthToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -145,7 +144,7 @@ export const pagosAPI = {
   crearIntent: (data: { bolsa_id: string; tipo_entrega: string; direccion_envio?: any }) =>
     api.post('/pagos/crear-intent', data),
   cubopago: (data: {
-    items?: Array<{ bolsa_id: string; cantidad: number }>;
+    items?: { bolsa_id: string; cantidad: number }[];
     bolsa_id?: string;
     cantidad?: number;
     tipo_entrega: string;
@@ -153,7 +152,7 @@ export const pagosAPI = {
     propina?: number;
   }) => api.post('/pagos/cubopago', data),
   preparar: (data: {
-    items?: Array<{ bolsa_id: string; cantidad: number }>;
+    items?: { bolsa_id: string; cantidad: number }[];
     bolsa_id?: string;
     cantidad?: number;
     tipo_entrega: string;

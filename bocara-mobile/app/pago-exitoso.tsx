@@ -64,7 +64,7 @@ export default function PagoExitosoScreen() {
     }, 3000);
 
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
-  }, [resultado, pedidoId]);
+  }, [resultado, pedidoId, limpiar, router]);
 
   function irAPedidos()  { stopPolling(); router.replace('/(tabs)/pedidos' as any); }
   function irAlInicio()  { stopPolling(); router.replace('/' as any);               }

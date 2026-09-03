@@ -80,11 +80,18 @@ async function authMiddleware(req, res, next) {
   catch { return res.status(401).json({ error: 'Token inválido' }); }
 
   try {
-    if (await estaSuspendido(usuario.id)) {
+    const datosActuales = await obtenerUsuarioCacheado(usuario.id);
+    if (datosActuales === null) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+    if (datosActuales && (datosActuales.rol === 'suspendido' || datosActuales.activo === false)) {
       return res.status(401).json({ error: MENSAJE_SUSPENDIDO });
     }
+    // El rol del JWT puede quedar obsoleto después de una degradación o
+    // rehabilitación. Usar el rol vigente de la base de datos cuando está disponible.
+    if (datosActuales?.rol) usuario.rol = datosActuales.rol;
   } catch (err) {
-    console.error('[authMiddleware] estaSuspendido falló, dejando pasar (fail-open):', err.message);
+    console.error('[authMiddleware] validación de usuario falló, dejando pasar (fail-open):', err.message);
   }
 
   req.usuario = usuario;
