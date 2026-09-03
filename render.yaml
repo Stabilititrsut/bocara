@@ -26,7 +26,7 @@ services:
         generateValue: false  # set manually in Render dashboard
         sync: false
       - key: JWT_EXPIRES_IN
-        value: 7d
+        value: 100d
 
       # Email (Resend — reemplaza Gmail SMTP, bloqueado/degradado en Render)
       - key: RESEND_API_KEY

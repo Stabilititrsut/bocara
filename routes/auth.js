@@ -11,7 +11,7 @@ const {
   otpVerifyLimiter, setupLimiter, checkEmailLimiter,
 } = require('../middleware/rateLimit');
 const router = express.Router();
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '100d';
 
 async function generarCodigoReferido(usuarioId) {
   // Retry hasta 3 veces ante colisión de código (UNIQUE)
