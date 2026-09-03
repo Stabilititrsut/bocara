@@ -40,6 +40,9 @@ export default function AdminLiquidacionesScreen() {
 
   async function confirmarPago() {
     if (!modalPago) return;
+    if (!referencia.trim()) {
+      return Alert.alert('Falta el comprobante', 'Ingresa la referencia de la transferencia bancaria realizada.');
+    }
     setProcesando(modalPago.negocio_id);
     setModalPago(null);
     try {
@@ -166,7 +169,7 @@ export default function AdminLiquidacionesScreen() {
                   >
                     {procesando === r.negocio_id
                       ? <ActivityIndicator color={Colors.white} size="small" />
-                      : <Text style={s.btnPagarText}>💸 Marcar como pagado · Q{r.neto.toFixed(2)}</Text>
+                      : <Text style={s.btnPagarText}>💸 Registrar transferencia · Q{r.neto.toFixed(2)}</Text>
                     }
                   </TouchableOpacity>
                 </View>
@@ -225,7 +228,7 @@ export default function AdminLiquidacionesScreen() {
       <Modal visible={!!modalPago} transparent animationType="slide" onRequestClose={() => setModalPago(null)}>
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
-            <Text style={s.modalTitle}>Confirmar pago</Text>
+            <Text style={s.modalTitle}>Registrar transferencia realizada</Text>
             <Text style={s.modalNombre}>{modalPago?.nombre}</Text>
 
             <View style={s.modalResumen}>
@@ -251,7 +254,7 @@ export default function AdminLiquidacionesScreen() {
               )}
             </View>
 
-            <Text style={s.modalLabel}>Número de referencia / comprobante (opcional)</Text>
+            <Text style={s.modalLabel}>Número de referencia / comprobante</Text>
             <TextInput
               style={s.modalInput}
               placeholder="Ej: TRF-202501-0042"
@@ -266,7 +269,7 @@ export default function AdminLiquidacionesScreen() {
                 <Text style={s.modalCancelarText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.modalConfirmar} onPress={confirmarPago}>
-                <Text style={s.modalConfirmarText}>Confirmar pago</Text>
+                <Text style={s.modalConfirmarText}>Registrar como pagado</Text>
               </TouchableOpacity>
             </View>
           </View>

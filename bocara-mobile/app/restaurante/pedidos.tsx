@@ -20,6 +20,7 @@ const ESTADO_COLORS: Record<string, string> = {
   en_preparacion: '#7C3AED', listo: Colors.green,
   completado: Colors.textSecondary, recogido: Colors.textSecondary, cancelado: Colors.error,
 };
+const PEDIDOS_POLL_MS = 5000;
 
 function QRScannerModal({ visible, onClose, onScanned }: {
   visible: boolean; onClose: () => void; onScanned: (code: string) => void;
@@ -125,9 +126,9 @@ export default function PedidosRestauranteScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  // Polling cada 10 segundos para detectar nuevos pedidos
+  // Respaldo web para detectar pedidos y cambios aunque el push no esté disponible.
   useEffect(() => {
-    pollingRef.current = setInterval(cargar, 15000);
+    pollingRef.current = setInterval(cargar, PEDIDOS_POLL_MS);
     return () => clearInterval(pollingRef.current);
   }, [cargar]);
 

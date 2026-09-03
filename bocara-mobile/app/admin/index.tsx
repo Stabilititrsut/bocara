@@ -145,13 +145,15 @@ export default function AdminDashboard() {
   }, []);
 
   const comision         = stats?.comision_generada || 0; // total Bocara NETO: comisión 25% + cargo plataforma 3.5% − descuentos de cupón
-  const ingresos         = stats?.ingresos_totales  || 0;
+  const totalCobrado     = stats?.ingresos_totales  || 0;
+  const ventasBrutas     = stats?.ventas_brutas_productos ?? Math.max(0, totalCobrado - (stats?.propinas_totales || 0) - (stats?.cargo_plataforma || 0) + (stats?.descuentos_cupon || 0));
   const comisionBocaraQ  = stats?.comision_bocara   || 0;
   const cargoPlataforma  = stats?.cargo_plataforma  || 0;
   const propinas         = stats?.propinas_totales  || 0;
   const pagoRestaurantes = stats?.pago_restaurantes || 0; // 75% + propinas + envío
   const restaurante75    = pagoRestaurantes - propinas;   // solo la parte del 75% + envío, sin propina
   const descuentosCupon  = stats?.descuentos_cupon  || 0; // absorbido por Bocara, nunca por el restaurante
+  const costosEnvio      = stats?.costos_envio      || 0;
   const comisionEsPerdida = comision < 0;
   const resumen   = financiero?.resumen || [];
   const chartData = buildChartData(pedidos);
@@ -207,7 +209,7 @@ export default function AdminDashboard() {
               </View>
             ))
           ) : [
-            { label: 'Ventas brutas',   val: `Q${ingresos.toFixed(2)}`,    sub: 'desde el inicio',     color: TEXT,   icon: 'trending-up'     as any },
+            { label: 'Cobrado a clientes', val: `Q${totalCobrado.toFixed(2)}`, sub: 'desde el inicio', color: TEXT, icon: 'trending-up' as any },
             { label: comisionEsPerdida ? 'Bocara: PÉRDIDA' : 'Comisión Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, sub: descuentosCupon > 0 ? `neto de -Q${descuentosCupon.toFixed(2)} en cupones` : `${comisionPct}% + 3.5% plataforma`, color: comisionEsPerdida ? '#DC2626' : GOLD, icon: comisionEsPerdida ? 'alert-circle' : 'wallet' as any },
             { label: 'Restaurantes',    val: stats?.negocios_activos || 0, sub: 'activos',             color: GREEN,  icon: 'storefront'      as any },
             { label: 'Pedidos totales', val: stats?.total_pedidos || 0,    sub: `${stats?.pedidos_completados || 0} completados`, color: BLUE, icon: 'bag-check' as any },
@@ -222,7 +224,7 @@ export default function AdminDashboard() {
         </View>
 
         {/* Gráfico */}
-        <Text style={s.sectionTitle}>Ventas últimos 7 días</Text>
+        <Text style={s.sectionTitle}>Cobrado a clientes — últimos 7 días</Text>
         <View style={[card(), s.chartCard]}>
           {skelFin
             ? <Sk h={120} r={8} />
@@ -243,16 +245,20 @@ export default function AdminDashboard() {
         </Text>
         <View style={[card(), { marginBottom: 20 }]}>
           {[
-            { label: 'Ventas brutas',                        val: `Q${ingresos.toFixed(2)}`,          color: TEXT  },
-            { label: `— Comisión Bocara (${comisionPct}%)`,   val: `Q${comisionBocaraQ.toFixed(2)}`,   color: GOLD  },
-            { label: '— Cargo de plataforma (3.5%)',          val: `Q${cargoPlataforma.toFixed(2)}`,   color: GOLD  },
+            { label: 'Ventas brutas (solo productos)',       val: `Q${ventasBrutas.toFixed(2)}`,      color: TEXT  },
+            { label: `Comisión Bocara (${comisionPct}% del producto)`, val: `Q${comisionBocaraQ.toFixed(2)}`, color: GOLD },
+            { label: 'Cargo al cliente (3.5%)',               val: `Q${cargoPlataforma.toFixed(2)}`,   color: GOLD  },
             ...(descuentosCupon > 0 ? [
               { label: '— Descuentos de cupón (Bocara los absorbe)', val: `-Q${descuentosCupon.toFixed(2)}`, color: '#DC2626' },
             ] : []),
             { label: comisionEsPerdida ? 'Total Bocara — PÉRDIDA' : 'Total Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, color: comisionEsPerdida ? '#DC2626' : GOLD, bold: true },
             { label: `— Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${restaurante75.toFixed(2)}`, color: GREEN },
+            ...(costosEnvio > 0 ? [
+              { label: '— Incluye envíos para restaurantes', val: `Q${costosEnvio.toFixed(2)}`, color: GREEN },
+            ] : []),
             { label: '— Propinas (100% restaurante)',         val: `Q${propinas.toFixed(2)}`,          color: GREEN },
             { label: 'Total a restaurantes',                  val: `Q${pagoRestaurantes.toFixed(2)}`,  color: GREEN, bold: true },
+            { label: 'Total cobrado a clientes',              val: `Q${totalCobrado.toFixed(2)}`,      color: TEXT, bold: true },
           ].map(({ label, val, color, bold }, i, arr) => (
             <View key={label} style={[s.finRow, i < arr.length - 1 && s.finRowBorder]}>
               <Text style={[s.finLabel, bold && { fontWeight: '800', color: TEXT }]}>{label}</Text>

@@ -3,6 +3,7 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { guardarNotificacion } = require('../services/notificaciones');
+const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -267,7 +268,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   // estado IN (completado,recogido) sin verificar pago real ni excluir cancelados.
   let query = supabase
     .from('pedidos')
-    .select('id,total,precio_bolsa,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,created_at')
+    .select('id,total,precio_bolsa,cantidad,costo_envio,descuento_cupon,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,created_at')
     .eq('negocio_id', negocio.id)
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
@@ -283,10 +284,11 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   // después de una venta. Antes esta ruta ni siquiera seleccionaba la columna
   // `propina`, así que total_propinas siempre daba 0 aunque hubiera propinas reales,
   // y usaba fracciones fijas 0.25/0.75 en vez de la comisión configurada.
-  const bruto           = ventas.reduce((s, p) => s + (p.precio_bolsa || 0), 0); // producto, sin propina
+  const bruto           = ventas.reduce((s, p) => s + obtenerSubtotalProductos(p), 0); // producto, sin propina
   const comisionBocara  = ventas.reduce((s, p) => s + (p.comision_bocara   || 0), 0);
   const cargoPlataforma = ventas.reduce((s, p) => s + (p.comision_pasarela || 0), 0); // informativo — nunca sale del restaurante
   const totalPropinas   = ventas.reduce((s, p) => s + (p.propina || 0), 0);
+  const totalEnvios     = ventas.reduce((s, p) => s + aNumero(p.costo_envio), 0);
   const netoVentas       = bruto - comisionBocara; // 75% del producto, sin propina
   // "Lo que recibirás" se lee tal cual quedó guardado al confirmar el pago — nunca
   // recalculado. Un pedido Cubo-verificado sin monto_neto_restaurante sería un dato
@@ -316,6 +318,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
       cargo_plataforma: parseFloat(cargoPlataforma.toFixed(2)), // no afecta el pago al restaurante — informativo
       neto_restaurante: parseFloat(netoVentas.toFixed(2)),   // 75% del producto, sin propina
       total_propinas: parseFloat(totalPropinas.toFixed(2)),
+      total_envios: parseFloat(totalEnvios.toFixed(2)),
       total_a_recibir: parseFloat(totalARecibir.toFixed(2)), // 75% + propina — lo que realmente se le paga
       pedidos_sin_desglose: ventasSinDesglose.length, // pedidos excluidos de total_a_recibir por falta de dato — debería ser 0
     },
@@ -515,4 +518,3 @@ router.get('/mi-negocio/cambios-pendientes', authMiddleware, async (req, res) =>
 });
 
 module.exports = router;
-
