@@ -98,6 +98,9 @@ export default function GananciasScreen() {
             { label: 'Ventas brutas (producto)', val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
             { label: 'Comisión Bocara (25%)',    val: -(resumen.comision_bocara || 0),  color: Colors.error, neg: true },
             { label: 'Tu ganancia por ventas (75%)', val: resumen.neto_restaurante || 0, color: Colors.textPrimary },
+            ...(resumen.total_envios > 0 ? [
+              { label: 'Envíos recibidos (100%)', val: resumen.total_envios, color: '#22C55E' },
+            ] : []),
             ...(resumen.total_propinas > 0 ? [
               { label: 'Propinas recibidas (100%)', val: resumen.total_propinas, color: '#22C55E' },
             ] : []),
