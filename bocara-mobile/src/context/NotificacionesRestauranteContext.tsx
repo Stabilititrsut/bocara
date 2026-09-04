@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { notificacionesAPI } from '../services/api';
 
 // Tipos que el panel de restaurante sabe mostrar. Debe reflejar la misma
-// lista que el backend usa para filtrar (routes/notificaciones.js
+// lista que el backend usa para filtrar (backend/routes/notificaciones.js
 // TIPOS_RESTAURANTE) — se repite aquí solo como defensa extra, no como
 // única fuente de verdad.
 const TIPOS_RESTAURANTE = new Set([

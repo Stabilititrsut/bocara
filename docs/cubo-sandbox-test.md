@@ -1,9 +1,14 @@
 # Cubo Pago — Guía de integración y pruebas
 
-**Proyecto:** Bocara  
-**Backend:** https://bocara.onrender.com  
-**Frontend:** https://bocarafood.com  
-**Webhook URL (configurar en Cubo Admin):** `https://bocara.onrender.com/api/webhooks/cubo`
+> **Referencia histórica de sandbox:** no ejecutar contra producción. El flujo productivo actual ya está activo y se valida con las pruebas automatizadas del backend.
+
+**Proyecto:** Bocara
+
+**Backend:** https://api.bocarafood.com
+
+**Frontend:** https://bocarafood.com
+
+**Webhook URL (configurar en Cubo Admin):** `https://api.bocarafood.com/api/webhooks/cubo`
 
 ---
 
@@ -185,7 +190,7 @@ ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS cubo_reference_id text;
 ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS pagado_en timestamptz;
 ```
 
-Después de correr la migración, agregar estos campos al UPDATE en `routes/webhooks.js`.
+Después de correr la migración, agregar estos campos al UPDATE en `backend/routes/webhooks.js`.
 
 ---
 

@@ -1,4 +1,4 @@
-import axios from 'axios';
+import { create } from 'axios';
 import { emitSessionInvalid } from './sessionEvents';
 import { getAuthToken } from './authTokenStorage';
 
@@ -7,7 +7,7 @@ import { getAuthToken } from './authTokenStorage';
 export const API_BASE_URL: string =
   process.env.EXPO_PUBLIC_API_URL || 'https://bocara.onrender.com/api';
 
-const api = axios.create({
+const api = create({
   baseURL: API_BASE_URL,
   // 75 s: el cold start de Render free tier puede superar los 90 s medidos
   // en producción (no los ~20-50 s asumidos originalmente), y encima algunos
@@ -39,7 +39,7 @@ api.interceptors.response.use(
       error.status = null;
       return Promise.reject(error);
     }
-    // middleware/auth.js (y su duplicado en routes/bolsas.js) son los únicos
+    // backend/middleware/auth.js (y su duplicado en backend/routes/bolsas.js) son los únicos
     // lugares del backend que devuelven estos dos mensajes exactos con 401 —
     // ambos significan que SÍ se mandó un token y el backend lo rechazó
     // (expirado, secreto rotado, firma inválida, o cuenta suspendida/inactiva
@@ -52,7 +52,7 @@ api.interceptors.response.use(
     // había una sesión activa, y tratarlos igual causaría que un login fallido
     // redirija a /login con un mensaje engañoso de "tu sesión expiró".
     //
-    // Estos dos strings deben coincidir EXACTO con middleware/auth.js — son
+    // Estos dos strings deben coincidir EXACTO con backend/middleware/auth.js — son
     // proyectos/bundles separados (backend Node vs. app Expo), no se pueden
     // importar directo, así que si cambian allá hay que actualizarlos acá.
     const MENSAJES_SESION_MUERTA: Record<string, string> = {

@@ -13,20 +13,20 @@ jobs:
   backend:
     name: Backend
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: backend/package-lock.json
       - run: npm ci
       - name: Validar sintaxis
-        run: node --check server.js && find routes services middleware scripts -maxdepth 2 -type f -name '*.js' -print0 | xargs -0 -n1 node --check
-      - name: Probar checkout
-        run: node scripts/test-checkout-validation.js
-      - name: Probar webhook Cubo
-        run: node scripts/test-webhook-cubo.js
-      - name: Probar desglose financiero
+        run: npm run check
+      - name: Ejecutar pruebas
         run: npm test
 
   mobile:
