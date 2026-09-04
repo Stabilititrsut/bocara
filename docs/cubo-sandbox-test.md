@@ -4,11 +4,11 @@
 
 **Proyecto:** Bocara
 
-**Backend:** https://api.bocarafood.com
+**Backend:** https://bocara.onrender.com
 
 **Frontend:** https://bocarafood.com
 
-**Webhook URL (configurar en Cubo Admin):** `https://api.bocarafood.com/api/webhooks/cubo`
+**Webhook URL (configurar en Cubo Admin):** `https://bocara.onrender.com/api/webhooks/cubo`
 
 ---
 
