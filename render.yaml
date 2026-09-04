@@ -55,7 +55,7 @@ services:
       - key: BOCARA_COMMISSION_PERCENT
         value: "25"
       - key: API_BASE_URL
-        value: https://api.bocarafood.com
+        value: https://bocara.onrender.com
       - key: FRONTEND_URL
         value: https://bocarafood.com
 
