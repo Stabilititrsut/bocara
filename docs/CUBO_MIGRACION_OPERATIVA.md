@@ -1,7 +1,9 @@
 # Bocara — Procedimiento operativo de migración Cubo Pago
 
+> **Referencia histórica:** la migración de Cubo ya fue aplicada en producción. No vuelvas a ejecutar este procedimiento completo sobre la base activa. Úsalo únicamente para auditoría o recuperación, con respaldo y autorización explícita.
+
 **Commit auditado:** `a6b3c12d`
-**Archivo de migración:** `sql/cubo-pago-schema.sql`
+**Archivo de migración:** `backend/sql/cubo-pago-schema.sql`
 **Moneda:** GTQ (quetzales, confirmado por Cubo Pago Guatemala)
 **Estado de pagos:** `CUBO_PAYMENTS_ENABLED=false` durante todo el proceso
 
@@ -9,15 +11,13 @@
 
 ## Archivo único de migración
 
-```
-C:\Users\Monica\bocara\sql\cubo-pago-schema.sql
-```
+`backend/sql/cubo-pago-schema.sql`
 
 Este es el único archivo que debe ejecutarse. No ejecutar ningún otro.
 
 **No ejecutar bajo ninguna circunstancia:**
 ```
-sql/cubo-pago-multi-item-opcional.sql
+backend/sql/cubo-pago-multi-item-opcional.sql
 ```
 
 ---
@@ -47,7 +47,7 @@ webhook, RPC, inventario, puntos, notificaciones, idempotencia.
 
 ### A.1 Introspección previa (solo lectura)
 
-1. Abrir `sql/introspect-schema.sql` en el editor de texto.
+1. Abrir `backend/sql/introspect-schema.sql` en el editor de texto.
 2. Copiar todo el contenido.
 3. Supabase → SQL Editor → **New query**.
 4. Pegar y ejecutar.
@@ -82,7 +82,7 @@ La presencia parcial de columnas Cubo por sí sola **no es motivo de detención*
 
 ### A.2 Ejecución de la migración
 
-1. Abrir `sql/cubo-pago-schema.sql` en el editor de texto.
+1. Abrir `backend/sql/cubo-pago-schema.sql` en el editor de texto.
 2. Copiar **todo** el contenido (Ctrl+A, Ctrl+C).
 3. Supabase → SQL Editor → **New query** (pestaña nueva, separada de la de introspección).
 4. Pegar el contenido completo (Ctrl+V).
@@ -342,7 +342,7 @@ Si aparece `true`, hay un problema de configuración en Render — no continuar.
 ## Plan de reversión
 
 Si es necesario revertir la migración, el bloque comentado al final de
-`sql/cubo-pago-schema.sql` contiene el SQL de rollback completo.
+`backend/sql/cubo-pago-schema.sql` contiene el SQL de rollback completo.
 Ejecutar **solo si es necesario** — afecta datos reales.
 
 ---
@@ -352,7 +352,7 @@ Ejecutar **solo si es necesario** — afecta datos reales.
 ```
 PARTE A — VALIDACIÓN DE MIGRACIÓN
 
-[ ] 1.  Abrir sql/introspect-schema.sql
+[ ] 1.  Abrir backend/sql/introspect-schema.sql
 [ ] 2.  Copiar todo el contenido
 [ ] 3.  Supabase → SQL Editor → New query
 [ ] 4.  Pegar y ejecutar
@@ -368,7 +368,7 @@ PARTE A — VALIDACIÓN DE MIGRACIÓN
         (si hay duplicados → detener, resolver antes de continuar)
 [ ] 10. Si tipos de columnas existentes son incompatibles → detener
 
-[ ] 11. Abrir sql/cubo-pago-schema.sql (único archivo de migración)
+[ ] 11. Abrir backend/sql/cubo-pago-schema.sql (único archivo de migración)
 [ ] 12. Copiar TODO el contenido del archivo (Ctrl+A, Ctrl+C)
 [ ] 13. Supabase → SQL Editor → New query (pestaña nueva)
 [ ] 14. Pegar el contenido completo
@@ -412,7 +412,7 @@ PARTE B — PRUEBA DEL BLOQUEO DE PAGOS
 NO EJECUTAR
 
 [ ] ✗   No activar CUBO_PAYMENTS_ENABLED=true
-[ ] ✗   No ejecutar sql/cubo-pago-multi-item-opcional.sql
+[ ] ✗   No ejecutar backend/sql/cubo-pago-multi-item-opcional.sql
 [ ] ✗   No hacer transacciones reales con Cubo
 [ ] ✗   No modificar datos históricos
 [ ] ✗   No cambiar variables en Render sin autorización expresa
