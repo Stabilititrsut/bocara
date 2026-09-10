@@ -10,6 +10,7 @@ import { bolsasAPI, resenasAPI, favoritosAPI } from '@/src/services/api';
 import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useCart } from '@/src/context/CartContext';
+import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 
@@ -138,7 +139,7 @@ export default function ProductoScreen() {
   const [toggleandoFav, setToggleandoFav] = useState(false);
   const [horario, setHorario] = useState<ReturnType<typeof calcularEstadoHorario> | null>(null);
   const [tab, setTab] = useState<'info' | 'resenas'>('info');
-  const { agregar, items } = useCart();
+  const { agregar, items, loaded: cartLoaded } = useCart();
   const { usuario } = useAuth();
   const { haversine, formatDistancia } = useLocation();
   const router = useRouter();
@@ -256,11 +257,7 @@ export default function ProductoScreen() {
       Alert.alert('Compra no disponible', 'Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente.');
       return;
     }
-    if (enCarrito && enCarrito.cantidad >= bolsa.cantidad_disponible) {
-      Alert.alert('Sin stock', `Solo quedan ${bolsa.cantidad_disponible} unidades disponibles.`);
-      return;
-    }
-    agregar(bolsa!);
+    if (mostrarErrorCarrito(agregar(bolsa))) return;
     Alert.alert('¡Agregado!', `${bolsa!.nombre} está en tu carrito 🛒`, [
       { text: 'Seguir viendo', style: 'cancel' },
       { text: 'Ver carrito', onPress: () => router.push('/(tabs)/carrito') },
@@ -557,9 +554,9 @@ export default function ProductoScreen() {
             </Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={s.footerBtn} onPress={handleAgregar} activeOpacity={0.85}>
+          <TouchableOpacity style={s.footerBtn} onPress={handleAgregar} activeOpacity={0.85} disabled={!cartLoaded}>
             <Ionicons name="bag-add-outline" size={18} color={Colors.white} />
-            <Text style={s.footerBtnText}>Agregar al carrito · Q{bolsa.precio_descuento}</Text>
+            <Text style={s.footerBtnText}>{cartLoaded ? `Agregar al carrito · Q${bolsa.precio_descuento}` : 'Cargando carrito...'}</Text>
           </TouchableOpacity>
         )}
       </View>

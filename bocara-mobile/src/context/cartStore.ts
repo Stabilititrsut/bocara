@@ -1,0 +1,148 @@
+import type { Bolsa, CartItem } from '../types';
+
+export type ResultadoAgregar =
+  | { ok: true }
+  | { ok: false; motivo: 'no_cargado' | 'otro_negocio' | 'agotado' | 'limite_stock' | 'stock_invalido' | 'producto_invalido' };
+
+interface Storage {
+  getItem: (key: string) => Promise<string | null>;
+  setItem: (key: string, value: string) => Promise<unknown>;
+}
+
+export interface CartSnapshot {
+  items: CartItem[];
+  loaded: boolean;
+  storageError: 'lectura' | 'escritura' | null;
+}
+
+// Cada clave espera sus escrituras anteriores, incluso si su provider se remontó.
+export function createCartPersistence(storage: Storage) {
+  const writes = new Map<string, Promise<void>>();
+  return {
+    async read(key: string) {
+      await writes.get(key);
+      return storage.getItem(key);
+    },
+    write(key: string, items: CartItem[], done: (failed: boolean) => void) {
+      const value = JSON.stringify(items);
+      const pending = (writes.get(key) ?? Promise.resolve())
+        .then(() => storage.setItem(key, value))
+        .then(() => { done(false); }, () => {
+          console.warn('[Carrito] No se pudo guardar el carrito local.');
+          done(true);
+        });
+      writes.set(key, pending);
+      void pending.then(() => { if (writes.get(key) === pending) writes.delete(key); });
+    },
+  };
+}
+
+export function stockLocal(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function productoValido(bolsa: Bolsa): boolean {
+  return !!bolsa && typeof bolsa.id === 'string' && !!bolsa.id &&
+    typeof bolsa.negocio_id === 'string' && !!bolsa.negocio_id &&
+    typeof bolsa.precio_descuento === 'number' && Number.isFinite(bolsa.precio_descuento) && bolsa.precio_descuento >= 0;
+}
+
+function restaurar(stored: string | null): CartItem[] {
+  if (!stored) return [];
+  const parsed: unknown = JSON.parse(stored);
+  if (!Array.isArray(parsed)) throw new Error('Formato de carrito inválido');
+  const items: CartItem[] = [];
+  for (const item of parsed) {
+    if (!item || !productoValido(item.bolsa) || !Number.isSafeInteger(item.cantidad) || item.cantidad <= 0) continue;
+    if (items.length && items[0].bolsa.negocio_id !== item.bolsa.negocio_id) continue;
+    if (items.some(i => i.bolsa.id === item.bolsa.id)) continue;
+    // El stock persistido es metadata histórica, no disponibilidad actual.
+    items.push({ bolsa: item.bolsa, cantidad: item.cantidad });
+  }
+  return items;
+}
+
+export function createCartStore(key: string, persistence: ReturnType<typeof createCartPersistence>) {
+  let snapshot: CartSnapshot = { items: [], loaded: false, storageError: null };
+  let active = false;
+  let generation = 0;
+  let revision = 0;
+  let pendingClear = false;
+  const listeners = new Set<() => void>();
+  const publish = (next: CartSnapshot) => {
+    snapshot = next;
+    listeners.forEach(listener => listener());
+  };
+  const save = (items: CartItem[]) => {
+    const currentRevision = ++revision;
+    persistence.write(key, items, failed => {
+      if (!active || currentRevision !== revision) return;
+      publish({ ...snapshot, storageError: failed ? 'escritura' : null });
+    });
+  };
+  const change = (items: CartItem[]) => {
+    publish({ ...snapshot, items });
+    save(items);
+  };
+  return {
+    getSnapshot: () => snapshot,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    activate() {
+      active = true;
+      const currentGeneration = ++generation;
+      if (!snapshot.loaded) {
+        void (async () => {
+          let items: CartItem[] = [];
+          let storageError: CartSnapshot['storageError'] = null;
+          try { items = restaurar(await persistence.read(key)); }
+          catch {
+            storageError = 'lectura';
+            console.warn('[Carrito] No se pudo recuperar el carrito local.');
+          }
+          if (!active || currentGeneration !== generation) return;
+          const clear = pendingClear;
+          pendingClear = false;
+          publish({ items: clear ? [] : items, loaded: true, storageError: snapshot.storageError ?? storageError });
+        })();
+      }
+      return () => { active = false; generation++; };
+    },
+    agregar(bolsa: Bolsa): ResultadoAgregar {
+      if (!active || !snapshot.loaded) return { ok: false, motivo: 'no_cargado' };
+      if (!productoValido(bolsa)) return { ok: false, motivo: 'producto_invalido' };
+      if (snapshot.items.length && snapshot.items[0].bolsa.negocio_id !== bolsa.negocio_id) {
+        return { ok: false, motivo: 'otro_negocio' };
+      }
+      // Validación local del campo existente; no representa una reserva de inventario.
+      const stock = stockLocal(bolsa.cantidad_disponible);
+      if (stock === null) return { ok: false, motivo: 'stock_invalido' };
+      const existing = snapshot.items.find(i => i.bolsa.id === bolsa.id);
+      if (existing && existing.cantidad >= stock) {
+        // Una ficha recién cargada puede tener menos stock que el carrito persistido.
+        change(stock === 0 ? snapshot.items.filter(i => i.bolsa.id !== bolsa.id) :
+          snapshot.items.map(i => i.bolsa.id === bolsa.id ? { bolsa, cantidad: stock } : i));
+        return { ok: false, motivo: stock === 0 ? 'agotado' : 'limite_stock' };
+      }
+      if (stock === 0) return { ok: false, motivo: 'agotado' };
+      change(existing
+        ? snapshot.items.map(i => i.bolsa.id === bolsa.id ? { bolsa, cantidad: i.cantidad + 1 } : i)
+        : [...snapshot.items, { bolsa, cantidad: 1 }]);
+      return { ok: true };
+    },
+    quitar(bolsaId: string) {
+      if (!active || !snapshot.loaded) return;
+      if (!snapshot.items.some(i => i.bolsa.id === bolsaId)) return;
+      change(snapshot.items.flatMap(i => i.bolsa.id !== bolsaId ? [i] :
+        i.cantidad > 1 ? [{ ...i, cantidad: i.cantidad - 1 }] : []));
+    },
+    limpiar() {
+      if (!active) return;
+      // Conservar una limpieza válida aunque se cambie de cuenta durante la lectura.
+      if (!snapshot.loaded) { pendingClear = true; save([]); return; }
+      change([]);
+    },
+  };
+}
