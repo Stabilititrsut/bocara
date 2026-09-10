@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Alert } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useOnboarding } from '@/src/context/OnboardingContext';
 import { Colors } from '@/constants/Colors';
 
 const SLIDES = [
@@ -33,9 +33,23 @@ const SLIDES = [
 export default function OnboardingScreen() {
   const [slide, setSlide] = useState(0);
   const router = useRouter();
+  const { completarOnboarding } = useOnboarding();
+  const [finishing, setFinishing] = useState(false);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   async function terminar() {
-    await AsyncStorage.setItem('bocara_onboarding_done', 'true');
+    if (finishing) return;
+    setFinishing(true);
+    const saved = await completarOnboarding();
+    if (!mounted.current) return;
+    if (!saved) {
+      Alert.alert('Preferencia no guardada', 'Puedes continuar. Es posible que veas esta bienvenida al reiniciar la app.');
+    }
     router.replace('/(tabs)/');
   }
 
@@ -46,7 +60,7 @@ export default function OnboardingScreen() {
     <SafeAreaView style={s.root}>
       {/* Skip */}
       {!esUltimo && (
-        <TouchableOpacity style={s.skipBtn} onPress={terminar}>
+        <TouchableOpacity style={s.skipBtn} onPress={terminar} disabled={finishing}>
           <Text style={s.skipText}>Omitir</Text>
         </TouchableOpacity>
       )}
@@ -76,7 +90,7 @@ export default function OnboardingScreen() {
       {/* Footer */}
       <View style={s.footer}>
         {esUltimo ? (
-          <TouchableOpacity style={[s.btnPrimary, { backgroundColor: color }]} onPress={terminar}>
+          <TouchableOpacity style={[s.btnPrimary, { backgroundColor: color }]} onPress={terminar} disabled={finishing}>
             <Text style={s.btnPrimaryText}>¡Empezar a rescatar!</Text>
             <Ionicons name="arrow-forward" size={18} color={Colors.white} />
           </TouchableOpacity>
