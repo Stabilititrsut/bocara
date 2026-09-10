@@ -45,10 +45,15 @@ export default function AdminContenidoScreen() {
     setProcesando(id);
     setErroresItem(prev => ({ ...prev, [id]: '' }));
     try {
+      const itemAprobado = items.find(i => i.id === id);
       await adminAPI.aprobarBolsa(id);
       console.log('[contenido] aprobar OK:', id);
       await cargar();
-      showToast(`✅ "${nombre}" aprobado y activo en Bocara`);
+      showToast(
+        itemAprobado?.activo === false
+          ? `✅ "${nombre}" aprobado, pero seguirá OCULTO hasta que el restaurante lo active`
+          : `✅ "${nombre}" aprobado y activo en Bocara`
+      );
     } catch (e: any) {
       const mensaje = (e as any)?.response?.data?.error
         || (e as any)?.response?.data?.message
@@ -221,6 +226,16 @@ export default function AdminContenidoScreen() {
                     {item.es_destacado       && <View style={[s.clasifBadge, s.clasifBadgeGold]}><Text style={s.clasifBadgeTxt}>⭐ Destacado</Text></View>}
                     {item.es_mas_vendido     && <View style={[s.clasifBadge, s.clasifBadgeGold]}><Text style={s.clasifBadgeTxt}>🔥 Más vendido</Text></View>}
                     {item.es_precio_bajo     && <View style={s.clasifBadge}><Text style={s.clasifBadgeTxt}>💰 Precio bajo</Text></View>}
+                  </View>
+                )}
+
+                {/* Visibilidad real: aprobar NO reactiva "activo", así que una bolsa
+                    puede quedar aprobada y seguir oculta para los clientes. */}
+                {item.activo === false && (
+                  <View style={s.metaRow}>
+                    <View style={s.ocultaBadge}>
+                      <Text style={s.ocultaBadgeText}>🙈 Oculta para clientes (activo = false)</Text>
+                    </View>
                   </View>
                 )}
 
@@ -412,6 +427,11 @@ const s = StyleSheet.create({
   clasifBadge: { backgroundColor: '#1A2744', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
   clasifBadgeGold: { backgroundColor: '#451A03' },
   clasifBadgeTxt: { fontSize: 10, color: '#94A3B8', fontWeight: '700' },
+  ocultaBadge: {
+    backgroundColor: '#450A0A', borderRadius: 8, borderWidth: 1, borderColor: '#991B1B',
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  ocultaBadgeText: { fontSize: 11, color: '#FCA5A5', fontWeight: '800' },
   propietarioRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
   propietarioLabel: { fontSize: 11, color: '#64748B', fontWeight: '700' },
   propietarioVal: { fontSize: 11, color: '#94A3B8', flex: 1 },

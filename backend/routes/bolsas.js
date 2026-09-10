@@ -8,6 +8,12 @@ const { getReservadoPendiente, getReservasMap } = require('../services/stock');
 const { obtenerConfigNumerica } = require('../services/configuracion');
 const router = express.Router();
 
+// Fecha de hoy en formato YYYY-MM-DD (UTC, igual que el resto de fechas del servidor)
+// para comparar contra fecha_caducidad (columna "date", sin hora).
+function hoy() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
   if (datos.nombre !== undefined && (typeof datos.nombre !== 'string' || datos.nombre.trim().length < 2 || datos.nombre.trim().length > 120))
     return 'El nombre debe tener entre 2 y 120 caracteres';
@@ -108,6 +114,8 @@ router.get('/', async (req, res) => {
     query = query.gt('cantidad_disponible', 0);
     // Solo bolsas aprobadas en el feed público; degradar si la columna no existe
     query = query.or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
+    // Ocultar promociones ya vencidas aunque sigan activas y aprobadas
+    query = query.or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
   }
   // mi_negocio=true no filtra por activo/cantidad/aprobación: el restaurante debe
   // ver TODAS sus publicaciones en su panel de gestión (ocultas, rechazadas,

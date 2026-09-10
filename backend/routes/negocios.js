@@ -32,6 +32,12 @@ function negocioDisponiblePublico(n) {
     (n.estado_verificacion === 'aprobado' || n.estado_verificacion == null);
 }
 
+// Fecha de hoy en formato YYYY-MM-DD (UTC, igual que el resto de fechas del servidor)
+// para comparar contra fecha_caducidad (columna "date", sin hora).
+function hoy() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // GET /api/negocios — listar negocios activos y aprobados
 router.get('/', async (req, res) => {
   const { zona, categoria, verificado } = req.query;
@@ -80,7 +86,8 @@ router.get('/feed', async (req, res) => {
     .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)')
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
-    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
+    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
+    .or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
   if (error) {
     const r = await supabase
       .from('bolsas')
@@ -125,6 +132,7 @@ router.get('/:id/detalle', async (req, res) => {
     .from('bolsas').select(CAMPOS_BOLSA_PUBLICOS)
     .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
+    .or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`)
     .order('created_at', { ascending: false });
   if (bErr) {
     const r = await supabase.from('bolsas').select(CAMPOS_BOLSA_PUBLICOS)
@@ -195,7 +203,8 @@ router.get('/:id', async (req, res) => {
     .eq('negocio_id', req.params.id)
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
-    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
+    .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
+    .or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
   if (bErr) {
     const r = await supabase
       .from('bolsas')
@@ -413,6 +422,7 @@ router.get('/:id/bolsas', async (req, res) => {
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
+    .or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`)
     .order('created_at', { ascending: false });
   if (error) {
     const r = await supabase.from('bolsas').select(CAMPOS_BOLSA_PUBLICOS)
