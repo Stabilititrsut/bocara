@@ -33,11 +33,18 @@ function esTransitorio(err) {
   return err.response.status >= 500;
 }
 
+// Devuelve SIEMPRE { ok } y, cuando ok=false, además:
+//   · motivo  : 'sin_api_key' (mala configuración del servidor, 500 aguas arriba)
+//               | 'proveedor' (Resend rechazó o no respondió, 502 aguas arriba)
+//   · status  : código HTTP devuelto por Resend, o null si nunca respondió
+//   · detalle : mensaje del proveedor, apto para log — nunca incluye la API key
+//               (vive solo en el header Authorization del cliente axios)
+// Quien llame NUNCA debe reportar éxito al cliente si ok=false.
 async function enviarEmail({ to, subject, html }) {
   const dest = Array.isArray(to) ? to.join(', ') : to;
   if (!process.env.RESEND_API_KEY) {
     console.warn(`[email] ⚠️  RESEND_API_KEY no configurada — email NO enviado a: ${dest} | asunto: "${subject}"`);
-    return { ok: false };
+    return { ok: false, motivo: 'sin_api_key', status: null, detalle: 'RESEND_API_KEY no configurada en el servidor' };
   }
 
   console.log(`[email] → Enviando a: ${dest} | asunto: "${subject}"`);
@@ -49,14 +56,21 @@ async function enviarEmail({ to, subject, html }) {
       console.log(`[email] ✓ Email enviado correctamente a: ${dest} (Resend, intento ${intento}/${RESEND_MAX_INTENTOS})`);
       return { ok: true };
     } catch (e) {
+      const status = e.response?.status ?? null;
       const detalle = e.response?.data?.message || e.message;
       const transitorio = esTransitorio(e);
-      console.error(`[email] ✗ Error al enviar a ${dest} (intento ${intento}/${RESEND_MAX_INTENTOS}): ${detalle}`);
-      if (!transitorio || intento === RESEND_MAX_INTENTOS) return { ok: false };
+      console.error(
+        `[email] ✗ Error al enviar a ${dest} (intento ${intento}/${RESEND_MAX_INTENTOS})` +
+        ` | proveedor: Resend | status: ${status ?? 'sin respuesta'} | transitorio: ${transitorio} | detalle: ${detalle}`
+      );
+      if (!transitorio || intento === RESEND_MAX_INTENTOS) {
+        console.error(`[email] ✗ Envío ABORTADO a ${dest} tras ${intento} intento(s) | asunto: "${subject}"`);
+        return { ok: false, motivo: 'proveedor', status, detalle };
+      }
       await esperar(500 * intento);
     }
   }
-  return { ok: false };
+  return { ok: false, motivo: 'proveedor', status: null, detalle: 'Reintentos agotados sin respuesta de Resend' };
 }
 
 // ─── Respaldo: envío por Gmail SMTP (Nodemailer) ───────────────────────────
