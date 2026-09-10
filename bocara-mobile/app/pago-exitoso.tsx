@@ -29,7 +29,6 @@ export default function PagoExitosoScreen() {
     card_last_four?: string;
   }>();
 
-  console.log('[PAGO EXITOSO] params:', JSON.stringify(params));
 
   const { pedidoId, status, transactionState, auth_number, card_last_four } = params;
   const resultado = detectarResultado(status, transactionState);
