@@ -64,7 +64,7 @@ stateDiagram-v2
     borrador --> cancelado: rollback / abandono
 
     pendiente --> pagado: webhook Cubo SUCCEEDED + RPC
-    pendiente --> cancelado: REJECTED / expiración
+    pendiente --> cancelado: REJECTED · FAILED · DECLINED / expiración
 
     pagado --> confirmado: confirmar_pago_cubo
     pagado --> cancelado
@@ -97,7 +97,7 @@ stateDiagram-v2
 | `borrador` | `pendiente` | `POST /api/pagos/generar-link` |
 | `borrador` | `cancelado` | Rollback de `/pagos/preparar`, barrido de carritos abandonados |
 | `pendiente` | `pagado` | Webhook de Cubo, tras verificar `SUCCEEDED` de forma independiente |
-| `pendiente` | `cancelado` | Webhook `REJECTED`, nuevo checkout del mismo usuario |
+| `pendiente` | `cancelado` | Webhook de rechazo (`REJECTED` / `FAILED` / `DECLINED`, ver §1.4), nuevo checkout del mismo usuario |
 | `pagado` | `confirmado` | RPC `confirmar_pago_cubo` |
 | `pagado` | `cancelado` / `reembolsado` | Soporte (admin) |
 | `confirmado` | `en_preparacion` | Restaurante — `PUT /api/pedidos/:id/estado` |
@@ -180,6 +180,30 @@ local en `routes/pedidos.js` que divergió y acabó permitiendo
 `pendiente → confirmado`. Si necesitas la lista de destinos válidos desde un
 estado, usa `transicionesDesde(estado)`.
 
+### 1.4 Estados de la pasarela: normalización
+
+El `status` que llega en el webhook de Cubo no es un estado del pedido; se
+traduce a uno de tres estados internos en `normalizarEstadoCubo`
+(`backend/services/cuboWebhook.js`) **antes** de decidir cualquier transición:
+
+| `status` recibido | Estado interno | Efecto |
+|---|---|---|
+| `SUCCEEDED` | `aprobado` | Consulta independiente a Cubo + RPC `confirmar_pago_cubo` |
+| `REJECTED`, `FAILED`, `DECLINED` | `fallido` | Un único flujo de rechazo: log estructurado, `liberarInventarioPedido` y `estado_pago = 'fallido'` |
+| cualquier otro (`PENDING`, `CANCELLED`, `REFUNDED`, …) | `desconocido` | 200 sin tocar nada; queda en log como `estado_desconocido` |
+
+Cubo documenta `REJECTED`, pero los contratos y otras pasarelas del mismo
+proveedor emiten `FAILED` o `DECLINED` para el mismo hecho (no hubo cargo).
+Los tres son **equivalentes**: entran por la misma rama, producen la misma
+respuesta y disparan la misma liberación de stock. La comparación es
+insensible a mayúsculas y espacios (`"  failed "` → `FAILED`), y el literal
+recibido se conserva en los logs (`status`) y en el `motivo_cancelacion`
+(`status:<RAW>`) para auditoría.
+
+Un rechazo **nunca** cancela un pedido con `estado_pago = 'pagado'`: un
+`REJECTED`/`FAILED`/`DECLINED` que llega tarde o duplicado se ignora con
+200 y queda registrado como `rechazo_sobre_pedido_pagado_ignorado`.
+
 ---
 
 ## 2. Ciclo de vida de stock y reserva
@@ -243,8 +267,8 @@ resultado, así que corre solo para el ganador. **El propio `estado` es la marca
 de idempotencia** — no hace falta columna ni tabla extra.
 
 Esto importa porque **Cubo reintenta sus webhooks**. Sin esta garantía, cada
-reintento de un `REJECTED` devolvía unidades otra vez y el negocio terminaba con
-más stock del que realmente tenía.
+reintento de un rechazo (`REJECTED` / `FAILED` / `DECLINED`) devolvía unidades
+otra vez y el negocio terminaba con más stock del que realmente tenía.
 
 Resultados posibles:
 

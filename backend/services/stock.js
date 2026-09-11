@@ -123,8 +123,8 @@ async function unidadesDePedido(pedido, cliente = supabasePorDefecto()) {
  *
  * ── Por qué hace falta ──────────────────────────────────────────────────────
  * La cancelación se dispara desde sitios distintos (soporte vía
- * PATCH /pedidos/:id/cancelar, el webhook de Cubo al recibir REJECTED, el
- * rollback de /pagos/preparar y el barrido de borradores abandonados) y Cubo
+ * PATCH /pedidos/:id/cancelar, el webhook de Cubo al recibir REJECTED / FAILED / DECLINED,
+ * el rollback de /pagos/preparar y el barrido de borradores abandonados) y Cubo
  * reintenta sus webhooks. Sin un único punto de entrada, dos llamadas
  * concurrentes o repetidas devolvían el stock dos veces y el negocio terminaba
  * con más unidades disponibles de las que realmente tenía.

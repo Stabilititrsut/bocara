@@ -40,11 +40,11 @@ if (process.env.CUBO_ENVIRONMENT === 'production') {
 }
 
 const express = require('express');
-const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 
 const supabase = require('./config/supabase');
+const { corsMiddleware } = require('./middleware/cors');
 const { enviarNotificacionPush, guardarNotificacion } = require('./services/notificaciones');
 const { procesarEventosFallidos } = require('./services/pagoEventos');
 
@@ -53,29 +53,8 @@ const PORT = process.env.PORT || 3000;
 
 app.use(helmet());
 
-const ALLOWED_ORIGINS = [
-  'https://bocara.vercel.app',
-  'https://app.bocarafood.com',
-  'https://bocarafood.com',
-  'https://www.bocarafood.com',
-  // desarrollo local
-  'http://localhost:3000',
-  'http://localhost:8081',
-  'http://localhost:19006',
-  'http://localhost:19000',
-];
-
-app.use(cors({
-  origin: (origin, callback) => {
-    // permitir requests sin origen (apps móviles nativas, Postman, curl)
-    if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origen no permitido → ${origin}`));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+// Orígenes permitidos y reglas de preflight: middleware/cors.js
+app.use(corsMiddleware());
 
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 

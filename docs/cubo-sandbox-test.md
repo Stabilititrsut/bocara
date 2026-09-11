@@ -37,8 +37,8 @@
 
 **Tabla:** `pedidos`
 
-| Campo | Al aprobar (SUCCEEDED) | Al rechazar (REJECTED/FAILED/CANCELLED) |
-|-------|------------------------|------------------------------------------|
+| Campo | Al aprobar (SUCCEEDED) | Al rechazar (REJECTED / FAILED / DECLINED) |
+|-------|------------------------|--------------------------------------------|
 | `estado` | `"confirmado"` | `"cancelado"` |
 | `estado_pago` | `"pagado"` | `"fallido"` |
 
@@ -47,6 +47,14 @@
 | Campo | Acción |
 |-------|--------|
 | `cantidad_disponible` | Se decrementa en 1 cuando `estado_pago = "pagado"` |
+
+> **Estados de rechazo equivalentes.** El backend normaliza el `status` del
+> webhook (`normalizarEstadoCubo` en `backend/services/cuboWebhook.js`):
+> `REJECTED`, `FAILED` y `DECLINED` se tratan de forma idéntica como
+> `fallido` — misma respuesta, mismo log y misma liberación de la reserva de
+> stock vía `liberarInventarioPedido`. La comparación ignora mayúsculas y
+> espacios. `CANCELLED` **no** es un estado de rechazo: cae en `desconocido`,
+> responde 200 y no altera el pedido.
 
 ---
 
@@ -141,6 +149,12 @@ curl -X POST https://bocara.onrender.com/api/webhooks/cubo \
 > Reemplaza `UUID-REAL-DEL-PEDIDO` con el `id` real del pedido en la tabla `pedidos`.
 
 ### 5.5 Simular webhook de pago rechazado
+
+El `status` puede ser `REJECTED`, `FAILED` o `DECLINED`; los tres producen
+exactamente el mismo resultado (pedido `cancelado`, `estado_pago = "fallido"`,
+reserva de stock liberada). Repetir el mismo webhook es seguro: la liberación
+es idempotente y responde `ya_cancelado` sin volver a tocar el inventario.
+
 ```bash
 curl -X POST https://bocara.onrender.com/api/webhooks/cubo \
   -H "Content-Type: application/json" \
@@ -202,7 +216,12 @@ En **Cubo Admin → Developers → Webhooks**, configurar:
 https://bocara.onrender.com/api/webhooks/cubo
 ```
 
-Eventos a suscribir: `payment.succeeded`, `payment.rejected`, `payment.failed`, `payment.cancelled`
+Eventos a suscribir: `payment.succeeded`, `payment.rejected`, `payment.failed`, `payment.declined`
+
+> `payment.rejected`, `payment.failed` y `payment.declined` llegan al mismo
+> endpoint y se procesan de forma equivalente (ver §2). Si se suscribe también
+> `payment.cancelled`, el backend lo registra como estado desconocido y responde
+> 200 sin modificar el pedido.
 
 ---
 

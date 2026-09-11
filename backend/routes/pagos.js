@@ -372,10 +372,18 @@ router.post('/cubo-webhook', async (req, res) => {
   console.warn('[CUBO WEBHOOK LEGACY] Recibido en /api/pagos/cubo-webhook — actualiza la URL del webhook en Cubo Admin a /api/webhooks/cubo');
   try {
     const result = await procesarWebhookCubo(req.body);
-    res.status(200).json({ received: true, ...result });
+    // Antes esta ruta respondía 200 SIEMPRE, descartando el statusCode. Dos
+    // consecuencias graves: un payload corrupto se confirmaba como recibido en
+    // vez de devolver 400, y —peor— un fallo transitorio (502 con Cubo caído,
+    // 503 con la RPC sin desplegar) también salía como 200, así que Cubo daba
+    // el webhook por entregado y NO lo reintentaba: el pago quedaba cobrado y
+    // el pedido sin confirmar, en silencio. El statusCode se propaga igual que
+    // en la ruta canónica.
+    const { statusCode = 200, ...data } = result;
+    res.status(statusCode).json({ received: true, ...data });
   } catch (err) {
     console.error('[CUBO WEBHOOK LEGACY] Error interno:', err.message);
-    res.status(200).json({ received: true });
+    res.status(500).json({ received: true, error: 'Error interno' });
   }
 });
 
