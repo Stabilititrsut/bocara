@@ -282,12 +282,12 @@ router.post('/registro-completo', registroLimiter, async (req, res) => {
 // POST /api/auth/enviar-otp-email — genera y envía código OTP de 6 dígitos con branding Bocara
 router.post('/enviar-otp-email', otpSendLimiter, async (req, res) => {
   const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email requerido' });
+  if (!email) return res.status(400).json({ ok: false, error: 'Email requerido' });
   const emailNorm = email.toLowerCase().trim();
 
   // Verificar que el email no esté ya registrado
   const { data: existe } = await supabase.from('usuarios').select('id').eq('email', emailNorm).maybeSingle();
-  if (existe) return res.status(400).json({ error: 'Este email ya está registrado. Inicia sesión o usa otro correo.' });
+  if (existe) return res.status(400).json({ ok: false, error: 'Este email ya está registrado. Inicia sesión o usa otro correo.' });
 
   const codigo = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = Date.now() + 30 * 60 * 1000;
@@ -300,9 +300,28 @@ router.post('/enviar-otp-email', otpSendLimiter, async (req, res) => {
     html: templateVerificacionOTP(codigo),
   });
 
-  if (!sent.ok && process.env.NODE_ENV === 'production') {
-    return res.status(500).json({ error: 'No se pudo enviar el código de verificación. Intenta de nuevo.' });
+  // Si el correo no salió, el endpoint FALLA — sin excepción por NODE_ENV.
+  // Responder { ok: true } aquí le decía al frontend "revisa tu bandeja" por un
+  // código que nunca se envió, y en desarrollo enmascaraba por completo una API
+  // key ausente o un dominio no verificado en Resend.
+  //   · sin_api_key → 500: el servidor está mal configurado, no es culpa de Resend
+  //   · proveedor   → 502: Resend rechazó o no respondió
+  if (!sent.ok) {
+    const status = sent.motivo === 'sin_api_key' ? 500 : 502;
+    console.error(
+      `[otp-email] ✗ No se envió el código a ${emailNorm} | motivo: ${sent.motivo || 'desconocido'}` +
+      ` | status proveedor: ${sent.status ?? 'sin respuesta'} | detalle: ${sent.detalle || 'sin detalle'}` +
+      ` | respondiendo ${status}`
+    );
+    // No dejar vivo un código que el usuario nunca va a recibir.
+    emailOtpStore.delete(emailNorm);
+    return res.status(status).json({
+      ok: false,
+      error: 'No se pudo enviar el código de verificación. Intenta de nuevo en unos minutos.',
+    });
   }
+
+  console.log(`[otp-email] ✓ Código enviado correctamente a ${emailNorm}`);
   res.json({ ok: true });
 });
 
