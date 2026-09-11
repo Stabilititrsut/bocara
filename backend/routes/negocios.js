@@ -4,6 +4,7 @@ const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
+const { hoyGuatemala, filtrarVigentes } = require('../services/horarioGuatemala');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -32,10 +33,12 @@ function negocioDisponiblePublico(n) {
     (n.estado_verificacion === 'aprobado' || n.estado_verificacion == null);
 }
 
-// Fecha de hoy en formato YYYY-MM-DD (UTC, igual que el resto de fechas del servidor)
-// para comparar contra fecha_caducidad (columna "date", sin hora).
+// Fecha de hoy (YYYY-MM-DD) en Guatemala para comparar contra fecha_caducidad
+// (columna "date", sin hora). Igual que en routes/bolsas.js: calcularla en UTC
+// adelantaba el día a partir de las 18:00 locales (Guatemala es UTC-6) y ocultaba
+// publicaciones que aún eran válidas ese día.
 function hoy() {
-  return new Date().toISOString().slice(0, 10);
+  return hoyGuatemala();
 }
 
 // GET /api/negocios — listar negocios activos y aprobados
@@ -81,9 +84,14 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
 // GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
+  // hora_recogida_inicio/fin y fecha_caducidad se seleccionan aunque no se
+  // devuelvan: son los que deciden si la publicación ya venció en Guatemala.
+  const CAMPOS_FEED = 'negocio_id, precio_original, precio_descuento, ' +
+    'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, ' +
+    'negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)';
   let { data: bolsas, error } = await supabase
     .from('bolsas')
-    .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)')
+    .select(CAMPOS_FEED)
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
@@ -91,12 +99,16 @@ router.get('/feed', async (req, res) => {
   if (error) {
     const r = await supabase
       .from('bolsas')
-      .select('negocio_id, precio_original, precio_descuento, negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)')
+      .select(CAMPOS_FEED)
       .eq('activo', true)
       .gt('cantidad_disponible', 0);
     bolsas = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
+
+  // Excluir las vencidas ANTES de agrupar: si no, un negocio cuyas publicaciones
+  // ya cerraron seguiría apareciendo en el feed con cantidad_bolsas > 0.
+  bolsas = filtrarVigentes(bolsas);
 
   const map = new Map();
   for (const b of (bolsas || [])) {
@@ -139,7 +151,10 @@ router.get('/:id/detalle', async (req, res) => {
       .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0);
     data = r.data;
   }
-  const bolsas = data || [];
+  // Fuera las que ya cerraron su ventana de recogida en Guatemala: se filtra antes
+  // de contar veces_pedido para que los contadores no incluyan publicaciones que
+  // el cliente ya no ve.
+  const bolsas = filtrarVigentes(data);
 
   // Contar cuántas veces fue pedida cada bolsa (pedidos recogidos)
   const vecesPedidoMap = {};
@@ -431,7 +446,8 @@ router.get('/:id/bolsas', async (req, res) => {
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
-  const bolsas = data || [];
+  // Misma regla que el feed y el detalle: nada con la ventana de recogida vencida.
+  const bolsas = filtrarVigentes(data);
   res.json({
     tiempo_limitado: bolsas.filter(b => b.tipo !== 'cupon'),
     promociones: bolsas.filter(b => b.tipo === 'cupon'),

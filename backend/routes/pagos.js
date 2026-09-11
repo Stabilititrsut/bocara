@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
 const { generarLinkPago } = require('../services/visaLink');
 const { getReservadoPendiente } = require('../services/stock');
+const { ESTADOS_SIN_COBRO, puedeTransicionar, validarTransicion } = require('../services/orderStateMachine');
 const { procesarWebhookCubo } = require('./webhooks');
 const { obtenerComisionFraccion, obtenerConfigNumerica, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
 const { normalizeCartItems, validateCheckoutBags } = require('../services/checkoutValidation');
@@ -17,6 +18,34 @@ function formatearTelefonoCubo(telefono) {
   if (!telefono) return undefined;
   const local = telefono.replace(/\D/g, '').slice(-8);
   return local ? `+502${local}` : undefined;
+}
+
+// Revierte un pedido recién creado que no llegó a tener link de pago utilizable.
+//
+// No usa services/stock.liberarInventarioPedido a propósito: ese liberador es
+// para cancelaciones de pedidos que pueden tener stock descontado. Aquí el
+// pedido nunca pasó de 'borrador'/'pendiente', así que jamás se tocó
+// `bolsas.cantidad_disponible` — devolver unidades duplicaría el stock. Basta
+// con sacarlo del conjunto que services/stock.js cuenta como reservado.
+//
+// Las dos cláusulas de guarda son el punto importante: `.in('estado', …)` y
+// `.neq('estado_pago', 'pagado')` impiden que un rollback tardío pise un pedido
+// que el webhook de Cubo confirmó mientras tanto. Sin ellas, una carrera entre
+// este rollback y confirmar_pago_cubo dejaba cancelado un pedido ya cobrado.
+async function revertirPedidoSinPago(pedidoId, motivo) {
+  // Todos los estados de origen posibles aquí son cancelables; se comprueba
+  // contra la máquina para que un cambio futuro en la matriz se note.
+  const origenes = ESTADOS_SIN_COBRO.filter((e) => puedeTransicionar(e, 'cancelado'));
+  try {
+    const { error } = await supabase.from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('id', pedidoId)
+      .in('estado', origenes)
+      .neq('estado_pago', 'pagado');
+    if (error) console.error('[PAGO] rollback de pedido falló —', motivo, ':', error.message);
+  } catch (err) {
+    console.error('[PAGO] rollback de pedido no disponible —', motivo, ':', err.message);
+  }
 }
 
 // Comisión y costo de envío se leen de `configuracion` (services/configuracion.js)
@@ -211,9 +240,7 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     }));
     const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
     if (itemsInsertErr) {
-      await supabase.from('pedidos')
-        .update({ estado: 'cancelado', estado_pago: 'fallido' })
-        .eq('id', pedido.id);
+      await revertirPedidoSinPago(pedido.id, 'items del pedido no se pudieron insertar');
       console.error('[PAGO] Error insertando pedido_items — pedido cancelado. Ejecutar migración SQL si la tabla o columnas no existen:', itemsInsertErr.message);
       return res.status(500).json({ error: 'Error al registrar los items del pedido. Intenta de nuevo.' });
     }
@@ -264,9 +291,7 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       })
       .eq('id', pedido.id);
     if (tokenUpdateErr) {
-      await supabase.from('pedidos')
-        .update({ estado: 'cancelado', estado_pago: 'fallido' })
-        .eq('id', pedido.id);
+      await revertirPedidoSinPago(pedido.id, 'token de Cubo no se pudo guardar');
       console.error('[PAGO] Error guardando token Cubo — pedido cancelado. Columnas Cubo pueden no existir (ejecutar migración SQL):', tokenUpdateErr.message);
       return res.status(500).json({ error: 'Error al guardar el token de pago. Ejecuta la migración SQL (cubo-pago-schema.sql) e intenta de nuevo.' });
     }
@@ -496,7 +521,7 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
     }));
     const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
     if (itemsInsertErr) {
-      await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+      await revertirPedidoSinPago(pedido.id, 'items del pedido no se pudieron insertar');
       return res.status(500).json({ error: 'Error al registrar los items del pedido.' });
     }
 
@@ -518,7 +543,7 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
         p_monto_pedido: total, // total antes de descuento
       });
       if (rpcErr || !rpcRes?.ok) {
-        await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+        await revertirPedidoSinPago(pedido.id, 'reserva de cupón falló');
         const msg = ERRORES_CUPON[rpcRes?.resultado] || rpcErr?.message || 'Error al aplicar el cupón';
         console.error('[PREPARAR] reservar_cupon fallo:', rpcRes?.resultado || rpcErr?.message);
         return res.status(400).json({ error: msg });
@@ -530,7 +555,7 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
         descuento_cupon: descuentoCupon,
       }).eq('id', pedido.id);
       if (updErr) {
-        await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+        await revertirPedidoSinPago(pedido.id, 'descuento de cupón no se pudo aplicar');
         return res.status(500).json({ error: 'Error al aplicar el descuento al pedido' });
       }
       total = totalConDescuento;
@@ -668,15 +693,37 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
       items: cuboItems,
     });
 
+    // El pedido se leyó como 'borrador' antes de llamar a Cubo, y generarLinkPago
+    // es una llamada de red: el barrido de borradores expirados (server.js) pudo
+    // cancelarlo en esa ventana. Sin el `.eq('estado', 'borrador')` de abajo,
+    // este UPDATE resucitaría a 'pendiente' un pedido ya cancelado.
+    const transicion = validarTransicion(pedido.estado, 'pendiente');
+    if (!transicion.ok) {
+      return res.status(transicion.status).json({
+        ok: false, error: transicion.error, codigo: transicion.codigo, detalle: transicion.detalle,
+      });
+    }
+
     const montoCentavos = Math.round(pedido.total * 100);
-    const { error: tokenPersistErr } = await supabase.from('pedidos').update({
+    const { data: persistido, error: tokenPersistErr } = await supabase.from('pedidos').update({
       estado: 'pendiente',
       cubo_payment_intent_token: paymentIntentToken || null,
       monto_esperado_centavos: montoCentavos,
-    }).eq('id', pedido.id);
+    }).eq('id', pedido.id).eq('estado', 'borrador').select('id').maybeSingle();
     if (tokenPersistErr) {
       console.error('[GENERAR LINK] No se pudo persistir el token de Cubo:', tokenPersistErr.message);
       return res.status(503).json({ error: 'No se pudo asegurar la referencia del pago. Intenta nuevamente.' });
+    }
+    if (!persistido) {
+      // El link quedó creado en Cubo pero el pedido ya no lo admite. No se
+      // devuelve la URL: cobrar contra un pedido cancelado es peor que pedir al
+      // cliente que reinicie el checkout.
+      console.warn('[GENERAR LINK] el pedido dejó de ser borrador mientras se generaba el link:', pedido.id);
+      return res.status(409).json({
+        ok: false,
+        error: 'CONFLICTO_DE_ESTADO',
+        detalle: 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
+      });
     }
 
     console.log('[GENERAR LINK] pedido:', pedido.id, '| link generado');
