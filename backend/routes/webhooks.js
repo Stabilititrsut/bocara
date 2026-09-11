@@ -2,6 +2,8 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const { consultarTransaccionCubo } = require('../services/visaLink');
 const { procesarEventosPedido } = require('../services/pagoEventos');
+const { liberarInventarioPedido } = require('../services/stock');
+const { validarConfirmacionPago } = require('../services/orderStateMachine');
 const router = express.Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -10,7 +12,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ESTADOS_APROBADO = new Set(['SUCCEEDED']);
 const ESTADOS_FALLIDO  = new Set(['REJECTED']);
 
-const SELECT_PEDIDO = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
+const SELECT_PEDIDO = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
 
 // Busca el pedido y sus columnas de verificación Cubo.
 // Si las columnas no existen (migración pendiente), devuelve _cuboColumnsMissing: true
@@ -208,6 +210,29 @@ async function procesarWebhookCubo(body) {
       return { statusCode: 200, warning: 'pedido ya procesado' };
     }
 
+    // Puerta de la máquina de estados. La RPC escribe estado='confirmado' y
+    // estado_pago='pagado' en una sola transacción; en el modelo canónico eso es
+    // 'pendiente' → 'pagado' → 'confirmado'. validarConfirmacionPago comprueba
+    // las dos aristas y es el ÚNICO camino autorizado hasta 'confirmado' desde
+    // 'pendiente' (la arista directa está prohibida).
+    //
+    // pagoVerificado: true porque a esta altura consultarTransaccionCubo ya
+    // devolvió SUCCEEDED de forma independiente y validarWebhookCubo comparó
+    // token, moneda y monto. Es exactamente la prueba que la condición exige;
+    // el pedido todavía no tiene cubo_identifier porque lo escribe la RPC.
+    const transicion = validarConfirmacionPago(pedido.estado, { pagoVerificado: true });
+    if (!transicion.ok) {
+      // 409 y no 400: el dinero ya se movió. Cubo no debe seguir reintentando un
+      // pedido que la máquina rechaza, pero esto exige revisión manual.
+      console.error('[CUBO WEBHOOK] CRÍTICO: pago verificado sobre un pedido en estado',
+        pedido.estado, '—', transicion.detalle, '| pedido:', pedido.id, '— requiere intervención manual');
+      return {
+        statusCode: 409,
+        error: transicion.error,
+        detalle: `${transicion.detalle} Pago cobrado — requiere intervención manual.`,
+      };
+    }
+
     // Monto verificado y convertido (validarWebhookCubo ya lo comprobó)
     const montoCentavosConsulta = Math.round(parseFloat(consulta.amount) * 100);
 
@@ -298,11 +323,40 @@ async function procesarWebhookCubo(body) {
       console.warn('[CUBO WEBHOOK] Pedido no encontrado para REJECTED — orderId:', orderId);
       return { statusCode: 200, warning: 'Pedido no encontrado' };
     }
-    // No sobreescribir un pedido ya pagado; idempotente en re-ejecución
-    await supabase.from('pedidos')
-      .update({ estado_pago: 'fallido', estado: 'cancelado' })
-      .eq('id', pedido.id)
-      .neq('estado_pago', 'pagado');
+    // Nunca sobreescribir un pedido ya pagado: un REJECTED que llega tarde (o
+    // duplicado) no puede cancelar un pedido que sí se cobró.
+    if (pedido.estado_pago === 'pagado') {
+      console.warn('[CUBO WEBHOOK] REJECTED sobre un pedido ya pagado — ignorado. pedido:', pedido.id);
+      return { statusCode: 200, warning: 'pedido ya pagado — REJECTED ignorado' };
+    }
+
+    // La cancelación pasa por el liberador idempotente: Cubo reintenta sus
+    // webhooks, y un UPDATE suelto aquí devolvía inventario en cada reintento.
+    // El CAS sobre `estado` dentro de liberarInventarioPedido hace que solo la
+    // primera ejecución libere.
+    const liberacion = await liberarInventarioPedido(pedido.id, {
+      canceladoPor: 'sistema',
+      motivo: `pago rechazado por Cubo|identifier:${paymentIntentToken}`,
+    });
+
+    if (!liberacion.ok) {
+      // 503 hace que Cubo reintente. Es lo correcto: el pedido quedó sin
+      // cancelar y el reintento es idempotente por diseño.
+      console.error('[CUBO WEBHOOK] No se pudo cancelar el pedido rechazado:', liberacion.tipo, liberacion.detalle);
+      return { statusCode: 503, error: 'No se pudo registrar el rechazo del pago — reintentar', detalle: liberacion.tipo };
+    }
+
+    // estado_pago se marca aparte de `estado`: la máquina gobierna `estado`, y
+    // 'fallido' es información de la pasarela, no un estado del pedido.
+    try {
+      const { error: pagoErr } = await supabase.from('pedidos')
+        .update({ estado_pago: 'fallido' })
+        .eq('id', pedido.id)
+        .neq('estado_pago', 'pagado');
+      if (pagoErr) console.error('[CUBO WEBHOOK] no se pudo marcar estado_pago=fallido:', pagoErr.message);
+    } catch (err) {
+      console.error('[CUBO WEBHOOK] estado_pago=fallido no disponible:', err.message);
+    }
 
     // Liberar reserva de cupón al rechazar el pago
     // NOTA: .rpc(...) no expone .catch() directamente — encadenarlo así lanzaba
