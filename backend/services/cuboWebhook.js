@@ -33,9 +33,25 @@ const { validarConfirmacionPago } = require('./orderStateMachine');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-// Solo estados documentados oficialmente por Cubo Pago
+// Estados de pago que reconocemos. Cubo documenta SUCCEEDED / REJECTED, pero
+// los contratos y otras pasarelas del mismo proveedor emiten también FAILED y
+// DECLINED para el mismo hecho (no hubo cargo). Los tres se tratan como un
+// único estado interno 'fallido' y disparan exactamente el mismo flujo de
+// rechazo; cualquier otro valor es 'desconocido' y no altera nada.
 const ESTADOS_APROBADO = new Set(['SUCCEEDED']);
-const ESTADOS_FALLIDO  = new Set(['REJECTED']);
+const ESTADOS_FALLIDO  = new Set(['REJECTED', 'FAILED', 'DECLINED']);
+
+/**
+ * Normaliza el `status` crudo del webhook (o de la consulta a Cubo) a uno de
+ * los tres estados internos: 'aprobado' | 'fallido' | 'desconocido'.
+ * Tolera nulos, espacios y minúsculas — los payloads reales no son uniformes.
+ */
+function normalizarEstadoCubo(status) {
+  const raw = String(status ?? '').trim().toUpperCase();
+  if (ESTADOS_APROBADO.has(raw)) return { raw, estado: 'aprobado' };
+  if (ESTADOS_FALLIDO.has(raw))  return { raw, estado: 'fallido' };
+  return { raw, estado: 'desconocido' };
+}
 
 const SELECT_PEDIDO = 'id, codigo_recogida, total, tipo_entrega, bolsa_id, usuario_id, negocio_id, cantidad, estado, estado_pago, bolsas(cantidad_disponible), usuarios(expo_push_token), negocios(propietario_id)';
 
@@ -112,19 +128,19 @@ function validarWebhookCubo({ body, pedido, consulta, monedaEsperada }) {
     return { ok: false, statusCode: 400, error: 'payload incompleto: falta metadata.orderId' };
   }
 
-  const rawStatus = String(body.status || '').trim().toUpperCase();
+  const { raw: rawStatus, estado } = normalizarEstadoCubo(body.status);
 
-  // 2. Solo estados documentados por Cubo
-  if (!ESTADOS_APROBADO.has(rawStatus) && !ESTADOS_FALLIDO.has(rawStatus)) {
+  // 2. Solo estados reconocidos (ver normalizarEstadoCubo)
+  if (estado === 'desconocido') {
     return { ok: false, statusCode: 200, warning: `estado no reconocido: ${rawStatus}` };
   }
 
-  // Para REJECTED no hay cargo — no se requiere verificación de monto ni token
-  if (ESTADOS_FALLIDO.has(rawStatus)) {
-    return { ok: true, statusCode: 200, tipo: 'fallido' };
+  // Para REJECTED / FAILED / DECLINED no hay cargo — no se requiere verificación de monto ni token
+  if (estado === 'fallido') {
+    return { ok: true, statusCode: 200, tipo: 'fallido', status: rawStatus };
   }
 
-  // ── A partir de aquí: rawStatus === 'SUCCEEDED' ──────────────────────────────
+  // ── A partir de aquí: estado === 'aprobado' (SUCCEEDED) ──────────────────────
 
   // 3. Consulta independiente obligatoria — sin ella no se puede verificar nada
   if (!consulta) {
@@ -254,12 +270,12 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     liberarInventarioPedido, monedaEsperada,
   } = resolverDependencias(deps);
 
-  const rawStatus          = String(body.status || '').trim().toUpperCase();
+  const { raw: rawStatus, estado: estadoNormalizado } = normalizarEstadoCubo(body.status);
   const paymentIntentToken = body.identifier;
   const { referenceId, authorizationCode, processedAt, metadata } = body;
   const orderId            = metadata?.orderId;
 
-  registrar('info', 'recibido', { status: rawStatus || null, identifier: paymentIntentToken || null, pedido_id: orderId || null });
+  registrar('info', 'recibido', { status: rawStatus || null, estado_normalizado: estadoNormalizado, identifier: paymentIntentToken || null, pedido_id: orderId || null });
 
   // ── Payload corrupto o incompleto → 400, sin tocar red ni BD ───────────────
   if (!paymentIntentToken || !orderId) {
@@ -275,13 +291,13 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
   // No es un error del emisor ni nuestro: es un estado intermedio que no nos
   // interesa. 200 evita que Cubo lo reintente en bucle. Se registra igualmente
   // porque un estado nuevo en la pasarela es algo que queremos ver.
-  if (!ESTADOS_APROBADO.has(rawStatus) && !ESTADOS_FALLIDO.has(rawStatus)) {
+  if (estadoNormalizado === 'desconocido') {
     registrar('warn', 'estado_desconocido', { status: rawStatus, pedido_id: orderId });
     return { statusCode: 200, warning: `estado no reconocido: ${rawStatus}` };
   }
 
   // ══ SUCCEEDED ════════════════════════════════════════════════════════════
-  if (ESTADOS_APROBADO.has(rawStatus)) {
+  if (estadoNormalizado === 'aprobado') {
     const pedido = await buscarPedido(orderId, supabase);
 
     // ── Idempotencia absoluta, antes de cualquier llamada de red ────────────
@@ -459,22 +475,23 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     }
   }
 
-  // ══ REJECTED — no hubo cargo ═════════════════════════════════════════════
+  // ══ REJECTED / FAILED / DECLINED — no hubo cargo ═════════════════════════
   //
+  // Los tres nombres describen el mismo hecho y entran por esta única rama.
   // Un rechazo nunca se ignora en silencio: se registra, se libera la reserva
   // de inventario de forma determinista y el pedido queda cancelado/fallido.
-  if (ESTADOS_FALLIDO.has(rawStatus)) {
+  if (estadoNormalizado === 'fallido') {
     const pedido = await buscarPedido(orderId, supabase);
     if (!pedido) {
       registrar('warn', 'pedido_no_encontrado', { pedido_id: orderId, status: rawStatus });
       return { statusCode: 200, warning: 'Pedido no encontrado' };
     }
 
-    // Nunca sobreescribir un pedido ya pagado: un REJECTED que llega tarde (o
+    // Nunca sobreescribir un pedido ya pagado: un rechazo que llega tarde (o
     // duplicado) no puede cancelar un pedido que sí se cobró.
     if (pedido.estado_pago === 'pagado') {
-      registrar('warn', 'rechazo_sobre_pedido_pagado_ignorado', { pedido_id: pedido.id, identifier: paymentIntentToken });
-      return { statusCode: 200, warning: 'pedido ya pagado — REJECTED ignorado' };
+      registrar('warn', 'rechazo_sobre_pedido_pagado_ignorado', { pedido_id: pedido.id, status: rawStatus, identifier: paymentIntentToken });
+      return { statusCode: 200, warning: `pedido ya pagado — ${rawStatus} ignorado` };
     }
 
     // La liberación pasa por el liberador idempotente: Cubo reintenta sus
@@ -484,14 +501,14 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     // 'ya_cancelado' sin tocar el stock.
     const liberacion = await liberarInventarioPedido(pedido.id, {
       canceladoPor: 'sistema',
-      motivo: `pago rechazado por Cubo|identifier:${paymentIntentToken}`,
+      motivo: `pago rechazado por Cubo|status:${rawStatus}|identifier:${paymentIntentToken}`,
     });
 
     if (!liberacion.ok) {
       // 503 hace que Cubo reintente. Es lo correcto: el pedido quedó sin
       // cancelar y el reintento es idempotente por diseño.
       registrar('error', 'liberacion_inventario_fallo', {
-        pedido_id: pedido.id, tipo: liberacion.tipo, detalle: liberacion.detalle ?? null,
+        pedido_id: pedido.id, status: rawStatus, tipo: liberacion.tipo, detalle: liberacion.detalle ?? null,
       });
       return { statusCode: 503, error: 'No se pudo registrar el rechazo del pago — reintentar', detalle: liberacion.tipo };
     }
@@ -521,10 +538,11 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     registrar('info', 'pago_rechazado_registrado', {
       pedido_id: pedido.id,
       status: rawStatus,
+      estado_normalizado: 'fallido',
       tipo_liberacion: liberacion.tipo,
       stock_devuelto: liberacion.stockDevuelto === true,
     });
-    return { statusCode: 200, tipo: 'rechazado', liberacion: liberacion.tipo };
+    return { statusCode: 200, tipo: 'rechazado', status: rawStatus, liberacion: liberacion.tipo };
   }
 
   return { statusCode: 200 };
@@ -536,6 +554,7 @@ module.exports = {
   esReintentoDeUnPagoYaRegistrado,
   buscarPedido,
   registrar,
+  normalizarEstadoCubo,
   ESTADOS_APROBADO,
   ESTADOS_FALLIDO,
   UUID_RE,

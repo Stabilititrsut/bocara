@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { procesarWebhookCubo, esReintentoDeUnPagoYaRegistrado } = require('../services/cuboWebhook');
+const {
+  procesarWebhookCubo, validarWebhookCubo, esReintentoDeUnPagoYaRegistrado,
+  normalizarEstadoCubo, ESTADOS_FALLIDO,
+} = require('../services/cuboWebhook');
 
 // ════════════════════════════════════════════════════════════════════════════
 // Dobles de prueba
@@ -295,7 +298,7 @@ test('dos webhooks simultáneos: la RPC serializa y solo uno descuenta stock', a
 });
 
 // ════════════════════════════════════════════════════════════════════════════
-// 2. REJECTED — el rechazo se registra y libera la reserva
+// 2. REJECTED / FAILED / DECLINED — el rechazo se registra y libera la reserva
 // ════════════════════════════════════════════════════════════════════════════
 
 test('REJECTED libera la reserva de inventario y marca el pedido', async () => {
@@ -365,6 +368,143 @@ test('si la liberación falla se responde 503 para que Cubo reintente', async ()
   const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook('REJECTED'), deps));
 
   assert.equal(resultado.statusCode, 503);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// 2b. Equivalencia REJECTED ≡ FAILED ≡ DECLINED
+//
+// Cubo documenta REJECTED, pero contratos y pasarelas emiten también FAILED y
+// DECLINED para el mismo hecho (no hubo cargo). Los tres deben entrar por la
+// misma rama y producir exactamente el mismo resultado observable.
+// ────────────────────────────────────────────────────────────────────────────
+
+const ESTADOS_RECHAZO = ['REJECTED', 'FAILED', 'DECLINED'];
+
+test('normalizarEstadoCubo agrupa REJECTED, FAILED y DECLINED como "fallido"', () => {
+  for (const estado of ESTADOS_RECHAZO) {
+    assert.ok(ESTADOS_FALLIDO.has(estado), `${estado} no está en ESTADOS_FALLIDO`);
+    assert.deepEqual(normalizarEstadoCubo(estado), { raw: estado, estado: 'fallido' });
+    // tolera minúsculas y espacios: los payloads reales no son uniformes
+    assert.deepEqual(normalizarEstadoCubo(`  ${estado.toLowerCase()} `), { raw: estado, estado: 'fallido' });
+  }
+  assert.deepEqual(normalizarEstadoCubo('SUCCEEDED'), { raw: 'SUCCEEDED', estado: 'aprobado' });
+  for (const otro of ['PENDING', 'REFUNDED', 'CANCELLED', '', null, undefined]) {
+    assert.equal(normalizarEstadoCubo(otro).estado, 'desconocido', String(otro));
+  }
+});
+
+test('validarWebhookCubo acepta FAILED y DECLINED igual que REJECTED, sin exigir monto ni token', () => {
+  for (const estado of ESTADOS_RECHAZO) {
+    const r = validarWebhookCubo({ body: webhook(estado), pedido: null, consulta: null, monedaEsperada: 'GTQ' });
+    assert.equal(r.ok, true, estado);
+    assert.equal(r.statusCode, 200, estado);
+    assert.equal(r.tipo, 'fallido', estado);
+    assert.equal(r.status, estado);
+  }
+});
+
+for (const estado of ESTADOS_RECHAZO) {
+  test(`${estado} libera la reserva de inventario vía liberarInventarioPedido y marca el pedido`, async () => {
+    const { st, deps } = crearEntorno({ pedido: pedidoPendiente() });
+
+    const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook(estado), deps));
+
+    assert.equal(resultado.statusCode, 200);
+    assert.equal(resultado.tipo, 'rechazado');
+    assert.equal(resultado.status, estado);
+    assert.equal(resultado.liberacion, 'cancelado');
+
+    // Exactamente una liberación, por el liberador idempotente, con auditoría del estado crudo.
+    assert.equal(st.liberaciones.length, 1);
+    assert.equal(st.liberaciones[0].pedidoId, PEDIDO_ID);
+    assert.equal(st.liberaciones[0].opciones.canceladoPor, 'sistema');
+    assert.match(st.liberaciones[0].opciones.motivo, /rechazado por Cubo/);
+    assert.match(st.liberaciones[0].opciones.motivo, new RegExp(`status:${estado}`));
+
+    assert.equal(st.pedido.estado, 'cancelado');
+    assert.equal(st.pedido.estado_pago, 'fallido');
+    assert.ok(st.rpcLlamadas.some(r => r.nombre === 'liberar_reserva_cupon'));
+
+    // Nunca se consulta a Cubo ni se descuenta stock por un rechazo.
+    assert.equal(st.vecesConsultaCubo, 0);
+    assert.equal(st.vecesStockDescontado, 0);
+
+    // Log estructurado con el estado crudo y el normalizado.
+    const registro = lineas.find(l => l.evento === 'pago_rechazado_registrado');
+    assert.ok(registro, 'el rechazo no quedó registrado');
+    assert.equal(registro.pedido_id, PEDIDO_ID);
+    assert.equal(registro.status, estado);
+    assert.equal(registro.estado_normalizado, 'fallido');
+    const recibido = lineas.find(l => l.evento === 'recibido');
+    assert.equal(recibido.estado_normalizado, 'fallido');
+  });
+
+  test(`${estado} repetido: la reserva se libera una sola vez`, async () => {
+    const { st, deps } = crearEntorno({
+      pedido: { ...pedidoPendiente(), estado: 'confirmado', estado_pago: 'pendiente' },
+    });
+
+    const respuestas = [];
+    await capturandoLogs(async () => {
+      for (let i = 0; i < 3; i++) respuestas.push(await procesarWebhookCubo(webhook(estado), deps));
+    });
+
+    assert.deepEqual(respuestas.map(r => r.statusCode), [200, 200, 200]);
+    assert.deepEqual(respuestas.map(r => r.liberacion), ['cancelado', 'ya_cancelado', 'ya_cancelado']);
+    assert.equal(st.liberaciones.length, 3, 'cada reintento pasa por el liberador idempotente');
+    assert.equal(st.pedido.estado, 'cancelado');
+  });
+
+  test(`${estado} que llega tarde NO cancela un pedido ya cobrado`, async () => {
+    const { st, deps } = crearEntorno({
+      pedido: { ...pedidoPendiente(), estado: 'confirmado', estado_pago: 'pagado' },
+    });
+
+    const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook(estado), deps));
+
+    assert.equal(resultado.statusCode, 200);
+    assert.match(resultado.warning, new RegExp(`${estado} ignorado`));
+    assert.equal(st.liberaciones.length, 0, 'se intentó liberar inventario de un pedido pagado');
+    assert.equal(st.pedido.estado, 'confirmado');
+    assert.equal(st.pedido.estado_pago, 'pagado');
+    assert.equal(lineas.find(l => l.evento === 'rechazo_sobre_pedido_pagado_ignorado')?.status, estado);
+  });
+
+  test(`${estado}: si la liberación falla se responde 503 para que Cubo reintente`, async () => {
+    const { deps } = crearEntorno({ pedido: pedidoPendiente() });
+    deps.liberarInventarioPedido = async () => ({ ok: false, tipo: 'error_bd', status: 503, detalle: 'sin conexión' });
+
+    const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook(estado), deps));
+
+    assert.equal(resultado.statusCode, 503);
+    assert.equal(lineas.find(l => l.evento === 'liberacion_inventario_fallo')?.status, estado);
+  });
+}
+
+test('REJECTED, FAILED y DECLINED producen exactamente el mismo resultado observable', async () => {
+  const ejecutar = async (estado) => {
+    const { st, deps } = crearEntorno({ pedido: pedidoPendiente() });
+    const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook(estado), deps));
+    const { status, ...resto } = resultado;
+    return {
+      resultado: resto,
+      pedido: { estado: st.pedido.estado, estado_pago: st.pedido.estado_pago },
+      liberaciones: st.liberaciones.map(l => ({ pedidoId: l.pedidoId, canceladoPor: l.opciones.canceladoPor })),
+      rpcs: st.rpcLlamadas.map(r => r.nombre),
+    };
+  };
+  const [rejected, failed, declined] = await Promise.all(ESTADOS_RECHAZO.map(ejecutar));
+  assert.deepEqual(failed, rejected);
+  assert.deepEqual(declined, rejected);
+});
+
+test('el estado de rechazo se normaliza aunque llegue en minúsculas o con espacios', async () => {
+  const { st, deps } = crearEntorno({ pedido: pedidoPendiente() });
+  const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook('  failed '), deps));
+  assert.equal(resultado.tipo, 'rechazado');
+  assert.equal(resultado.status, 'FAILED');
+  assert.equal(st.liberaciones.length, 1);
+  assert.equal(st.pedido.estado, 'cancelado');
 });
 
 // ════════════════════════════════════════════════════════════════════════════
