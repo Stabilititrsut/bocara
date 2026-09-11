@@ -80,7 +80,6 @@ stateDiagram-v2
     en_preparacion --> reembolsado
 
     listo --> completado: entregado al cliente
-    listo --> cancelado: restaurante
 
     completado --> [*]
     cancelado --> [*]
@@ -107,7 +106,6 @@ stateDiagram-v2
 | `en_preparacion` | `listo` | Restaurante |
 | `en_preparacion` | `cancelado` / `reembolsado` | Soporte (admin) |
 | `listo` | `completado` | Restaurante (cliente recogió) |
-| `listo` | `cancelado` | Restaurante |
 
 ### Tabla de transiciones PROHIBIDAS
 
@@ -123,6 +121,7 @@ stateDiagram-v2
 | `confirmado` | `pendiente` | No se retrocede en el ciclo de vida. |
 | `en_preparacion` | `completado` | Debe pasar por `listo`. |
 | `pendiente` | `completado` | Salta todo el flujo de pago y preparación. |
+| `listo` | `cancelado` | El producto ya está listo para recoger. Cualquier cancelación, reembolso y conciliación es un caso excepcional/manual fuera del flujo automático hasta que exista un contrato específico. |
 | `listo` | `recogido` | `recogido` es legacy; los pedidos nuevos van a `completado`. |
 
 ### 1.1 La regla crítica
@@ -282,10 +281,10 @@ Todo error nuevo responde con esta forma:
 {
   "ok": false,
   "error": "TRANSICION_INVALIDA",
-  "detalle": "No se puede cambiar de \"listo\" a \"en_preparacion\". Transiciones válidas desde \"listo\": completado, cancelado.",
+  "detalle": "No se puede cambiar de \"listo\" a \"cancelado\". Transiciones válidas desde \"listo\": completado.",
   "codigo": "TRANSICION_INVALIDA",
   "estado_actual": "listo",
-  "transiciones_permitidas": ["completado", "cancelado"]
+  "transiciones_permitidas": ["completado"]
 }
 ```
 
@@ -342,8 +341,9 @@ Destinos aceptados: `en_preparacion`, `listo`, `completado`, `recogido`, `cancel
 - Valida con `validarTransicion` antes de tocar la BD.
 - El `UPDATE` usa `.eq('estado', estadoLeido)` — si el pedido se movió mientras
   tanto, responde **409 `CONFLICTO_DE_ESTADO`** en vez de pisar el estado nuevo.
-- `estado: 'cancelado'` se desvía a `liberarInventarioPedido`: es el único
-  camino que devuelve inventario. Responde
+- `estado: 'cancelado'` se desvía a `liberarInventarioPedido` únicamente desde
+  los estados cancelables; un pedido `listo` se rechaza antes de tocar pedido o
+  inventario. Ese servicio es el único camino que devuelve inventario. Responde
   `{ ok: true, tipo, estado: 'cancelado', stock_devuelto }`.
 
 #### `PATCH /api/pedidos/:id/cancelar` — soporte, con reembolso registrado
