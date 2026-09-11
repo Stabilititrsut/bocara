@@ -37,11 +37,46 @@ function hoyGuatemala(referencia = new Date()) {
   return ahoraGuatemala(referencia).fecha;
 }
 
-// 'HH:MM' | 'HH:MM:SS' → 'HH:MM:SS'; cualquier otra cosa → null.
+// Formas que la hora puede tomar al volver de la BD, todas equivalentes a la
+// misma hora de pared:
+//
+//   '18:00'              columna text escrita por la app
+//   '8:00'               columna text, fila antigua anterior a validarDatosBolsa
+//   '18:00:00'           columna `time` (lo habitual)
+//   '18:00:00.000'       columna `time` con precisión fraccionaria
+//   '18:00:00+00'        columna `timetz`
+//   '18:00:00-06:00'     columna `timetz` con offset completo
+//
+// El offset se descarta a propósito: estas horas son hora de pared de Guatemala
+// (así las escribe el restaurante y así se le muestran al cliente), no
+// instantes absolutos. Interpretar el sufijo desplazaría la ventana.
+//
+// Antes el patrón solo aceptaba las dos primeras formas con hora de dos
+// dígitos. Cualquier otra devolvía null, y estaVencida entonces juzgaba la
+// publicación solo por `fecha_caducidad` — es decir, la daba por vigente todo
+// el día de su caducidad aunque la ventana ya hubiera cerrado. Esa es la fuga
+// por la que seguían apareciendo productos vencidos en /tienda y /buscar.
+const RE_HORA = /^(\d{1,2}):([0-5]\d)(?::([0-5]\d))?(?:\.\d+)?(?:Z|[+-]\d{2}(?::?\d{2})?)?$/;
+
+// 'HH:MM' | 'HH:MM:SS' (y las variantes de arriba) → 'HH:MM:SS'; si no, null.
 function normalizarHora(hora) {
   if (typeof hora !== 'string') return null;
-  const m = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/.exec(hora.trim());
-  return m ? `${m[1]}:${m[2]}:${m[3] || '00'}` : null;
+  const texto = hora.trim();
+  if (!texto) return null;
+  const m = RE_HORA.exec(texto);
+  if (!m) return null;
+  const h = Number(m[1]);
+  if (h > 23) return null;
+  return `${String(h).padStart(2, '0')}:${m[2]}:${m[3] || '00'}`;
+}
+
+// ¿El campo trae *algo* que pretendía ser una hora? Distingue "no hay hora de
+// fin" (null / '' — la publicación simplemente no declara cierre) de "hay una
+// hora de fin que no se pudo interpretar" (dato corrupto). Los dos casos se
+// tratan distinto en estaVencida: el primero es normal, el segundo es un fallo.
+function tieneValorDeHora(valor) {
+  if (valor == null) return false;
+  return String(valor).trim() !== '';
 }
 
 // 'YYYY-MM-DD' de una columna date (o de un timestamp) → 'YYYY-MM-DD'; si no, null.
@@ -78,6 +113,17 @@ function finVentanaRecogida(bolsa, ahora = ahoraGuatemala()) {
 function estaVencida(bolsa, ahora = ahoraGuatemala()) {
   const fin = finVentanaRecogida(bolsa, ahora);
   if (!fin) {
+    // Hay una hora de fin, pero no se pudo interpretar. Es un dato corrupto, y
+    // aquí se falla CERRADO: se da por vencida. Mostrar una publicación cuya
+    // ventana no se puede evaluar deja que un cliente pague por una bolsa que
+    // quizá ya no puede recoger; ocultarla solo cuesta una venta. Se avisa por
+    // log porque siempre indica un problema de datos que hay que corregir.
+    if (tieneValorDeHora(bolsa?.hora_recogida_fin)) {
+      console.warn('[HORARIO] hora_recogida_fin ininteligible:',
+        JSON.stringify(bolsa.hora_recogida_fin), '| bolsa:', bolsa?.id ?? '(sin id)',
+        '— se oculta la publicación por precaución');
+      return true;
+    }
     // Sin hora de fin solo puede juzgarse por la fecha de caducidad.
     const fecha = normalizarFecha(bolsa?.fecha_caducidad);
     return fecha ? fecha < ahora.fecha : false;

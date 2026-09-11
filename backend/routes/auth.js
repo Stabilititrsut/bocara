@@ -13,6 +13,38 @@ const {
 const router = express.Router();
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '100d';
 
+// Express 4 NO captura el rechazo de la promesa de un handler `async`: no llega
+// al middleware de error de server.js ni a ningún sitio. La petición se queda
+// abierta, sin respuesta y sin log, hasta que el cliente agota su propio
+// timeout — que es justo el síntoma que se reportó en el login con Google.
+//
+// Cualquier handler async de este router que tenga un `await` fuera de un
+// try/catch debe registrarse con este envoltorio para que un fallo se convierta
+// en un 500 inmediato en vez de en una petición colgada.
+function asyncHandler(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+// Una llamada de red que no responde es indistinguible de un cuelgue: sin
+// límite, el handler espera para siempre y el cliente se queda colgado. Se
+// prefiere fallar rápido y con un mensaje claro.
+function conTiempoLimite(promesa, ms, etiqueta) {
+  let temporizador;
+  const limite = new Promise((_, rechazar) => {
+    temporizador = setTimeout(() => {
+      const err = new Error(`${etiqueta} no respondió en ${ms} ms`);
+      err.code = 'TIMEOUT';
+      rechazar(err);
+    }, ms);
+  });
+  return Promise.race([promesa, limite]).finally(() => clearTimeout(temporizador));
+}
+
+// Supabase Auth suele responder en decenas de ms. 7 s deja margen de sobra para
+// un pico y sigue por debajo de los 8 s que espera la pantalla de callback, así
+// que el cliente recibe un error accionable en vez de un timeout mudo.
+const TIMEOUT_SUPABASE_AUTH_MS = 7000;
+
 async function generarCodigoReferido(usuarioId) {
   // Retry hasta 3 veces ante colisión de código (UNIQUE)
   for (let i = 0; i < 3; i++) {
@@ -227,7 +259,7 @@ router.post('/registro', registroLimiter, async (req, res) => {
 });
 
 // POST /api/auth/registro-completo — crea cuenta de cliente después de verificar email con Supabase OTP
-router.post('/registro-completo', registroLimiter, async (req, res) => {
+router.post('/registro-completo', registroLimiter, asyncHandler(async (req, res) => {
   const { email, password, nombre, apellido, telefono, supabase_access_token } = req.body;
   if (!email || !password || !nombre || !supabase_access_token)
     return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -277,10 +309,10 @@ router.post('/registro-completo', registroLimiter, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}));
 
 // POST /api/auth/enviar-otp-email — genera y envía código OTP de 6 dígitos con branding Bocara
-router.post('/enviar-otp-email', otpSendLimiter, async (req, res) => {
+router.post('/enviar-otp-email', otpSendLimiter, asyncHandler(async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ ok: false, error: 'Email requerido' });
   const emailNorm = email.toLowerCase().trim();
@@ -323,7 +355,7 @@ router.post('/enviar-otp-email', otpSendLimiter, async (req, res) => {
 
   console.log(`[otp-email] ✓ Código enviado correctamente a ${emailNorm}`);
   res.json({ ok: true });
-});
+}));
 
 // POST /api/auth/verificar-otp-email — valida OTP y crea la cuenta cliente
 router.post('/verificar-otp-email', otpVerifyLimiter, async (req, res) => {
@@ -374,7 +406,7 @@ router.post('/verificar-otp-email', otpVerifyLimiter, async (req, res) => {
 });
 
 // POST /api/auth/send-phone-otp — envía SMS de verificación vía Twilio
-router.post('/send-phone-otp', otpSendLimiter, async (req, res) => {
+router.post('/send-phone-otp', otpSendLimiter, asyncHandler(async (req, res) => {
   const { telefono } = req.body;
   if (!telefono) return res.status(400).json({ error: 'Teléfono requerido' });
 
@@ -414,7 +446,7 @@ router.post('/send-phone-otp', otpSendLimiter, async (req, res) => {
     phoneOtpStore.delete(digits);
     res.status(500).json({ error: `Error al enviar SMS: ${err.message}` });
   }
-});
+}));
 
 // POST /api/auth/verify-phone-otp — verifica código SMS y crea/busca usuario
 router.post('/verify-phone-otp', otpVerifyLimiter, async (req, res) => {
@@ -476,12 +508,41 @@ router.post('/verify-phone-otp', otpVerifyLimiter, async (req, res) => {
 });
 
 // POST /api/auth/oauth-complete — finaliza login con Google OAuth (Supabase session → JWT propio)
-router.post('/oauth-complete', async (req, res) => {
+router.post('/oauth-complete', asyncHandler(async (req, res) => {
   const { supabase_access_token } = req.body;
   if (!supabase_access_token) return res.status(400).json({ error: 'Token OAuth requerido' });
 
-  const { data: { user: supabaseUser }, error } = await supabase.auth.getUser(supabase_access_token);
-  if (error || !supabaseUser) return res.status(401).json({ error: 'Token OAuth inválido o expirado' });
+  // Esta verificación estaba FUERA del try/catch de abajo. Si la llamada a
+  // Supabase Auth fallaba (red, Auth lento o caído), el rechazo salía del
+  // handler sin que Express 4 lo recogiera: la respuesta nunca se enviaba y el
+  // cliente se quedaba esperando hasta su propio timeout, sin ningún error en
+  // el log del servidor que explicara el cuelgue.
+  let supabaseUser = null;
+  try {
+    const respuesta = await conTiempoLimite(
+      supabase.auth.getUser(supabase_access_token),
+      TIMEOUT_SUPABASE_AUTH_MS,
+      'Supabase Auth (getUser)',
+    );
+    // Destructurar `data.user` directamente reventaba con TypeError cuando
+    // supabase-js devuelve `data: null` en algunos caminos de error — y ese
+    // throw sincrónico dentro de un handler async también dejaba la petición
+    // colgada. Se accede de forma defensiva.
+    if (respuesta?.error) {
+      console.warn('[OAUTH] getUser rechazó el token:', respuesta.error.message);
+      return res.status(401).json({ error: 'Token OAuth inválido o expirado' });
+    }
+    supabaseUser = respuesta?.data?.user || null;
+  } catch (err) {
+    if (err.code === 'TIMEOUT') {
+      console.error('[OAUTH] Supabase Auth no respondió a tiempo:', err.message);
+      return res.status(504).json({ error: 'El proveedor de identidad no respondió a tiempo. Intenta de nuevo.' });
+    }
+    console.error('[OAUTH] Error verificando el token con Supabase Auth:', err.message);
+    return res.status(502).json({ error: 'No se pudo verificar la sesión con el proveedor de identidad. Intenta de nuevo.' });
+  }
+
+  if (!supabaseUser) return res.status(401).json({ error: 'Token OAuth inválido o expirado' });
 
   const email = supabaseUser.email?.toLowerCase().trim();
   if (!email) return res.status(400).json({ error: 'No se pudo obtener el email de Google' });
@@ -529,9 +590,10 @@ router.post('/oauth-complete', async (req, res) => {
       esNuevo,
     });
   } catch (err) {
+    console.error('[OAUTH] Error completando la sesión:', err.message);
     res.status(500).json({ error: err.message });
   }
-});
+}));
 
 // POST /api/auth/login
 router.post('/login', loginLimiter, async (req, res) => {
@@ -613,7 +675,7 @@ router.get('/perfil', authMiddleware, async (req, res) => {
 });
 
 // PUT /api/auth/perfil
-router.put('/perfil', authMiddleware, async (req, res) => {
+router.put('/perfil', authMiddleware, asyncHandler(async (req, res) => {
   const { nombre, apellido, telefono, expo_push_token, avatar_url } = req.body;
   const updates = {};
   if (nombre !== undefined) updates.nombre = nombre;
@@ -629,7 +691,7 @@ router.put('/perfil', authMiddleware, async (req, res) => {
     .single();
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
-});
+}));
 
 // POST /api/auth/setup-demo — crea o resetea un usuario demo (rol: cliente)
 router.post('/setup-demo', setupLimiter, async (req, res) => {
@@ -728,7 +790,7 @@ router.post('/setup-admin', setupLimiter, async (req, res) => {
 });
 
 // GET /api/auth/check-email?email=... — verifica si un correo ya está registrado
-router.get('/check-email', checkEmailLimiter, async (req, res) => {
+router.get('/check-email', checkEmailLimiter, asyncHandler(async (req, res) => {
   const { email } = req.query;
   if (!email) return res.status(400).json({ error: 'email requerido' });
   const { data } = await supabase
@@ -737,7 +799,7 @@ router.get('/check-email', checkEmailLimiter, async (req, res) => {
     .eq('email', email.toLowerCase().trim())
     .maybeSingle();
   res.json({ existe: !!data });
-});
+}));
 
 // POST /api/auth/forgot-password — genera y envía código OTP por email
 router.post('/forgot-password', otpSendLimiter, async (req, res) => {
