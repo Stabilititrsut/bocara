@@ -106,6 +106,17 @@ test('el tramo operativo del restaurante sigue funcionando', () => {
   assert.equal(puedeTransicionar('listo', 'completado'), true);
 });
 
+test('listo solo puede avanzar a completado; no puede cancelarse automáticamente', () => {
+  assert.deepEqual(transicionesDesde('listo'), ['completado']);
+  assert.equal(puedeTransicionar('listo', 'completado'), true);
+
+  const r = validarTransicion('listo', 'cancelado');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'TRANSICION_INVALIDA');
+  assert.equal(r.status, 400);
+  assert.deepEqual(r.transicionesPermitidas, ['completado']);
+});
+
 test('borrador solo avanza a pendiente o cancelado', () => {
   assert.deepEqual(transicionesDesde('borrador'), ['pendiente', 'cancelado']);
 });
@@ -442,7 +453,26 @@ test('no se cancela un pedido en estado terminal', async () => {
   assert.equal(estado.updatesDePedido, 0, 'no debió tocarse la fila del pedido');
 });
 
-test('estadosPermitidos estrecha la política sin romper la idempotencia', async () => {
+test('la política general no cancela un pedido listo ni devuelve stock', async () => {
+  const { liberarInventarioPedido } = require('../services/stock');
+
+  const { cliente, estado } = crearSupabaseFalso({
+    pedido: { id: 'ped-listo', estado: 'listo', estado_pago: 'pagado', bolsa_id: 'bolsa-listo', cantidad: 1 },
+    items: [{ bolsa_id: 'bolsa-listo', cantidad: 1 }],
+    bolsas: { 'bolsa-listo': 0 },
+  });
+
+  const r = await liberarInventarioPedido('ped-listo', { cliente });
+  assert.equal(r.ok, false);
+  assert.equal(r.tipo, 'transicion_invalida');
+  assert.equal(r.error, 'TRANSICION_INVALIDA');
+  assert.equal(estado.pedido.estado, 'listo');
+  assert.equal(estado.bolsas['bolsa-listo'], 0);
+  assert.equal(estado.sumasDeStock.length, 0);
+  assert.equal(estado.updatesDePedido, 0, 'no debió tocarse la fila del pedido');
+});
+
+test('estadosPermitidos no permite eludir el bloqueo de un pedido listo', async () => {
   const { liberarInventarioPedido } = require('../services/stock');
 
   // Soporte no cancela pedidos ya 'listo': el cliente puede estar en la puerta.
@@ -457,7 +487,7 @@ test('estadosPermitidos estrecha la política sin romper la idempotencia', async
     estadosPermitidos: ['confirmado', 'en_preparacion'],
   });
   assert.equal(r.ok, false);
-  assert.equal(r.codigo, 'ESTADO_NO_CANCELABLE');
+  assert.equal(r.codigo, ERRORES.TRANSICION_INVALIDA);
   assert.equal(estado.bolsas['bolsa-5'], 0);
   assert.equal(estado.updatesDePedido, 0);
 });

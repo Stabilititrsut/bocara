@@ -98,7 +98,7 @@ const TRANSICIONES_OPERATIVAS = Object.freeze({
   pagado:         Object.freeze(['confirmado', 'cancelado', 'reembolsado']),
   confirmado:     Object.freeze(['en_preparacion', 'completado', 'cancelado', 'reembolsado']),
   en_preparacion: Object.freeze(['listo', 'cancelado', 'reembolsado']),
-  listo:          Object.freeze(['completado', 'cancelado']),
+  listo:          Object.freeze(['completado']),
   completado:     Object.freeze([]), // terminal
   recogido:       Object.freeze([]), // terminal (legacy)
   cancelado:      Object.freeze([]), // terminal
