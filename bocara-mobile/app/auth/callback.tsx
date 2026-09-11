@@ -80,30 +80,17 @@ export default function AuthCallbackScreen() {
           }
         }
 
-        // ── Google OAuth — leer tokens del hash fragment ──────────────────────
+        // ── Google OAuth (PKCE) — supabase-js intercambia el ?code= de la URL por
+        // una sesión dentro de este mismo getSession() (detectSessionInUrl+flowType
+        // 'pkce' en services/supabase.ts), de forma determinista y sin exponer
+        // tokens en la URL. No hay hash fragment que leer ni tokens que parsear a mano.
         let { data: { session } } = await supabase.auth.getSession();
         if (!active) return;
 
-        if (!session && Platform.OS === 'web') {
-          const hash = window.location.hash.substring(1);
-          const params = new URLSearchParams(hash);
-
-          const hashError = params.get('error');
-          const hashErrorDesc = params.get('error_description');
-          if (hashError) throw new Error(`OAuth error: ${hashError} — ${hashErrorDesc}`);
-
-          const access_token  = params.get('access_token');
-          const refresh_token = params.get('refresh_token');
-
-          if (access_token) {
-            const { data, error: setErr } = await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
-            if (!active) return;
-            if (setErr) throw new Error(`setSession falló: ${setErr.message}`);
-            session = data.session;
-          }
-        }
-
         if (!session) {
+          // Red de seguridad: en web con PKCE, getSession() de arriba ya debería
+          // haber resuelto la sesión. Esto solo cubre nativo (bocara://) u otra
+          // entrega asíncrona tardía — no es el camino esperado en web.
           session = await new Promise<Session | null>((resolve, reject) => {
             let subscription: { unsubscribe: () => void } | undefined;
             let settled = false;
@@ -137,7 +124,7 @@ export default function AuthCallbackScreen() {
         const rol = res.data.usuario?.rol;
         if (rol === 'restaurante') router.replace('/restaurante');
         else if (rol === 'admin') router.replace('/admin');
-        else router.replace('/(tabs)/');
+        else router.replace('/(tabs)/' as any);
       } catch (e: any) {
         if (!active) return;
         console.warn('[AUTH CALLBACK] No se pudo completar la autenticación.');

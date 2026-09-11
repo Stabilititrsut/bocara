@@ -9,13 +9,13 @@ const ts = require('typescript');
 const React = require('react');
 const root = path.resolve(__dirname, '..');
 
-function load(file, mocks = {}, globals = {}) {
+function load(file, mocks = {}, globals = {}, extraSource = '') {
   const exports = {};
-  const source = fs.readFileSync(path.join(root, file), 'utf8');
+  const source = fs.readFileSync(path.join(root, file), 'utf8') + extraSource;
   const code = ts.transpileModule(source, { compilerOptions: {
     module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true,
   } }).outputText;
-  vm.runInNewContext(code, { ...globals, exports, console, setTimeout, clearTimeout, setInterval, clearInterval,
+  vm.runInNewContext(code, { exports, console, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
     require(name) {
       if (name in mocks) return mocks[name];
       if (name === 'react/jsx-runtime') return require(name);
@@ -24,7 +24,9 @@ function load(file, mocks = {}, globals = {}) {
   }, { filename: file });
   return exports;
 }
-const { createCartStore, createCartPersistence } = load('src/context/cartStore.ts');
+const horarioReal = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } });
+const relojMock = { useRelojPublicaciones: () => new Date(), usePublicacionesVigentes: items => horarioReal.publicacionesVigentes(items) };
+const { createCartStore, createCartPersistence } = load('src/context/cartStore.ts', { '../utils/horarioRecogida': horarioReal });
 const tick = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const bolsa = (stock = 3, negocio = 'rest-1', id = 'bolsa-1') => ({
@@ -41,6 +43,19 @@ function storage(initial = {}) {
     async setItem(key, value) { writes.push([key, value]); values.set(key, value); },
   };
 }
+
+test('volver() usa router.back() con historial y cae a la ruta segura sin historial', () => {
+  const { volver } = load('src/utils/backNavigation.ts');
+  const calls = [];
+  const conHistorial = { canGoBack: () => true, back: () => calls.push('back'), replace: h => calls.push(['replace', h]) };
+  volver(conHistorial, '/fallback');
+  assert.deepEqual(calls, ['back'], 'con historial, nunca debe caer al fallback');
+
+  calls.length = 0;
+  const sinHistorial = { canGoBack: () => false, back: () => calls.push('back'), replace: h => calls.push(['replace', h]) };
+  volver(sinHistorial, '/fallback');
+  assert.deepEqual(calls, [['replace', '/fallback']], 'sin historial (URL directa/refresh), debe caer a la ruta segura en vez de quedar inerte');
+});
 
 test('P1-1 hidratación conserva cantidades y productos con stock histórico inferior, cero o desconocido', async () => {
   for (const stock of [1, 0, null, undefined]) {
@@ -69,13 +84,26 @@ test('P1-2 web muestra cada rechazo con window.alert y ok no muestra error', () 
   const { mostrarErrorCarrito } = load('src/utils/cartFeedback.ts', {
     'react-native': { Platform: { OS: 'web' }, Alert: { alert: (...args) => native.push(args) } },
   }, { window: { alert: message => visible.push(message) } });
-  for (const motivo of ['no_cargado', 'otro_negocio', 'agotado', 'limite_stock', 'stock_invalido', 'producto_invalido']) {
+  for (const motivo of ['no_cargado', 'otro_negocio', 'agotado', 'stock_invalido', 'producto_invalido']) {
     assert.equal(mostrarErrorCarrito({ ok: false, motivo }), true);
   }
+  assert.equal(mostrarErrorCarrito({ ok: false, motivo: 'limite_stock', stockDisponible: 3 }), true);
   assert.equal(visible.length, 6); assert.equal(new Set(visible).size, 6);
   assert.ok(visible.every(message => message.includes('\n\n')));
+  assert.ok(visible[5].includes('Solo quedan 3 unidades disponibles'), 'limite_stock muestra la cantidad real');
   assert.equal(mostrarErrorCarrito({ ok: true }), false);
   assert.equal(visible.length, 6); assert.equal(native.length, 0);
+});
+
+test('P1-2 mensaje de límite de stock usa singular/plural según unidades restantes', () => {
+  const visible = [];
+  const { mostrarErrorCarrito } = load('src/utils/cartFeedback.ts', {
+    'react-native': { Platform: { OS: 'web' }, Alert: { alert: () => {} } },
+  }, { window: { alert: message => visible.push(message) } });
+  mostrarErrorCarrito({ ok: false, motivo: 'limite_stock', stockDisponible: 1 });
+  mostrarErrorCarrito({ ok: false, motivo: 'limite_stock', stockDisponible: 5 });
+  assert.ok(visible[0].includes('Solo queda 1 unidad disponible.'));
+  assert.ok(visible[1].includes('Solo quedan 5 unidades disponibles.'));
 });
 
 test('P1-2 native conserva Alert para todos los motivos; SSR sin window es seguro', () => {
@@ -84,9 +112,10 @@ test('P1-2 native conserva Alert para todos los motivos; SSR sin window es segur
     const { mostrarErrorCarrito } = load('src/utils/cartFeedback.ts', {
       'react-native': { Platform: { OS }, Alert: { alert: (...args) => calls.push(args) } },
     });
-    for (const motivo of ['no_cargado', 'otro_negocio', 'agotado', 'limite_stock', 'stock_invalido', 'producto_invalido']) {
+    for (const motivo of ['no_cargado', 'otro_negocio', 'agotado', 'stock_invalido', 'producto_invalido']) {
       assert.equal(mostrarErrorCarrito({ ok: false, motivo }), true);
     }
+    assert.equal(mostrarErrorCarrito({ ok: false, motivo: 'limite_stock', stockDisponible: 2 }), true);
     assert.equal(mostrarErrorCarrito({ ok: true }), false);
     assert.equal(calls.length, OS === 'web' ? 0 : 6);
   }
@@ -246,7 +275,7 @@ function textOf(node) {
   if (!node || typeof node !== 'object') return '';
   return [node?.props?.children].flat(Infinity).map(textOf).join(' ');
 }
-function ui(file, cart, forcedStates = []) {
+function ui(file, cart, forcedStates = [], extraMocks = {}) {
   const h = hooks(); h.forcedStates.push(...forcedStates); const alerts = [], navigation = [];
   let focusEffect;
   const native = { View: 'View', Text: 'Text', ScrollView: 'ScrollView', TouchableOpacity: 'Button', SafeAreaView: 'Safe',
@@ -255,13 +284,18 @@ function ui(file, cart, forcedStates = []) {
     Platform: { OS: 'android' }, StatusBar: {}, Alert: { alert: (...args) => alerts.push(args) } };
   const feedback = load('src/utils/cartFeedback.ts', { 'react-native': native });
   const mocks = { react: h.react, 'react-native': native, 'expo-image': { Image: 'Image' }, '@expo/vector-icons': { Ionicons: 'Icon' },
+    '@/components/ProductCard': { __esModule: true, default: 'ProductCard', CARD_W: 170 },
     'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: effect => { focusEffect = effect; }, useLocalSearchParams: () => ({ id: 'bolsa-1' }) },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
+    '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/context/CartContext': { useCart: () => cart }, '@/src/utils/cartFeedback': feedback,
+    '@/src/utils/horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }),
     '@/src/context/AuthContext': { useAuth: () => ({ usuario: { rol: 'cliente' } }) },
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) },
     '@/constants/Colors': { Colors: {} }, '@/src/services/api': {},
     '@react-native-async-storage/async-storage': {}, 'expo-web-browser': {},
+    '@/src/utils/backNavigation': { volver: (router, fallback) => router.replace(fallback) },
+    ...extraMocks,
   };
   const Component = load(file, mocks).default;
   return { tree: Component(), alerts, navigation,
@@ -288,12 +322,12 @@ test('A5 entrada directa a pago no monta flujo operativo hasta tener carrito hid
   }
 });
 
-test('P1-3 tienda bloquea doble toque, carga y vacío; permite checkout al volver al foco', () => {
+test('Tienda Ver carrito navega una vez a carrito, nunca a pago, y permite volver tras recuperar foco', () => {
   const cart = { loaded: true, items: [{ bolsa: bolsa(), cantidad: 1 }], cantidad: 1, total: 20 };
   const result = ui('app/tienda/[id].tsx', cart, [{ nombre: 'Tienda' }, [], 'todos', false]);
   const button = tree => walk(tree).find(n => n.type === 'Button' && textOf(n).includes('Ver carrito'));
   result.focus(); button(result.tree).props.onPress(); button(result.tree).props.onPress();
-  assert.deepEqual(result.navigation, ['/pago']);
+  assert.deepEqual(result.navigation, ['/(tabs)/carrito']);
   button(result.render()).props.onPress(); assert.equal(result.navigation.length, 1, 'render no desbloquea');
   result.focus(); button(result.render()).props.onPress(); assert.equal(result.navigation.length, 2);
   result.focus(); cart.items = []; button(result.render()).props.onPress();
@@ -303,11 +337,68 @@ test('P1-3 tienda bloquea doble toque, carga y vacío; permite checkout al volve
   assert.equal(result.navigation.length, 2);
   cart.loaded = true; cart.items = [{ bolsa: bolsa(), cantidad: 1 }];
   result.focus(); button(result.render()).props.onPress(); assert.equal(result.navigation.length, 3);
+  assert.ok(result.navigation.every(path => path === '/(tabs)/carrito'));
+});
+
+test('Horario compartido conserva regla del detalle: antes, durante y después de recogida', () => {
+  const { calcularEstadoHorario } = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } });
+  // Horas dadas en hora de Guatemala (UTC-6); se construyen como instantes UTC
+  // absolutos (hour + 6) para que el resultado no dependa de la zona horaria de
+  // la máquina que corre la prueba.
+  for (const [hour, estado, bloqueado] of [[9, 'pronto', false], [11, 'abierto', false], [13, 'vencido', true]]) {
+    const result = calcularEstadoHorario('10:00:00', '12:00:00', new Date(Date.UTC(2026, 8, 10, hour + 6)));
+    assert.equal(result.estado, estado); assert.equal(result.bloqueado, bloqueado);
+  }
+  assert.equal(calcularEstadoHorario('', '').estado, 'desconocido');
+});
+
+test('Horario Guatemala ignora la zona horaria del dispositivo/navegador', () => {
+  const { calcularEstadoHorario, publicacionVencida } = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } });
+  // 21:30 UTC == 15:30 en Guatemala (UTC-6): dentro de una ventana 10:00–18:00,
+  // aunque en zonas como Europa/Asia ya sería "mañana" o muy entrada la noche.
+  const dentroDeVentana = new Date(Date.UTC(2026, 8, 10, 21, 30));
+  assert.equal(calcularEstadoHorario('10:00', '18:00', dentroDeVentana).estado, 'abierto');
+  assert.equal(publicacionVencida({ hora_recogida_inicio: '10:00', hora_recogida_fin: '18:00' }, dentroDeVentana), false);
+  // 23:30 UTC == 17:30 en Guatemala: ya venció una ventana que cierra a las 17:00.
+  const vencidoEnGuatemala = new Date(Date.UTC(2026, 8, 10, 23, 30));
+  assert.equal(calcularEstadoHorario('10:00', '17:00', vencidoEnGuatemala).estado, 'vencido');
+  assert.equal(publicacionVencida({ hora_recogida_inicio: '10:00', hora_recogida_fin: '17:00' }, vencidoEnGuatemala), true);
+  // Ventana que cruza medianoche (22:00 -> 02:00): a la 1:00 Guatemala (07:00 UTC) sigue abierta.
+  const madrugadaGuatemala = new Date(Date.UTC(2026, 8, 10, 7, 0));
+  assert.equal(publicacionVencida({ hora_recogida_inicio: '22:00', hora_recogida_fin: '02:00' }, madrugadaGuatemala), false);
+});
+
+test('Tarjeta tienda desaparece, impide agregar y revalida al tocar tras vencer; limpia timer', () => {
+  let now = new Date(Date.UTC(2026, 8, 10, 17)).getTime() /* 11:00 Guatemala (UTC-6) */;
+  class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } }
+  const horario = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }, { Date: Clock });
+  const h = hooks(); let focus, interval, cleared = false, added = 0;
+  const native = { View: 'View', Text: 'Text', TouchableOpacity: 'Button',
+    StyleSheet: { create: value => value }, Dimensions: { get: () => ({ width: 400 }) },
+    Platform: { OS: 'web' }, StatusBar: {} };
+  const { ProductCard } = load('app/tienda/[id].tsx', {
+    react: h.react, 'react-native': native, 'expo-image': { Image: 'Image' }, '@expo/vector-icons': { Ionicons: 'Icon' },
+    'expo-router': { useRouter: () => ({}), useFocusEffect: effect => { focus = effect; } },
+    'react-native-safe-area-context': {}, '@/src/services/api': {},
+    '@/src/context/CartContext': { useCart: () => ({ loaded: true, items: [] }) },
+    '@/src/utils/cartFeedback': { mostrarErrorCarrito: result => !result.ok },
+    '@/src/utils/horarioRecogida': horario, '@/src/utils/usePublicacionesVigentes': relojMock,
+    '@/src/utils/backNavigation': { volver: (router, fallback) => router.replace?.(fallback) },
+  }, { setInterval: fn => { interval = fn; return 7; }, clearInterval: id => { assert.equal(id, 7); cleared = true; } }, '\nexport { ProductCard };');
+  const product = { ...bolsa(), es_tiempo_limitado: true, hora_recogida_inicio: '10:00', hora_recogida_fin: '12:00' };
+  const render = () => { h.reset(); return ProductCard({ bolsa: product, onAgregar: () => { added++; return { ok: true }; } }); };
+  const addButton = tree => walk(tree).find(n => n.type === 'Button' && n.props.hitSlop);
+  const active = render(); const cleanup = focus(); addButton(active).props.onPress(); assert.equal(added, 1);
+  now = new Date(Date.UTC(2026, 8, 10, 19)).getTime() /* 13:00 Guatemala (UTC-6) */;
+  addButton(active).props.onPress(); assert.equal(added, 1, 'handler anterior revalida reloj actual');
+  let expired = render(); assert.equal(expired, null); assert.equal(addButton(expired), undefined);
+  interval(); expired = render(); assert.equal(expired, null);
+  cleanup(); assert.equal(cleared, true);
 });
 
 test('A4 producto muestra éxito solo si agregar devuelve ok y una sola alerta ante rechazo', () => {
   for (const reason of ['otro_negocio', 'limite_stock', 'agotado', 'no_cargado', 'stock_invalido', 'producto_invalido', null]) {
-    const result = ui('app/producto/[id].tsx', { loaded: true, items: [], agregar: () => reason ? { ok: false, motivo: reason } : { ok: true } }, [bolsa(), false]);
+    const result = ui('app/producto/[id].tsx', { loaded: true, items: [], agregar: () => !reason ? { ok: true } : reason === 'limite_stock' ? { ok: false, motivo: reason, stockDisponible: 2 } : { ok: false, motivo: reason } }, [bolsa(), false]);
     const button = walk(result.tree).find(n => n.type === 'Button' && textOf(n).includes('Agregar al carrito'));
     button.props.onPress(); assert.equal(result.alerts.length, 1);
     assert.equal(result.alerts[0][0] === '¡Agregado!', reason === null);
@@ -318,9 +409,113 @@ test('A4 tarjeta no permite agregar durante hidratación y muestra rechazo del c
   const h = hooks(); const alerts = []; const native = { Platform: { OS: 'android' }, Dimensions: { get: () => ({ width: 400 }) }, StyleSheet: { create: x => x }, Alert: { alert: (...args) => alerts.push(args) } };
   let loaded = false;
   const Component = load('components/ProductCard.tsx', { react: h.react, 'react-native': native, 'expo-image': {}, '@expo/vector-icons': {}, 'expo-router': { useRouter: () => ({}) },
-    '@/src/context/CartContext': { useCart: () => ({ loaded, items: [] }) }, '@/src/services/api': {}, '@/src/utils/cartFeedback': load('src/utils/cartFeedback.ts', { 'react-native': native }) }).default;
+    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/horarioRecogida': horarioReal, '@/src/context/CartContext': { useCart: () => ({ loaded, items: [] }) }, '@/src/services/api': {}, '@/src/utils/cartFeedback': load('src/utils/cartFeedback.ts', { 'react-native': native }) }).default;
   const render = () => { h.reset(); return Component({ bolsa: bolsa(), onAgregar: () => ({ ok: false, motivo: 'otro_negocio' }) }); };
   let button = walk(render()).find(n => n.props?.hitSlop && n.props?.onPress);
   assert.equal(button.props.disabled, true); loaded = true; button = walk(render()).find(n => n.props?.hitSlop && n.props?.onPress);
   button.props.onPress(); assert.equal(alerts.length, 1); assert.equal(alerts[0][0], 'Un restaurante por pedido');
+});
+
+test('Catálogos tienda, negocio, favoritos, búsqueda y promociones excluyen vencidos', () => {
+  const expired = { ...bolsa(), id: 'expired', nombre: 'EXPIRED', hora_recogida_fin: '00:00' };
+  const live = { ...bolsa(), id: 'live', nombre: 'LIVE' };
+  const products = [expired, live];
+  const cart = { loaded: true, items: [], cantidad: 0, total: 0 };
+  const cases = [
+    ['app/tienda/[id].tsx', [{ nombre: 'Tienda' }, products, 'todos', false]],
+    ['app/negocio/[id].tsx', [{ nombre: 'Negocio' }, products, [], [], 'todos', products, false, false, new Set(), [], null, false]],
+    ['app/(tabs)/favoritos.tsx', ['bolsas', [], products, false, false]],
+    ['app/(tabs)/buscar.tsx', ['x', products, false, true]],
+    ['app/(tabs)/promociones.tsx', [products, false, false, 'Todos']],
+  ];
+  for (const [file, states] of cases) {
+    const result = ui(file, cart, states);
+    assert.equal(textOf(result.tree).includes('EXPIRED'), false, file);
+    for (const node of walk(result.tree)) {
+      assert.notEqual(node.props?.bolsa?.id, 'expired', file);
+      if (node.props?.bolsas) assert.ok(node.props.bolsas.every(b => b.id !== 'expired'), file);
+      if (node.props?.items && Array.isArray(node.props.items)) assert.ok(node.props.items.every(b => b.id !== 'expired'), file);
+    }
+    assert.ok(textOf(result.tree).includes('LIVE') || walk(result.tree).some(node =>
+      node.props?.bolsa?.id === 'live' || node.props?.bolsas?.some(b => b.id === 'live') ||
+      (Array.isArray(node.props?.items) && node.props.items.some(b => b.id === 'live'))), `vigente visible: ${file}`);
+  }
+});
+
+test('Reloj real del filtro retira publicación con pantalla abierta y limpia suscripción temporal', () => {
+  let now = new Date(Date.UTC(2026, 8, 10, 17)).getTime() /* 11:00 Guatemala (UTC-6) */;
+  class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } }
+  const h = hooks(); let focus, interval, cleaned = false;
+  const module = load('src/utils/usePublicacionesVigentes.ts', {
+    react: h.react, 'expo-router': { useFocusEffect: fn => { focus = fn; } }, './horarioRecogida': horarioReal,
+  }, { Date: Clock, setInterval: fn => { interval = fn; return 1; }, clearInterval: () => { cleaned = true; } });
+  const items = [{ ...bolsa(), hora_recogida_fin: '12:00' }];
+  const render = () => { h.reset(); return module.usePublicacionesVigentes(items); };
+  assert.equal(render().length, 1); const cleanup = focus();
+  now = new Date(Date.UTC(2026, 8, 10, 19)).getTime() /* 13:00 Guatemala (UTC-6) */; interval();
+  assert.equal(render().length, 0); assert.equal(items.length, 1); cleanup(); assert.equal(cleaned, true);
+});
+
+test('Detalle vencido no es comprable; carrito y entrada directa a pago bloquean sin borrar persistencia', async () => {
+  const expired = { ...bolsa(), hora_recogida_fin: '00:00' };
+  const disk = storage({ A: JSON.stringify([{ bolsa: expired, cantidad: 1 }]) });
+  const store = createCartStore('A', createCartPersistence(disk)); store.activate(); await tick();
+  assert.equal(store.agregar(expired).motivo, 'vencido'); assert.equal(disk.writes.length, 0);
+  const cart = { ...store.getSnapshot(), total: 20, agregar: store.agregar };
+  const detail = ui('app/producto/[id].tsx', cart, [expired, false]);
+  assert.ok(textOf(detail.tree).includes('ya no está disponible'));
+  const result = ui('app/(tabs)/carrito.tsx', cart);
+  const button = walk(result.tree).find(n => n.type === 'Button' && textOf(n).includes('Proceder al pago'));
+  assert.equal(button.props.disabled, true); button.props.onPress(); assert.equal(result.navigation.length, 0);
+  const pay = ui('app/pago.tsx', cart);
+  assert.equal(walk(pay.tree).some(n => n.type?.name === 'PagoContent'), false);
+  assert.equal(store.getSnapshot().items.length, 1); assert.equal(disk.writes.length, 0);
+});
+
+test('Publicar desde ambos formularios bloquea horario vencido antes de API y permite horario futuro', async () => {
+  for (const file of ['app/restaurante/bolsas.tsx', 'app/restaurante/cupones.tsx']) {
+    for (const expired of [true, false]) {
+      const calls = [];
+      const form = { nombre: 'Producto', contenido: 'CODE', descripcion: '', categoria: 'Porcentaje',
+        tipo_form: 'cupon', categoria_alimento: 'otro', precio_original: '40', precio_descuento: '20',
+        hora_recogida_inicio: '00:00', hora_recogida_fin: expired ? '00:00' : '23:59' };
+      const states = file.includes('bolsas') ? [[], false, false, true, form, null, 'n', false, '', 'todos', false]
+        : [[], false, false, true, null, false, 'n', form];
+      const result = ui(file, {}, states, {
+        '@/src/services/api': { bolsasAPI: { crear: async p => { calls.push(p); return { data: {} }; }, listar: async () => ({ data: [] }) },
+          negociosAPI: { miNegocio: async () => ({ data: { id: 'n' } }) } },
+        '@/src/utils/pickImage': {},
+      });
+      const button = walk(result.tree).find(n => n.type === 'Button' && n.props.onPress?.name === 'guardar');
+      assert.ok(button, file); await button.props.onPress();
+      assert.equal(calls.length, expired ? 0 : 1, file);
+      if (expired) assert.ok(result.alerts.some(args => args.join(' ').includes('venció')));
+    }
+  }
+});
+
+test('Detalle abierto antes de vencer bloquea un handler anterior y abandona UI comprable', () => {
+  let now = new Date(Date.UTC(2026, 8, 10, 17)).getTime() /* 11:00 Guatemala (UTC-6) */;
+  class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } }
+  const horario = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }, { Date: Clock });
+  let added = 0;
+  const result = ui('app/producto/[id].tsx', { loaded: true, items: [], agregar: () => { added++; return { ok: true }; } },
+    [{ ...bolsa(), hora_recogida_fin: '12:00' }, false], {
+      '@/src/utils/horarioRecogida': horario,
+      '@/src/utils/usePublicacionesVigentes': { useRelojPublicaciones: () => new Clock() },
+    });
+  const button = walk(result.tree).find(n => n.type === 'Button' && textOf(n).includes('Agregar al carrito'));
+  assert.ok(button); now = new Date(Date.UTC(2026, 8, 10, 19)).getTime() /* 13:00 Guatemala (UTC-6) */; button.props.onPress();
+  assert.equal(added, 0); assert.ok(textOf(result.render()).includes('ya no está disponible'));
+});
+
+test('Flujo vigente tienda a carrito a pago conserva navegación y montaje', () => {
+  const cart = { loaded: true, items: [{ bolsa: bolsa(), cantidad: 1 }], cantidad: 1, total: 20 };
+  const store = ui('app/tienda/[id].tsx', cart, [{ nombre: 'Tienda' }, [bolsa()], 'todos', false]);
+  walk(store.tree).find(n => n.type === 'Button' && textOf(n).includes('Ver carrito')).props.onPress();
+  assert.deepEqual(store.navigation, ['/(tabs)/carrito']);
+  const basket = ui('app/(tabs)/carrito.tsx', cart);
+  walk(basket.tree).find(n => n.type === 'Button' && textOf(n).includes('Proceder al pago')).props.onPress();
+  assert.deepEqual(basket.navigation, ['/pago']);
+  assert.ok(walk(ui('app/pago.tsx', cart).tree).some(n => n.type?.name === 'PagoContent'));
 });

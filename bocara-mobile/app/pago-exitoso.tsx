@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/Colors';
 import { pagosAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
+import { volver } from '@/src/utils/backNavigation';
 
 type ResultType = 'success' | 'rejected' | 'cancelled' | 'verifying';
 
@@ -68,7 +69,7 @@ export default function PagoExitosoScreen() {
   function irAPedidos()  { stopPolling(); router.replace('/(tabs)/pedidos' as any); }
   function irAlInicio()  { stopPolling(); router.replace('/' as any);               }
   function irAlCarrito() { stopPolling(); router.replace('/(tabs)/carrito' as any); }
-  function irAPago()     { stopPolling(); router.back();                             }
+  function irAPago()     { stopPolling(); volver(router, '/pago');                   }
   function stopPolling() { if (pollingRef.current) clearInterval(pollingRef.current); }
 
   // ── ÉXITO ──────────────────────────────────────────────────────────────────

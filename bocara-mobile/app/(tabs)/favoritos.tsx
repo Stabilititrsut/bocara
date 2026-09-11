@@ -1,3 +1,4 @@
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
 import { useCallback, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -46,7 +47,8 @@ export default function FavoritosScreen() {
 
   const [activeTab,  setActiveTab]  = useState<TabKey>('negocios');
   const [negocios,   setNegocios]   = useState<any[]>([]);
-  const [bolsas,     setBolsas]     = useState<any[]>([]);
+  const [bolsasGuardadas,     setBolsas]     = useState<any[]>([]);
+  const bolsas = usePublicacionesVigentes(bolsasGuardadas);
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 

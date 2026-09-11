@@ -141,7 +141,7 @@ export default function QrRecogidaScreen() {
           <Text style={s.btnPedidosText}>Ver mis pedidos</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={s.btnHome} onPress={() => router.replace('/(tabs)/')}>
+        <TouchableOpacity style={s.btnHome} onPress={() => router.replace('/(tabs)/' as any)}>
           <Text style={s.btnHomeText}>Seguir explorando</Text>
         </TouchableOpacity>
 

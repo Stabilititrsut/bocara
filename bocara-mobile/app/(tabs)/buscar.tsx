@@ -1,3 +1,4 @@
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
 import { useState, useCallback } from 'react';
 import {
   View, Text, TextInput, ScrollView, TouchableOpacity, StyleSheet,
@@ -14,7 +15,8 @@ const SUGERENCIAS = ['Sushi', 'Pizza', 'Panadería', 'Cafetería', 'Zona 10', 'Z
 
 export default function BuscarScreen() {
   const [query, setQuery] = useState('');
-  const [resultados, setResultados] = useState<Bolsa[]>([]);
+  const [resultadosGuardadas, setResultados] = useState<Bolsa[]>([]);
+  const resultados = usePublicacionesVigentes(resultadosGuardadas);
   const [loading, setLoading] = useState(false);
   const [buscado, setBuscado] = useState(false);
   const router = useRouter();

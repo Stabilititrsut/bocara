@@ -1,3 +1,5 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
 import { useCallback, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,11 +11,16 @@ import { Colors } from '@/constants/Colors';
 export default function CarritoScreen() {
   const { items, total, agregar, quitar, limpiar, loaded, storageError } = useCart();
   const router = useRouter();
+  const ahora = useRelojPublicaciones();
+  const hayVencidos = items.some(i => publicacionVencida(i.bolsa, ahora));
   const checkoutPending = useRef(false);
   useFocusEffect(useCallback(() => { checkoutPending.current = false; }, []));
 
   function iniciarCheckout() {
     if (!loaded || items.length === 0 || checkoutPending.current) return;
+    if (items.some(i => publicacionVencida(i.bolsa))) {
+      mostrarErrorCarrito({ ok: false, motivo: 'vencido' }); return;
+    }
     checkoutPending.current = true;
     router.push('/pago');
   }
@@ -40,7 +47,7 @@ export default function CarritoScreen() {
           <Text style={s.emptyTitle}>{storageError === 'lectura' ? 'No se pudo recuperar tu carrito' : 'Tu carrito está vacío'}</Text>
           <Text style={s.emptyText}>{storageError === 'lectura' ? 'Puedes seguir explorando y agregar productos. Tu carrito guardado no se reemplaza hasta que hagas un cambio.' : 'Agrega bolsas de comida rescatada para empezar'}</Text>
           {storageError === 'escritura' && <Text style={s.emptyText}>No se pudo guardar el carrito local. Los cambios actuales podrían no conservarse al reiniciar.</Text>}
-          <TouchableOpacity style={s.emptyBtn} onPress={() => router.push('/(tabs)/')}>
+          <TouchableOpacity style={s.emptyBtn} onPress={() => router.push('/(tabs)/' as any)}>
             <Text style={s.emptyBtnText}>Explorar bolsas</Text>
           </TouchableOpacity>
         </View>
@@ -63,6 +70,7 @@ export default function CarritoScreen() {
 
       <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
         {storageError && <Text style={s.emptyText}>No se pudo guardar o recuperar el carrito local. Los cambios actuales podrían no conservarse al reiniciar.</Text>}
+        {hayVencidos && <Text style={s.emptyText}>Hay publicaciones cuyo horario ya venció. Retíralas con el botón menos o vacía el carrito para continuar. No hemos borrado tus productos guardados.</Text>}
         {items.map(({ bolsa, cantidad }) => (
           <View key={bolsa.id} style={s.item}>
             <View style={s.itemThumb}>
@@ -71,6 +79,7 @@ export default function CarritoScreen() {
             <View style={s.itemInfo}>
               <Text style={s.itemNegocio} numberOfLines={1}>{bolsa.negocios?.nombre}</Text>
               <Text style={s.itemNombre} numberOfLines={1}>{bolsa.nombre}</Text>
+              {publicacionVencida(bolsa, ahora) && <Text style={s.emptyText}>No disponible para compra</Text>}
               <View style={s.itemHoraRow}>
                 <Ionicons name="time-outline" size={12} color={Colors.textSecondary} />
                 <Text style={s.itemHora}>{bolsa.hora_recogida_inicio?.slice(0, 5)} – {bolsa.hora_recogida_fin?.slice(0, 5)}</Text>
@@ -83,7 +92,7 @@ export default function CarritoScreen() {
                   <Ionicons name="remove" size={16} color={Colors.primary} />
                 </TouchableOpacity>
                 <Text style={s.qtyNum}>{cantidad}</Text>
-                <TouchableOpacity style={s.qtyBtn} onPress={() => mostrarErrorCarrito(agregar(bolsa))}>
+                <TouchableOpacity style={s.qtyBtn} disabled={publicacionVencida(bolsa, ahora)} onPress={() => mostrarErrorCarrito(agregar(bolsa))}>
                   <Ionicons name="add" size={16} color={Colors.primary} />
                 </TouchableOpacity>
               </View>
@@ -123,7 +132,7 @@ export default function CarritoScreen() {
           <Text style={s.totalLabel}>Total</Text>
           <Text style={s.totalVal}>Q{total.toFixed(2)}</Text>
         </View>
-        <TouchableOpacity style={s.btnPago} onPress={iniciarCheckout} disabled={!loaded || items.length === 0}>
+        <TouchableOpacity style={s.btnPago} onPress={iniciarCheckout} disabled={!loaded || items.length === 0 || hayVencidos}>
           <Text style={s.btnPagoText}>Proceder al pago</Text>
           <Ionicons name="arrow-forward" size={18} color={Colors.white} />
         </TouchableOpacity>

@@ -61,14 +61,17 @@ export default function LoginScreen() {
   }
 
   const loginWithGoogle = async () => {
+    const redirectTo = Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}/auth/callback`
+      : 'bocara://auth/callback';
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: 'https://bocarafood.com/auth/callback'
+        redirectTo,
       }
-    })
-    if (error) console.error(error.message)
-  }
+    });
+    if (error) setErrorMsg(error.message || 'No se pudo iniciar sesión con Google.');
+  };
 
   /* ─── ADMIN ─── */
   if (esAdmin) {

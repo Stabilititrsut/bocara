@@ -1,8 +1,10 @@
+import { publicacionVencida } from '../utils/horarioRecogida';
 import type { Bolsa, CartItem } from '../types';
 
 export type ResultadoAgregar =
   | { ok: true }
-  | { ok: false; motivo: 'no_cargado' | 'otro_negocio' | 'agotado' | 'limite_stock' | 'stock_invalido' | 'producto_invalido' };
+  | { ok: false; motivo: 'vencido' | 'no_cargado' | 'otro_negocio' | 'agotado' | 'stock_invalido' | 'producto_invalido' }
+  | { ok: false; motivo: 'limite_stock'; stockDisponible: number };
 
 interface Storage {
   getItem: (key: string) => Promise<string | null>;
@@ -112,6 +114,7 @@ export function createCartStore(key: string, persistence: ReturnType<typeof crea
     },
     agregar(bolsa: Bolsa): ResultadoAgregar {
       if (!active || !snapshot.loaded) return { ok: false, motivo: 'no_cargado' };
+      if (publicacionVencida(bolsa || {})) return { ok: false, motivo: 'vencido' };
       if (!productoValido(bolsa)) return { ok: false, motivo: 'producto_invalido' };
       if (snapshot.items.length && snapshot.items[0].bolsa.negocio_id !== bolsa.negocio_id) {
         return { ok: false, motivo: 'otro_negocio' };
@@ -124,7 +127,8 @@ export function createCartStore(key: string, persistence: ReturnType<typeof crea
         // Una ficha recién cargada puede tener menos stock que el carrito persistido.
         change(stock === 0 ? snapshot.items.filter(i => i.bolsa.id !== bolsa.id) :
           snapshot.items.map(i => i.bolsa.id === bolsa.id ? { bolsa, cantidad: stock } : i));
-        return { ok: false, motivo: stock === 0 ? 'agotado' : 'limite_stock' };
+        if (stock === 0) return { ok: false, motivo: 'agotado' };
+        return { ok: false, motivo: 'limite_stock', stockDisponible: stock };
       }
       if (stock === 0) return { ok: false, motivo: 'agotado' };
       change(existing

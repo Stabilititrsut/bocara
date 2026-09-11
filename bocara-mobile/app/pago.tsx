@@ -1,3 +1,6 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -54,6 +57,7 @@ const TIPO_COLORS: Record<string, string> = {
 
 export default function PagoScreen() {
   const { loaded, items } = useCart();
+  const ahora = useRelojPublicaciones();
   const router = useRouter();
   if (!loaded) return (
     <SafeAreaView style={[s.root, s.centerBox]}>
@@ -66,6 +70,14 @@ export default function PagoScreen() {
       <Text style={s.errorTitulo}>Tu carrito está vacío</Text>
       <TouchableOpacity onPress={() => router.replace('/(tabs)/carrito')}>
         <Text style={s.linkVolver}>Volver al carrito</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+  if (items.some(i => publicacionVencida(i.bolsa, ahora))) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={s.errorTitulo}>Hay publicaciones no disponibles en tu carrito</Text>
+      <TouchableOpacity onPress={() => router.replace('/(tabs)/carrito')}>
+        <Text style={s.linkVolver}>Revisar carrito</Text>
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -343,7 +355,7 @@ function PagoContent() {
       <Text style={s.errorIcon}>🚫</Text>
       <Text style={s.errorTitulo}>Compra no disponible para esta cuenta</Text>
       <Text style={s.errorMsg}>Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente para comprar.</Text>
-      <TouchableOpacity onPress={() => router.back()}>
+      <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')}>
         <Text style={s.linkVolver}>Volver</Text>
       </TouchableOpacity>
     </SafeAreaView>
@@ -358,7 +370,7 @@ function PagoContent() {
       <TouchableOpacity onPress={handleReintentar} style={s.btnReintentar}>
         <Text style={s.btnReintentarText}>Reintentar</Text>
       </TouchableOpacity>
-      <TouchableOpacity onPress={() => router.back()}>
+      <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')}>
         <Text style={s.linkVolver}>Volver al carrito</Text>
       </TouchableOpacity>
     </SafeAreaView>
@@ -369,7 +381,7 @@ function PagoContent() {
     return (
       <SafeAreaView style={s.root}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+          <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')} style={s.backBtn}>
             <Ionicons name="arrow-back" size={22} color={Colors.primary} />
           </TouchableOpacity>
           <Text style={s.headerTitle}>Confirmar pedido</Text>
@@ -483,7 +495,7 @@ function PagoContent() {
       </Modal>
 
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+        <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')} style={s.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.primary} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Confirmar pedido</Text>

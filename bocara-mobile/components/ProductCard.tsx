@@ -1,3 +1,5 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
 import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
@@ -27,6 +29,7 @@ export interface ProductCardProps {
 
 export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isFavorited }: ProductCardProps) {
   const router = useRouter();
+  const ahora = useRelojPublicaciones();
   const { items, loaded } = useCart();
   const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
   const [isFav, setIsFav] = useState(!!isFavorited);
@@ -49,6 +52,7 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
     }
   }
 
+  if (publicacionVencida(bolsa, ahora)) return null;
   return (
     <View style={[s.card, { width: w }, agotado && s.agotado]}>
       <TouchableOpacity
@@ -112,7 +116,7 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
           {!agotado && (
             <TouchableOpacity
               style={[s.addBtn, cartCount > 0 && s.addBtnActive]}
-              onPress={() => mostrarErrorCarrito(onAgregar(bolsa))}
+              onPress={() => { if (!publicacionVencida(bolsa)) mostrarErrorCarrito(onAgregar(bolsa)); }}
               disabled={!loaded}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               activeOpacity={0.85}

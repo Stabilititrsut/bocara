@@ -1,3 +1,5 @@
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
 import { useEffect, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -85,11 +87,15 @@ export default function NegocioDetailScreen() {
   const { total, cantidad, agregar, loaded } = useCart();
 
   const [negocio,        setNegocio]        = useState<any>(null);
-  const [tiempoLimitado, setTiempoLimitado] = useState<any[]>([]);
-  const [promocion,      setPromocion]      = useState<any[]>([]);
-  const [previos,        setPrevios]        = useState<any[]>([]);
+  const [tiempoLimitadoGuardadas, setTiempoLimitado] = useState<any[]>([]);
+  const tiempoLimitado = usePublicacionesVigentes(tiempoLimitadoGuardadas);
+  const [promocionGuardadas,      setPromocion]      = useState<any[]>([]);
+  const promocion = usePublicacionesVigentes(promocionGuardadas);
+  const [previosGuardadas,        setPrevios]        = useState<any[]>([]);
+  const previos = usePublicacionesVigentes(previosGuardadas);
   const [filtro,         setFiltro]         = useState<FilterKey>('todos');
-  const [filtradas,      setFiltradas]      = useState<any[]>([]);
+  const [filtradasGuardadas,      setFiltradas]      = useState<any[]>([]);
+  const filtradas = usePublicacionesVigentes(filtradasGuardadas);
   const [favorito,       setFavorito]       = useState(false);
   const [toggling,       setToggling]       = useState(false);
   const [favBolsaIds,    setFavBolsaIds]    = useState<Set<string>>(new Set());
@@ -221,7 +227,7 @@ export default function NegocioDetailScreen() {
 
             {/* Top buttons */}
             <View style={[s.coverTop, { paddingTop: topPad + 10 }]}>
-              <TouchableOpacity style={s.iconBtn} onPress={() => router.back()}>
+              <TouchableOpacity style={s.iconBtn} onPress={() => volver(router, '/(tabs)/')}>
                 <Ionicons name="arrow-back" size={20} color="#fff" />
               </TouchableOpacity>
               <View style={{ flex: 1 }} />

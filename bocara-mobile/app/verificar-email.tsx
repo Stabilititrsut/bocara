@@ -8,11 +8,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 
 export default function VerificarEmailScreen() {
   const { email } = useLocalSearchParams<{ email: string }>();
   const [codigo, setCodigo] = useState('');
   const [loading, setLoading] = useState(false);
+  const [reenviando, setReenviando] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [reenvioSegundos, setReenvioSegundos] = useState(60);
   const { setSession } = useAuth();
@@ -63,20 +65,23 @@ export default function VerificarEmailScreen() {
   }
 
   async function handleReenviar() {
-    if (reenvioSegundos > 0) return;
+    if (reenvioSegundos > 0 || reenviando) return;
     setErrorMsg('');
-    setReenvioSegundos(60);
+    setReenviando(true);
     try {
       await authAPI.enviarOtpEmail(email);
+      setReenvioSegundos(60);
     } catch {
       setErrorMsg('No se pudo reenviar el código. Intenta más tarde.');
+    } finally {
+      setReenviando(false);
     }
   }
 
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity onPress={() => router.back()} style={s.back}>
+        <TouchableOpacity onPress={() => volver(router, '/registro-cliente')} style={s.back}>
           <Text style={s.backText}>← Volver</Text>
         </TouchableOpacity>
 
@@ -107,12 +112,12 @@ export default function VerificarEmailScreen() {
         <TouchableOpacity
           style={[s.reenvioBtn, reenvioSegundos > 0 && s.reenvioDisabled]}
           onPress={handleReenviar}
-          disabled={reenvioSegundos > 0}
+          disabled={reenvioSegundos > 0 || reenviando}
         >
           <Text style={[s.reenvioText, reenvioSegundos > 0 && s.reenvioTextDisabled]}>
             {reenvioSegundos > 0
               ? `Reenviar código en ${reenvioSegundos}s`
-              : 'Reenviar código'}
+              : reenviando ? 'Reenviando...' : 'Reenviar código'}
           </Text>
         </TouchableOpacity>
       </ScrollView>

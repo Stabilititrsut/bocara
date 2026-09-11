@@ -1,3 +1,4 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
@@ -192,6 +193,7 @@ export default function BolsasRestauranteScreen() {
 
   async function guardar() {
     if (saving) return;
+    if (publicacionVencida(form)) return alertar('El horario de recogida ya venció. Corrígelo antes de publicar.');
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
       return alertar('Nombre, precio original y precio Bocara son requeridos');
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
@@ -394,7 +396,10 @@ export default function BolsasRestauranteScreen() {
               <Switch
                 value={!!b.activo}
                 disabled={enRevision}
-                onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'))}
+                onValueChange={() => {
+                  if (!b.activo && publicacionVencida(b)) return alertar('El horario de recogida ya venció. Edita la publicación antes de activarla.');
+                  bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'));
+                }}
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />

@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { volver } from '@/src/utils/backNavigation';
 
 const PRIMARY = '#0A2A2A';
 const ACCENT = '#C8960C';
@@ -231,7 +232,7 @@ export default function SociosScreen() {
 
       {/* ── Navbar top ── */}
       <View style={s.navbar}>
-        <TouchableOpacity onPress={() => router.back()} style={s.navBack}>
+        <TouchableOpacity onPress={() => volver(router, '/login')} style={s.navBack}>
           <Ionicons name="arrow-back" size={20} color={PRIMARY} />
         </TouchableOpacity>
         <Text style={s.navLogo}>bocara</Text>

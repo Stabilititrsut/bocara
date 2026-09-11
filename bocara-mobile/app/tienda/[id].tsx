@@ -1,3 +1,5 @@
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -11,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, bolsasAPI } from '@/src/services/api';
 import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
+import { calcularEstadoHorario } from '@/src/utils/horarioRecogida';
 
 const GOLD = '#C8960C';
 const DARK = '#0A2A2A';
@@ -51,15 +54,34 @@ function limpiarTexto(txt: string | undefined | null) {
 function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => ResultadoAgregar }) {
   const router = useRouter();
   const { items, loaded } = useCart();
+  const [horario, setHorario] = useState(() => calcularEstadoHorario(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin));
+  useFocusEffect(useCallback(() => {
+    const actualizar = () => setHorario(calcularEstadoHorario(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin));
+    actualizar();
+    const timer = setInterval(actualizar, 30000);
+    return () => clearInterval(timer);
+  }, [bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin]));
   const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
 
   const pct = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const agotado   = bolsa.cantidad_disponible === 0;
+  const vencido = horario.bloqueado === true;
+  const noDisponible = agotado || vencido;
   const tipoBadge = bolsa.tipo === 'cupon' ? 'PROMO' : 'T.LIM.';
 
+  function agregarProducto() {
+    // Revalidar al tocar: puede vencer entre dos actualizaciones de la tarjeta.
+    const actual = calcularEstadoHorario(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin);
+    setHorario(actual);
+    if (!loaded || agotado || actual.bloqueado) return;
+    mostrarErrorCarrito(onAgregar(bolsa));
+  }
+
+  if (vencido) return null;
+
   return (
-    <View style={[pc.card, { width: CARD_W }, agotado && pc.agotado]}>
+    <View style={[pc.card, { width: CARD_W }, noDisponible && pc.agotado]}>
       <TouchableOpacity
         style={pc.imgWrap}
         onPress={() => router.push(`/producto/${bolsa.id}` as any)}
@@ -81,19 +103,19 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
         )}
 
         {/* Descuento — arriba izquierda */}
-        {pct > 0 && !agotado && (
+        {pct > 0 && !noDisponible && (
           <View style={pc.badgeDisc}>
             <Text style={pc.badgeDiscTxt}>−{pct}%</Text>
           </View>
         )}
-        {agotado && (
+        {noDisponible && (
           <View style={[pc.badgeDisc, { backgroundColor: '#9CA3AF' }]}>
-            <Text style={pc.badgeDiscTxt}>Agotado</Text>
+            <Text style={pc.badgeDiscTxt}>{vencido ? 'Vencido' : 'Agotado'}</Text>
           </View>
         )}
 
         {/* Tipo — arriba derecha */}
-        {!agotado && (
+        {!noDisponible && (
           <View style={pc.badgeTipo}>
             <Text style={pc.badgeTipoTxt}>{tipoBadge}</Text>
           </View>
@@ -111,10 +133,10 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
               <Text style={pc.orig}>Q{bolsa.precio_original?.toFixed(2)}</Text>
             )}
           </View>
-          {!agotado && (
+          {!noDisponible && (
             <TouchableOpacity
               style={[pc.addBtn, cartCount > 0 && pc.addBtnActive]}
-              onPress={() => mostrarErrorCarrito(onAgregar(bolsa))}
+              onPress={agregarProducto}
               disabled={!loaded}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               activeOpacity={0.85}
@@ -137,17 +159,18 @@ export default function TiendaScreen() {
   const router   = useRouter();
   const insets   = useSafeAreaInsets();
   const { total, cantidad, agregar, loaded, items } = useCart();
-  const checkoutPending = useRef(false);
-  useFocusEffect(useCallback(() => { checkoutPending.current = false; }, []));
+  const cartNavigationPending = useRef(false);
+  useFocusEffect(useCallback(() => { cartNavigationPending.current = false; }, []));
 
-  function iniciarCheckout() {
-    if (!loaded || items.length === 0 || checkoutPending.current) return;
-    checkoutPending.current = true;
-    router.push('/pago');
+  function verCarrito() {
+    if (!loaded || items.length === 0 || cartNavigationPending.current) return;
+    cartNavigationPending.current = true;
+    router.push('/(tabs)/carrito');
   }
 
   const [negocio, setNegocio] = useState<any>(null);
-  const [bolsas,  setBolsas]  = useState<any[]>([]);
+  const [bolsasGuardadas,  setBolsas]  = useState<any[]>([]);
+  const bolsas = usePublicacionesVigentes(bolsasGuardadas);
   const [filtro,  setFiltro]  = useState<FilterKey>('todos');
   const [loading, setLoading] = useState(true);
 
@@ -238,7 +261,7 @@ export default function TiendaScreen() {
           >
             <View style={s.coverOverlay} />
             <View style={[s.coverTop, { paddingTop: topPad + 10 }]}>
-              <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+              <TouchableOpacity style={s.backBtn} onPress={() => volver(router, '/(tabs)/')}>
                 <Ionicons name="arrow-back" size={20} color="#fff" />
               </TouchableOpacity>
             </View>
@@ -339,7 +362,7 @@ export default function TiendaScreen() {
           </View>
           <TouchableOpacity
             style={s.cartBtn}
-            onPress={iniciarCheckout}
+            onPress={verCarrito}
             activeOpacity={0.9}
           >
             <Text style={s.cartBtnTxt}>Ver carrito</Text>

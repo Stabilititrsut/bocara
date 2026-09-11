@@ -1,3 +1,6 @@
+import { publicacionVencida, calcularEstadoHorario } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -17,26 +20,6 @@ import { useLocation } from '@/src/context/LocationContext';
 const { height: SH } = Dimensions.get('window');
 const IMG_H = Math.round(SH * 0.48);
 const STATUS_TOP = Platform.OS === 'ios' ? 52 : (StatusBar.currentHeight || 24) + 8;
-
-function calcularEstadoHorario(inicio: string, fin: string) {
-  if (!inicio || !fin) return { estado: 'desconocido', mensaje: '', color: Colors.textLight };
-  const now = new Date();
-  const [ih, im] = inicio.split(':').map(Number);
-  const [fh, fm] = fin.split(':').map(Number);
-  const ini = new Date(now); ini.setHours(ih, im, 0, 0);
-  const end = new Date(now); end.setHours(fh, fm, 0, 0);
-  if (now > end) return { estado: 'vencido', mensaje: 'Horario de recogida vencido por hoy', color: Colors.error, bloqueado: true };
-  if (now < ini) {
-    const mins = Math.floor((ini.getTime() - now.getTime()) / 60000);
-    const hrs = Math.floor(mins / 60);
-    const txt = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins} min`;
-    return { estado: 'pronto', mensaje: `Abre en ${txt} · ${inicio.slice(0, 5)} – ${fin.slice(0, 5)}`, color: '#F59E0B', bloqueado: false };
-  }
-  const mins = Math.floor((end.getTime() - now.getTime()) / 60000);
-  const hrs = Math.floor(mins / 60);
-  const txt = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins} min`;
-  return { estado: 'abierto', mensaje: `Cierra en ${txt}`, color: mins <= 30 ? Colors.error : '#22C55E', bloqueado: false };
-}
 
 function Stars({ rating, size = 13 }: { rating: number; size?: number }) {
   return (
@@ -144,6 +127,7 @@ export default function ProductoScreen() {
   const { haversine, formatDistancia } = useLocation();
   const router = useRouter();
   const timerRef = useRef<any>(null);
+  const ahora = useRelojPublicaciones();
 
   const cargarBolsa = useCallback(async () => {
     const bolsaId = Array.isArray(id) ? id[0] : id;
@@ -190,7 +174,7 @@ export default function ProductoScreen() {
   if (errorMsg || !bolsa) {
     return (
       <View style={s.root}>
-        <TouchableOpacity style={s.backRow} onPress={() => router.back()}>
+        <TouchableOpacity style={s.backRow} onPress={() => volver(router, '/(tabs)/buscar')}>
           <Ionicons name="arrow-back" size={20} color={Colors.accent} />
           <Text style={s.backRowText}>Volver</Text>
         </TouchableOpacity>
@@ -207,6 +191,13 @@ export default function ProductoScreen() {
       </View>
     );
   }
+
+  if (publicacionVencida(bolsa, ahora) || horario?.bloqueado) return (
+    <View style={s.root}>
+      <Text style={s.errorTitle}>Esta publicación ya no está disponible</Text>
+      <TouchableOpacity onPress={() => router.replace('/(tabs)/' as any)}><Text style={s.retryText}>Volver a explorar</Text></TouchableOpacity>
+    </View>
+  );
 
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
@@ -253,6 +244,10 @@ export default function ProductoScreen() {
 
   function handleAgregar() {
     if (!bolsa || !puedeComprar) return;
+    if (publicacionVencida(bolsa)) {
+      setHorario(calcularEstadoHorario(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin));
+      mostrarErrorCarrito({ ok: false, motivo: 'vencido' }); return;
+    }
     if (noPuedeComprarPorRol) {
       Alert.alert('Compra no disponible', 'Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente.');
       return;
@@ -282,7 +277,7 @@ export default function ProductoScreen() {
 
           {/* Back + action buttons */}
           <View style={[s.heroButtons, { top: STATUS_TOP }]}>
-            <TouchableOpacity style={s.circleBtn} onPress={() => router.back()}>
+            <TouchableOpacity style={s.circleBtn} onPress={() => volver(router, bolsa?.negocio_id ? `/tienda/${bolsa.negocio_id}` : '/(tabs)/buscar')}>
               <Ionicons name="arrow-back" size={20} color={Colors.primary} />
             </TouchableOpacity>
             <View style={{ flexDirection: 'row', gap: 8 }}>

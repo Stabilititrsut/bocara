@@ -1,7 +1,8 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, TextInput, Alert, RefreshControl, ActivityIndicator, Modal,
+  SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI } from '@/src/services/api';
@@ -82,6 +83,12 @@ export default function CuponesRestauranteScreen() {
   }
 
   async function guardar() {
+    if (publicacionVencida(form)) {
+      const mensaje = 'El horario de recogida ya venció. Corrígelo antes de publicar.';
+      if (Platform.OS === 'web' && typeof window !== 'undefined') window.alert(mensaje);
+      else Alert.alert('Publicación vencida', mensaje);
+      return;
+    }
     if (!form.nombre.trim() || !form.contenido.trim()) {
       return Alert.alert('Campos requeridos', 'Nombre y código del cupón son obligatorios');
     }
