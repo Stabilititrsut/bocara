@@ -229,7 +229,12 @@ router.get('/:id', async (req, res) => {
       .gt('cantidad_disponible', 0);
     bolsas = r.data;
   }
-  res.json({ ...negocio, bolsas: bolsas || [] });
+  // Este endpoint también devuelve bolsas (lo consume la vista de tienda) y era
+  // el único público que no pasaba por filtrarVigentes: el `.gte(fecha_caducidad)`
+  // de arriba solo compara la FECHA, así que dejaba pasar publicaciones cuya
+  // ventana de recogida ya había cerrado hoy. Misma regla que /feed, /:id/detalle
+  // y /:id/bolsas.
+  res.json({ ...negocio, bolsas: filtrarVigentes(bolsas) });
 });
 
 // POST /api/negocios — crear negocio con geocodificación
