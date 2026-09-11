@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   ahoraGuatemala, hoyGuatemala, estaVencida, filtrarVigentes,
-  validarHorarioFuturo, finVentanaRecogida, MENSAJE_HORARIO_VENCIDO,
+  validarHorarioFuturo, finVentanaRecogida, normalizarHora, MENSAJE_HORARIO_VENCIDO,
 } = require('../services/horarioGuatemala');
 
 // Guatemala es UTC-6 todo el año (sin horario de verano).
@@ -90,4 +90,110 @@ test('validarHorarioFuturo acepta un horario aún abierto', () => {
     validarHorarioFuturo({ hora_recogida_inicio: '22:00', hora_recogida_fin: '02:00' }, AHORA),
     null
   );
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Regresión — productos vencidos que seguían apareciendo en /tienda y /buscar
+//
+// La causa era normalizarHora: solo aceptaba 'HH:MM' y 'HH:MM:SS' con hora de
+// dos dígitos. Cualquier otra forma devolvía null, finVentanaRecogida devolvía
+// null, y estaVencida pasaba a juzgar la publicación SOLO por fecha_caducidad
+// — dándola por vigente todo el día de su caducidad aunque la ventana de
+// recogida ya hubiera cerrado.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('normalizarHora acepta las formas que devuelve la base de datos', () => {
+  // columna time con precisión fraccionaria
+  assert.equal(normalizarHora('12:00:00.000'), '12:00:00');
+  assert.equal(normalizarHora('12:00:00.5'), '12:00:00');
+  // columna timetz — el offset se descarta: son horas de pared de Guatemala
+  assert.equal(normalizarHora('12:00:00+00'), '12:00:00');
+  assert.equal(normalizarHora('12:00:00-06:00'), '12:00:00');
+  assert.equal(normalizarHora('12:00:00Z'), '12:00:00');
+  // fila antigua en columna text, hora de un solo dígito
+  assert.equal(normalizarHora('8:00'), '08:00:00');
+  assert.equal(normalizarHora('9:30:15'), '09:30:15');
+  // las formas de siempre siguen igual
+  assert.equal(normalizarHora('18:00'), '18:00:00');
+  assert.equal(normalizarHora('18:00:00'), '18:00:00');
+});
+
+test('normalizarHora sigue rechazando lo que no es una hora', () => {
+  assert.equal(normalizarHora('25:00'), null);
+  assert.equal(normalizarHora('12:60'), null);
+  assert.equal(normalizarHora('mediodia'), null);
+  assert.equal(normalizarHora(''), null);
+  assert.equal(normalizarHora('   '), null);
+  assert.equal(normalizarHora(null), null);
+  assert.equal(normalizarHora(1200), null);
+});
+
+test('una ventana ya cerrada está vencida aunque la hora venga con microsegundos', () => {
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  const bolsa = {
+    fecha_caducidad: '2026-09-10',
+    hora_recogida_inicio: '08:00:00.000',
+    hora_recogida_fin: '12:00:00.000',
+  };
+  assert.equal(estaVencida(bolsa, ahora), true);
+});
+
+test('una ventana ya cerrada está vencida aunque la hora traiga offset de zona', () => {
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  const bolsa = {
+    fecha_caducidad: '2026-09-10',
+    hora_recogida_inicio: '08:00:00-06',
+    hora_recogida_fin: '12:00:00-06',
+  };
+  assert.equal(estaVencida(bolsa, ahora), true);
+});
+
+test('una ventana ya cerrada está vencida aunque la hora sea de un solo dígito', () => {
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  const bolsa = { fecha_caducidad: '2026-09-10', hora_recogida_inicio: '8:00', hora_recogida_fin: '9:00' };
+  assert.equal(estaVencida(bolsa, ahora), true);
+});
+
+test('una ventana todavía abierta no se oculta por el formato de la hora', () => {
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  assert.equal(estaVencida({ fecha_caducidad: '2026-09-10', hora_recogida_fin: '20:00:00.000' }, ahora), false);
+  assert.equal(estaVencida({ fecha_caducidad: '2026-09-10', hora_recogida_fin: '20:00:00-06:00' }, ahora), false);
+});
+
+test('una hora de fin ininteligible falla CERRADO: la publicación se oculta', () => {
+  // Mostrar una bolsa cuya ventana no se puede evaluar deja que un cliente
+  // pague por comida que quizá ya no puede recoger. Ocultarla solo cuesta una
+  // venta, así que ante un dato corrupto se oculta.
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  const warnOriginal = console.warn;
+  console.warn = () => {};
+  try {
+    assert.equal(estaVencida({ fecha_caducidad: '2026-09-12', hora_recogida_fin: 'mediodia' }, ahora), true);
+    assert.equal(estaVencida({ fecha_caducidad: '2026-09-12', hora_recogida_fin: '25:00' }, ahora), true);
+    assert.deepEqual(filtrarVigentes([{ id: 'x', hora_recogida_fin: 'a las 3' }], ahora), []);
+  } finally {
+    console.warn = warnOriginal;
+  }
+});
+
+test('la ausencia de hora de fin NO es un dato corrupto: manda la fecha', () => {
+  // null, undefined y cadena vacía significan "esta publicación no declara
+  // hora de cierre", que es distinto de "la hora de cierre no se entiende".
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  assert.equal(estaVencida({ fecha_caducidad: '2026-09-10', hora_recogida_fin: null }, ahora), false);
+  assert.equal(estaVencida({ fecha_caducidad: '2026-09-10', hora_recogida_fin: '' }, ahora), false);
+  assert.equal(estaVencida({ fecha_caducidad: '2026-09-10', hora_recogida_fin: '   ' }, ahora), false);
+  assert.equal(estaVencida({ fecha_caducidad: '2026-09-09', hora_recogida_fin: '' }, ahora), true);
+});
+
+test('filtrarVigentes descarta las vencidas sea cual sea el formato de la hora', () => {
+  const ahora = { fecha: '2026-09-10', hora: '15:00:00' };
+  const lote = [
+    { id: 'abierta',        hora_recogida_inicio: '08:00',       hora_recogida_fin: '20:00' },
+    { id: 'micro',          hora_recogida_inicio: '08:00:00',    hora_recogida_fin: '12:00:00.000' },
+    { id: 'timetz',         hora_recogida_inicio: '08:00:00-06', hora_recogida_fin: '12:00:00-06' },
+    { id: 'digito-simple',  hora_recogida_inicio: '8:00',        hora_recogida_fin: '9:00' },
+    { id: 'abierta-timetz', hora_recogida_inicio: '08:00:00-06', hora_recogida_fin: '20:00:00-06' },
+  ];
+  assert.deepEqual(filtrarVigentes(lote, ahora).map(b => b.id), ['abierta', 'abierta-timetz']);
 });
