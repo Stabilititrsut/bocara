@@ -6,6 +6,7 @@ import {
 import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { normalizarHora } from '@/src/utils/hora';
 
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
 
@@ -88,6 +89,10 @@ export default function CuponesRestauranteScreen() {
     if (form.precio_descuento == null || form.precio_descuento === '') {
       return Alert.alert('Campos requeridos', 'El precio con descuento es obligatorio');
     }
+    const horaInicio = normalizarHora(form.hora_recogida_inicio);
+    if (!horaInicio) return Alert.alert('Error', 'Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+    const horaFin = normalizarHora(form.hora_recogida_fin);
+    if (!horaFin) return Alert.alert('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     setSaving(true);
     try {
       const payload = {
@@ -98,8 +103,8 @@ export default function CuponesRestauranteScreen() {
         precio_original: parseFloat(form.precio_original) || 0,
         precio_descuento: parseFloat(form.precio_descuento),
         cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-        hora_recogida_inicio: form.hora_recogida_inicio,
-        hora_recogida_fin: form.hora_recogida_fin,
+        hora_recogida_inicio: horaInicio,
+        hora_recogida_fin: horaFin,
         tipo: 'cupon',
         negocio_id: negocioId,
       };

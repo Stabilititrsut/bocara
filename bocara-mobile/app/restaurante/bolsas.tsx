@@ -7,6 +7,7 @@ import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
+import { normalizarHora } from '@/src/utils/hora';
 
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
 
@@ -214,6 +215,11 @@ export default function BolsasRestauranteScreen() {
       if (fechaCad < hoy) return alertar('La fecha de caducidad no puede ser anterior a hoy');
     }
 
+    const horaInicio = normalizarHora(form.hora_recogida_inicio);
+    if (!horaInicio) return alertar('Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+    const horaFin = normalizarHora(form.hora_recogida_fin);
+    if (!horaFin) return alertar('Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+
     setSaving(true);
     const precOrig = parseFloat(form.precio_original) || 0;
     const precDesc = parseFloat(form.precio_descuento) || 0;
@@ -227,8 +233,8 @@ export default function BolsasRestauranteScreen() {
       precio_original: precOrig,
       precio_descuento: precDesc,
       cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-      hora_recogida_inicio: form.hora_recogida_inicio,
-      hora_recogida_fin: form.hora_recogida_fin,
+      hora_recogida_inicio: horaInicio,
+      hora_recogida_fin: horaFin,
       imagen_url: form.imagen_url || null,
       // Clasificación en el menú
       categoria_menu: form.categoria_menu || null,
