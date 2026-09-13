@@ -4,7 +4,9 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
 const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
-const { getReservadoPendiente, getReservasMap } = require('../services/stock');
+const {
+  getReservasMap, getDisponibilidadRealBolsa, disponibilidadReal, RESERVA_TTL_MINUTOS,
+} = require('../services/stock');
 const { obtenerConfigNumerica } = require('../services/configuracion');
 const {
   ahoraGuatemala, hoyGuatemala, filtrarVigentes, estaVencida, validarHorarioFuturo,
@@ -169,12 +171,14 @@ router.get('/', async (req, res) => {
     }
   }
 
-  // Inyectar cantidad_disponible_real = cantidad_disponible DB − reservas de pedidos pendientes
+  // Inyectar cantidad_disponible_real con la MISMA fórmula que usa el checkout
+  // (services/stock.disponibilidadReal). Las reservas de más de
+  // RESERVA_TTL_MINUTOS ya no cuentan: getReservasMap las descarta.
   try {
     const reservaMap = await getReservasMap();
     resultado = resultado.map(b => ({
       ...b,
-      cantidad_disponible_real: Math.max(0, b.cantidad_disponible - (reservaMap[b.id] || 0)),
+      cantidad_disponible_real: disponibilidadReal(b.cantidad_disponible, reservaMap[b.id] || 0),
     }));
     // Para el feed público, filtrar también por disponibilidad real (no solo DB)
     if (mi_negocio !== 'true') {
@@ -279,10 +283,16 @@ router.get('/:id', async (req, res) => {
     delete data.negocios.estado_verificacion;
   }
 
-  // Añadir disponibilidad real descontando reservas pendientes
+  // Disponibilidad real descontando reservas VIGENTES. Es la misma llamada que
+  // hace el checkout, así que el número que ve el cliente en el detalle es el
+  // mismo contra el que se validará su carrito.
   try {
-    const reservado = await getReservadoPendiente(data.id);
-    data.cantidad_disponible_real = Math.max(0, data.cantidad_disponible - reservado);
+    const { disponible, reservado } = await getDisponibilidadRealBolsa(data);
+    data.cantidad_disponible_real = disponible;
+    if (reservado > 0) {
+      console.log('[BOLSAS DETAIL] bolsa:', data.id, '| DB:', data.cantidad_disponible,
+        '| reservado vigente:', reservado, `(TTL ${RESERVA_TTL_MINUTOS} min)`, '| real:', disponible);
+    }
   } catch {
     data.cantidad_disponible_real = data.cantidad_disponible;
   }

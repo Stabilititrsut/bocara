@@ -194,6 +194,36 @@ app.listen(PORT, () => {
   }, 60 * 60 * 1000);
   console.log('⏰ Cron de limpieza de borradores activo (cada hora)');
 
+  // Reservas zombis: pedidos que se quedaron en 'pendiente' porque el cliente
+  // abrió el link de Cubo y nunca volvió.
+  //
+  // El stock YA está liberado sin necesidad de este barrido: la disponibilidad
+  // real ignora toda reserva de más de RESERVA_TTL_MINUTOS (services/stock.js),
+  // así que la unidad vuelve al feed en el minuto 15 aunque el cron no corra.
+  // Esto solo cierra las filas para que no se acumulen en el panel del cliente.
+  //
+  // Por eso el margen es de 2 horas y no de 15 minutos: cancelar la fila a los
+  // 15 rompería al cliente que paga tarde — el webhook encontraría el pedido en
+  // 'cancelado' y devolvería 409 con el dinero ya cobrado. Liberar el stock
+  // pronto y cerrar la fila tarde es lo correcto en los dos frentes.
+  const MARGEN_CIERRE_RESERVAS_MIN = 120;
+  setInterval(async () => {
+    try {
+      const { data, error } = await supabase.rpc('expirar_reservas_vencidas', {
+        p_ttl_minutos: MARGEN_CIERRE_RESERVAS_MIN,
+        p_limite: 500,
+      });
+      if (error) {
+        console.error('[CLEANUP] expirar_reservas_vencidas — ejecutar migración 202609121200:', error.message);
+        return;
+      }
+      if (data?.expirados) console.log('[CLEANUP] reservas vencidas cerradas:', data.expirados);
+    } catch (err) {
+      console.error('[CLEANUP] error cerrando reservas vencidas:', err.message);
+    }
+  }, 30 * 60 * 1000);
+  console.log('⏰ Cron de cierre de reservas vencidas activo (cada 30 min)');
+
   // Las publicaciones se conservan aunque estén ocultas o rechazadas. Nunca se
   // borran automáticamente: `activo=false` funciona como archivo recuperable.
   console.log('🗃️ Conservación de publicaciones activa (sin borrado automático)');
