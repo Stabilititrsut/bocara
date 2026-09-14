@@ -4,14 +4,25 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { haversine } = require('../utils/geo');
 const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
-const { getReservadoPendiente, getReservasMap } = require('../services/stock');
+const {
+  getReservasMap, getDisponibilidadRealBolsa, disponibilidadReal, RESERVA_TTL_MINUTOS,
+} = require('../services/stock');
 const { obtenerConfigNumerica } = require('../services/configuracion');
+const {
+  co2PorUnidad, factorCO2, PESO_UNIDAD_DEFECTO_KG,
+} = require('../services/impactoAmbiental');
+const {
+  ahoraGuatemala, hoyGuatemala, filtrarVigentes, estaVencida, validarHorarioFuturo,
+  MENSAJE_HORARIO_VENCIDO,
+} = require('../services/horarioGuatemala');
 const router = express.Router();
 
-// Fecha de hoy en formato YYYY-MM-DD (UTC, igual que el resto de fechas del servidor)
-// para comparar contra fecha_caducidad (columna "date", sin hora).
+// Fecha de hoy (YYYY-MM-DD) en Guatemala para comparar contra fecha_caducidad
+// (columna "date", sin hora). Antes se calculaba en UTC: como Guatemala es UTC-6,
+// a partir de las 18:00 locales el servidor ya creía estar en el día siguiente y
+// ocultaba del feed publicaciones que seguían siendo válidas ese mismo día.
 function hoy() {
-  return new Date().toISOString().slice(0, 10);
+  return hoyGuatemala();
 }
 
 function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
@@ -39,8 +50,12 @@ function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
   const timeRe = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
   if (datos.hora_recogida_inicio && !timeRe.test(datos.hora_recogida_inicio)) return 'Hora de inicio inválida';
   if (datos.hora_recogida_fin && !timeRe.test(datos.hora_recogida_fin)) return 'Hora de finalización inválida';
-  if (datos.hora_recogida_inicio && datos.hora_recogida_fin && datos.hora_recogida_inicio >= datos.hora_recogida_fin)
-    return 'La hora de finalización debe ser posterior a la hora de inicio';
+  // hora_fin < hora_inicio NO es un error: es una ventana que cruza la medianoche
+  // (p. ej. 22:00 → 02:00), soportada por services/horarioGuatemala.js, que la
+  // hace terminar al día siguiente. Solo se rechaza la ventana de duración cero.
+  if (datos.hora_recogida_inicio && datos.hora_recogida_fin &&
+      datos.hora_recogida_inicio === datos.hora_recogida_fin)
+    return 'La hora de finalización no puede ser igual a la hora de inicio';
   if (datos.fecha_caducidad && !/^\d{4}-\d{2}-\d{2}$/.test(datos.fecha_caducidad))
     return 'La fecha de caducidad debe usar el formato AAAA-MM-DD';
   return null;
@@ -147,14 +162,26 @@ router.get('/', async (req, res) => {
   if (mi_negocio !== 'true') {
     resultado = resultado.filter(b => b.negocios?.activo === true &&
       (b.negocios?.estado_verificacion === 'aprobado' || b.negocios?.estado_verificacion == null));
+
+    // Publicaciones cuya ventana de recogida ya terminó según la hora de Guatemala.
+    // Va antes de reservas, distancia y contadores para que ningún cálculo de más
+    // abajo cuente una publicación que el cliente ya no puede recoger. El registro
+    // NUNCA se borra: solo deja de listarse mientras esté vencido.
+    const antesDeVencidas = resultado.length;
+    resultado = filtrarVigentes(resultado);
+    if (antesDeVencidas !== resultado.length) {
+      console.log('[BOLSAS] excluidas por horario vencido (America/Guatemala):', antesDeVencidas - resultado.length);
+    }
   }
 
-  // Inyectar cantidad_disponible_real = cantidad_disponible DB − reservas de pedidos pendientes
+  // Inyectar cantidad_disponible_real con la MISMA fórmula que usa el checkout
+  // (services/stock.disponibilidadReal). Las reservas de más de
+  // RESERVA_TTL_MINUTOS ya no cuentan: getReservasMap las descarta.
   try {
     const reservaMap = await getReservasMap();
     resultado = resultado.map(b => ({
       ...b,
-      cantidad_disponible_real: Math.max(0, b.cantidad_disponible - (reservaMap[b.id] || 0)),
+      cantidad_disponible_real: disponibilidadReal(b.cantidad_disponible, reservaMap[b.id] || 0),
     }));
     // Para el feed público, filtrar también por disponibilidad real (no solo DB)
     if (mi_negocio !== 'true') {
@@ -247,15 +274,28 @@ router.get('/:id', async (req, res) => {
   if (!negocioOk || !bolsaOk) {
     return res.status(404).json({ error: 'Bolsa no encontrada' });
   }
+  // El detalle público sigue la misma regla que el feed: si la ventana de recogida
+  // ya venció en Guatemala, la publicación no es consultable aunque se conozca el id
+  // (si no, el cliente podría abrirla desde un enlace viejo y llegar al checkout).
+  if (estaVencida(data)) {
+    console.log('[BOLSAS DETAIL] bolsa con horario vencido (America/Guatemala):', data.id);
+    return res.status(404).json({ error: MENSAJE_HORARIO_VENCIDO });
+  }
   if (data.negocios) {
     delete data.negocios.activo;
     delete data.negocios.estado_verificacion;
   }
 
-  // Añadir disponibilidad real descontando reservas pendientes
+  // Disponibilidad real descontando reservas VIGENTES. Es la misma llamada que
+  // hace el checkout, así que el número que ve el cliente en el detalle es el
+  // mismo contra el que se validará su carrito.
   try {
-    const reservado = await getReservadoPendiente(data.id);
-    data.cantidad_disponible_real = Math.max(0, data.cantidad_disponible - reservado);
+    const { disponible, reservado } = await getDisponibilidadRealBolsa(data);
+    data.cantidad_disponible_real = disponible;
+    if (reservado > 0) {
+      console.log('[BOLSAS DETAIL] bolsa:', data.id, '| DB:', data.cantidad_disponible,
+        '| reservado vigente:', reservado, `(TTL ${RESERVA_TTL_MINUTOS} min)`, '| real:', disponible);
+    }
   } catch {
     data.cantidad_disponible_real = data.cantidad_disponible;
   }
@@ -282,15 +322,31 @@ router.post('/', authMiddleware, async (req, res) => {
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
+  // Los mismos defaults que se persisten más abajo, para validar exactamente lo
+  // que se va a guardar y no una versión sin horario.
+  const horarioCreacion = {
+    hora_recogida_inicio: hora_recogida_inicio || '18:00',
+    hora_recogida_fin: hora_recogida_fin || '20:00',
+    fecha_caducidad: fecha_caducidad || null,
+  };
+
   const errorValidacion = validarDatosBolsa({
     nombre, precio_original, precio_descuento,
     cantidad_disponible: cantidad_disponible ?? 1,
     peso_estimado_kg: peso_estimado_kg ?? 0.5,
-    hora_recogida_inicio: hora_recogida_inicio || '18:00',
-    hora_recogida_fin: hora_recogida_fin || '20:00',
-    fecha_caducidad,
+    ...horarioCreacion,
   });
   if (errorValidacion) return res.status(400).json({ error: errorValidacion });
+
+  // La ventana de recogida debe terminar estrictamente en el futuro según la hora
+  // de Guatemala (UTC-6). Publicar algo ya vencido dejaría un registro que ningún
+  // endpoint público mostraría.
+  const errorHorario = validarHorarioFuturo(horarioCreacion);
+  if (errorHorario) {
+    console.warn('[BOLSAS] creación rechazada por horario vencido:', JSON.stringify(horarioCreacion),
+      '| ahora Guatemala:', JSON.stringify(ahoraGuatemala()));
+    return res.status(400).json({ error: errorHorario });
+  }
 
   const { data: negocio } = await supabase
     .from('negocios').select('id,categoria').eq('propietario_id', req.usuario.id).single();
@@ -326,7 +382,18 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
-  const pesoKg = parseFloat(peso_estimado_kg) || 0.5;
+  const pesoKg = parseFloat(peso_estimado_kg) || PESO_UNIDAD_DEFECTO_KG;
+
+  // CO₂ estimado POR UNIDAD = peso × factor de su categoría alimentaria.
+  // Se calcula aquí, con los datos que el restaurante acaba de declarar, y se
+  // guarda como foto para la ficha del producto. Las métricas agregadas NO
+  // suman esta columna: la recalculan desde peso y categoría
+  // (services/impactoAmbiental.js), para que sumar no arrastre redondeos.
+  const co2Unidad = co2PorUnidad(pesoKg, categoria_alimento);
+  const factorAplicado = factorCO2(categoria_alimento);
+  console.log('[CO2] bolsa nueva |', pesoKg, 'kg ×', factorAplicado.factor, 'kgCO₂e/kg',
+    '(' + factorAplicado.categoria + (factorAplicado.esDefecto ? ', factor de plataforma' : '') + ') =',
+    co2Unidad, 'kgCO₂e/unidad');
 
   let { data, error } = await supabase
     .from('bolsas')
@@ -340,6 +407,7 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
       peso_estimado_kg: pesoKg,
+      co2_salvado_kg: co2Unidad,
       categoria_alimento: categoria_alimento || null,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
@@ -357,9 +425,13 @@ router.post('/', authMiddleware, async (req, res) => {
 
   if (error) {
     // Fallback: solo omite las columnas de metadata más recientes (fecha_caducidad,
-    // categoria_menu) que pueden faltar en despliegues antiguos. peso_estimado_kg y los
-    // flags es_tiempo_limitado/es_promocion/es_descuento se preservan siempre:
-    // son los que definen el tipo real de la publicación y no deben perderse.
+    // categoria_menu, categoria_alimento, co2_salvado_kg) que pueden faltar en
+    // despliegues antiguos. peso_estimado_kg y los flags
+    // es_tiempo_limitado/es_promocion/es_descuento se preservan siempre: son los
+    // que definen el tipo real de la publicación y no deben perderse.
+    //
+    // Perder co2_salvado_kg aquí no pierde la métrica: peso_estimado_kg sí se
+    // guarda, y el impacto agregado se recalcula desde el peso.
     const r = await supabase
       .from('bolsas')
       .insert([{
@@ -427,6 +499,10 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
   }
 
+  // co2_salvado_kg NO está en esta lista a propósito: es un campo derivado. Lo
+  // recalcula el backend desde peso y categoría (más abajo), nunca lo manda el
+  // cliente — si el restaurante pudiera enviarlo, podría publicar el impacto
+  // ambiental que quisiera.
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
     'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
@@ -438,9 +514,48 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const datosResultantes = { ...bolsa, ...updates };
   const errorValidacion = validarDatosBolsa(datosResultantes, { permiteCantidadCero: true });
   if (errorValidacion) return res.status(400).json({ error: errorValidacion });
+
+  // El horario resultante debe terminar en el futuro (hora de Guatemala) cuando la
+  // edición toca el horario/la fecha, o cuando reactiva la publicación. Se valida
+  // sobre `datosResultantes` (lo que quedará guardado), no sobre el body suelto.
+  //
+  // Deliberadamente NO se valida en una edición que solo desactiva (activo=false)
+  // ni en una que toca campos ajenos al horario: el restaurante debe poder archivar
+  // o corregir una publicación ya vencida — para volver a publicarla tiene que
+  // mandar un horario nuevo, y entonces esta validación sí corre.
+  const tocaHorario = ['hora_recogida_inicio', 'hora_recogida_fin', 'fecha_caducidad']
+    .some(campo => updates[campo] !== undefined);
+  const reactiva = updates.activo === true || updates.activo === 'true';
+  if (tocaHorario || reactiva) {
+    const errorHorario = validarHorarioFuturo(datosResultantes);
+    if (errorHorario) {
+      console.warn('[PUT /bolsas/:id] rechazada por horario vencido | id=%s | motivo=%s | horario=%s | ahora Guatemala=%s',
+        req.params.id, reactiva && !tocaHorario ? 'reactivacion' : 'edicion_horario',
+        JSON.stringify({
+          hora_recogida_inicio: datosResultantes.hora_recogida_inicio,
+          hora_recogida_fin: datosResultantes.hora_recogida_fin,
+          fecha_caducidad: datosResultantes.fecha_caducidad,
+        }),
+        JSON.stringify(ahoraGuatemala()));
+      return res.status(400).json({ error: errorHorario });
+    }
+  }
+
   if (updates.nombre !== undefined) updates.nombre = updates.nombre.trim();
   for (const campo of ['precio_original', 'precio_descuento', 'cantidad_disponible', 'peso_estimado_kg']) {
     if (updates[campo] !== undefined && updates[campo] !== '') updates[campo] = Number(updates[campo]);
+  }
+
+  // Si cambió el peso o la categoría alimentaria, el CO₂ por unidad deja de
+  // corresponder al producto: se recalcula sobre `datosResultantes` (lo que
+  // quedará guardado), no sobre el body suelto. Sin esto, editar una bolsa de
+  // 0.5 kg a 3 kg dejaba publicado el impacto de la versión vieja.
+  if (updates.peso_estimado_kg !== undefined || updates.categoria_alimento !== undefined) {
+    const pesoResultante = Number(datosResultantes.peso_estimado_kg) || PESO_UNIDAD_DEFECTO_KG;
+    updates.co2_salvado_kg = co2PorUnidad(pesoResultante, datosResultantes.categoria_alimento);
+    console.log('[CO2] bolsa %s recalculada | %s kg | categoria=%s | %s kgCO₂e/unidad',
+      req.params.id, pesoResultante, datosResultantes.categoria_alimento ?? 'sin categoría',
+      updates.co2_salvado_kg);
   }
 
   // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron

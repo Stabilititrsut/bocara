@@ -4,7 +4,11 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
 const { generarLinkPago } = require('../services/visaLink');
-const { getReservadoPendiente } = require('../services/stock');
+const {
+  getDisponibilidadRealBolsa, reservarStockPedido, RESERVA_TTL_MINUTOS,
+  registrar: registrarStock,
+} = require('../services/stock');
+const { ESTADOS_SIN_COBRO, puedeTransicionar, validarTransicion } = require('../services/orderStateMachine');
 const { procesarWebhookCubo } = require('./webhooks');
 const { obtenerComisionFraccion, obtenerConfigNumerica, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
 const { normalizeCartItems, validateCheckoutBags } = require('../services/checkoutValidation');
@@ -17,6 +21,44 @@ function formatearTelefonoCubo(telefono) {
   if (!telefono) return undefined;
   const local = telefono.replace(/\D/g, '').slice(-8);
   return local ? `+502${local}` : undefined;
+}
+
+// Revierte un pedido recién creado que no llegó a tener link de pago utilizable.
+//
+// No usa services/stock.liberarInventarioPedido a propósito: ese liberador es
+// para cancelaciones de pedidos que pueden tener stock descontado. Aquí el
+// pedido nunca pasó de 'borrador'/'pendiente', así que jamás se tocó
+// `bolsas.cantidad_disponible` — devolver unidades duplicaría el stock. Basta
+// con sacarlo del conjunto que services/stock.js cuenta como reservado.
+//
+// Las dos cláusulas de guarda son el punto importante: `.in('estado', …)` y
+// `.neq('estado_pago', 'pagado')` impiden que un rollback tardío pise un pedido
+// que el webhook de Cubo confirmó mientras tanto. Sin ellas, una carrera entre
+// este rollback y confirmar_pago_cubo dejaba cancelado un pedido ya cobrado.
+async function revertirPedidoSinPago(pedidoId, motivo) {
+  // Todos los estados de origen posibles aquí son cancelables; se comprueba
+  // contra la máquina para que un cambio futuro en la matriz se note.
+  const origenes = ESTADOS_SIN_COBRO.filter((e) => puedeTransicionar(e, 'cancelado'));
+  try {
+    const { error } = await supabase.from('pedidos')
+      .update({ estado: 'cancelado', estado_pago: 'fallido' })
+      .eq('id', pedidoId)
+      .in('estado', origenes)
+      .neq('estado_pago', 'pagado');
+    if (error) console.error('[PAGO] rollback de pedido falló —', motivo, ':', error.message);
+  } catch (err) {
+    console.error('[PAGO] rollback de pedido no disponible —', motivo, ':', err.message);
+  }
+}
+
+// Un solo texto para "no hay unidades", en vez de tres variantes repetidas por
+// los tres puntos del checkout que validan stock. El cliente ve el mismo
+// mensaje llegue por donde llegue.
+function mensajeSinStock(nombre, disponible) {
+  const producto = nombre || 'Producto';
+  return disponible === 0
+    ? `"${producto}": Esta bolsa ya no tiene unidades disponibles.`
+    : `"${producto}": Solo quedan ${disponible} unidad(es) disponibles.`;
 }
 
 // Comisión y costo de envío se leen de `configuracion` (services/configuracion.js)
@@ -103,23 +145,22 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       .select('id');
     console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
 
-    // Validar stock de cada item considerando reservas pendientes de otros usuarios
+    // Primera criba de stock, solo para fallar pronto y con un mensaje claro:
+    // las reservas caducadas (> RESERVA_TTL_MINUTOS) ya no cuentan aquí. La
+    // garantía de verdad NO está en este bucle sino en reservar_stock_pedido,
+    // más abajo: entre este SELECT y el INSERT del pedido no hay nada que
+    // impida que otro cliente se lleve la última unidad.
     for (let i = 0; i < cartItems.length; i++) {
       const bolsa = bolsas[i];
       const cantidadSolicitada = cartItems[i].cantidad;
-      const reservado = await getReservadoPendiente(bolsa.id);
-      const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+      const { disponible: disponibleReal, reservado } = await getDisponibilidadRealBolsa(bolsa);
       console.log('[STOCK] bolsa:', bolsa.id);
       console.log('[STOCK] cantidad_disponible DB:', bolsa.cantidad_disponible);
-      console.log('[STOCK] reservado pendiente:', reservado);
+      console.log('[STOCK] reservado vigente:', reservado, `(TTL ${RESERVA_TTL_MINUTOS} min)`);
       console.log('[STOCK] disponible real:', disponibleReal);
       console.log('[STOCK] solicitado:', cantidadSolicitada);
       if (cantidadSolicitada > disponibleReal) {
-        return res.status(400).json({
-          error: disponibleReal === 0
-            ? `"${bolsa.nombre}": Esta bolsa ya no tiene unidades disponibles.`
-            : `"${bolsa.nombre}": Solo quedan ${disponibleReal} unidad(es) disponibles.`,
-        });
+        return res.status(400).json({ error: mensajeSinStock(bolsa.nombre, disponibleReal) });
       }
     }
 
@@ -179,7 +220,11 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       comision_pasarela:      comisionPasarela,
       monto_neto_restaurante: montoNetoRestaurante,
       total,
-      estado:                 'pendiente',
+      // Nace como borrador y solo pasa a 'pendiente' (= reserva viva) dentro de
+      // reservar_stock_pedido, con las bolsas bloqueadas. Insertarlo ya en
+      // 'pendiente' era el TOCTOU: 10 carritos simultáneos sobre 3 unidades
+      // pasaban los 10 el chequeo de arriba y reservaban los 10.
+      estado:                 'borrador',
       estado_pago:            'pendiente',
       codigo_recogida:        codigoRecogida,
       payu_reference_code:    referenceCode,
@@ -211,11 +256,45 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     }));
     const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
     if (itemsInsertErr) {
-      await supabase.from('pedidos')
-        .update({ estado: 'cancelado', estado_pago: 'fallido' })
-        .eq('id', pedido.id);
+      await revertirPedidoSinPago(pedido.id, 'items del pedido no se pudieron insertar');
       console.error('[PAGO] Error insertando pedido_items — pedido cancelado. Ejecutar migración SQL si la tabla o columnas no existen:', itemsInsertErr.message);
       return res.status(500).json({ error: 'Error al registrar los items del pedido. Intenta de nuevo.' });
+    }
+
+    // ── La reserva, ahora sí, atómica ───────────────────────────────────────
+    // Con los items ya escritos, la RPC bloquea cada bolsa (FOR UPDATE), vuelve
+    // a contar las reservas vigentes y solo entonces pasa el pedido a
+    // 'pendiente'. Dos checkouts simultáneos por la última unidad se serializan
+    // aquí: el segundo re-lee la reserva del primero y sale con 409.
+    const reserva = await reservarStockPedido(pedido.id);
+    if (!reserva.ok) {
+      await revertirPedidoSinPago(pedido.id, `reserva rechazada (${reserva.tipo})`);
+
+      if (reserva.tipo === 'stock_insuficiente') {
+        const bolsaSinStock = bolsas.find(b => b.id === reserva.bolsaId);
+        registrarStock('warn', 'checkout_sin_stock', {
+          pedido_id: pedido.id, bolsa_id: reserva.bolsaId ?? null,
+          disponible: reserva.disponible ?? null, solicitado: reserva.solicitado ?? null,
+        });
+        return res.status(409).json({ error: mensajeSinStock(bolsaSinStock?.nombre, reserva.disponible) });
+      }
+
+      // FAIL-CLOSED: si la reserva atómica no se puede hacer (RPC caída, sin
+      // desplegar, error de BD) el checkout se corta aquí con 503. NO existe un
+      // camino degradado: comprobar el stock en Node y marcar 'pendiente' a
+      // mano es justo el TOCTOU que reservar_stock_pedido cierra, y con él
+      // vuelve la sobreventa. Antes que vender una bolsa que no existe, el
+      // cliente ve "intenta de nuevo".
+      const status = reserva.status || 503;
+      registrarStock('error', 'checkout_sin_reserva', {
+        pedido_id: pedido.id, tipo: reserva.tipo, status,
+        detalle: typeof reserva.detalle === 'string' ? reserva.detalle : JSON.stringify(reserva.detalle ?? null),
+      });
+      return res.status(status).json({
+        error: status === 503
+          ? 'No se pudo reservar el producto. Vuelve a intentarlo en unos minutos.'
+          : 'No se pudo reservar el producto. Vuelve a iniciar el checkout.',
+      });
     }
 
     const { data: usuario } = await supabase
@@ -264,9 +343,7 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       })
       .eq('id', pedido.id);
     if (tokenUpdateErr) {
-      await supabase.from('pedidos')
-        .update({ estado: 'cancelado', estado_pago: 'fallido' })
-        .eq('id', pedido.id);
+      await revertirPedidoSinPago(pedido.id, 'token de Cubo no se pudo guardar');
       console.error('[PAGO] Error guardando token Cubo — pedido cancelado. Columnas Cubo pueden no existir (ejecutar migración SQL):', tokenUpdateErr.message);
       return res.status(500).json({ error: 'Error al guardar el token de pago. Ejecuta la migración SQL (cubo-pago-schema.sql) e intenta de nuevo.' });
     }
@@ -347,10 +424,18 @@ router.post('/cubo-webhook', async (req, res) => {
   console.warn('[CUBO WEBHOOK LEGACY] Recibido en /api/pagos/cubo-webhook — actualiza la URL del webhook en Cubo Admin a /api/webhooks/cubo');
   try {
     const result = await procesarWebhookCubo(req.body);
-    res.status(200).json({ received: true, ...result });
+    // Antes esta ruta respondía 200 SIEMPRE, descartando el statusCode. Dos
+    // consecuencias graves: un payload corrupto se confirmaba como recibido en
+    // vez de devolver 400, y —peor— un fallo transitorio (502 con Cubo caído,
+    // 503 con la RPC sin desplegar) también salía como 200, así que Cubo daba
+    // el webhook por entregado y NO lo reintentaba: el pago quedaba cobrado y
+    // el pedido sin confirmar, en silencio. El statusCode se propaga igual que
+    // en la ruta canónica.
+    const { statusCode = 200, ...data } = result;
+    res.status(statusCode).json({ received: true, ...data });
   } catch (err) {
     console.error('[CUBO WEBHOOK LEGACY] Error interno:', err.message);
-    res.status(200).json({ received: true });
+    res.status(500).json({ received: true, error: 'Error interno' });
   }
 });
 
@@ -410,17 +495,14 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
       }
     }
 
+    // El carrito se guarda como borrador: aquí solo se avisa pronto si ya no hay
+    // stock. La reserva firme la hace /generar-link vía reservar_stock_pedido.
     for (let i = 0; i < cartItems.length; i++) {
       const bolsa = bolsas[i];
       const cantidadSolicitada = cartItems[i].cantidad;
-      const reservado = await getReservadoPendiente(bolsa.id);
-      const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+      const { disponible: disponibleReal } = await getDisponibilidadRealBolsa(bolsa);
       if (cantidadSolicitada > disponibleReal) {
-        return res.status(400).json({
-          error: disponibleReal === 0
-            ? `"${bolsa.nombre}": Esta bolsa ya no tiene unidades disponibles.`
-            : `"${bolsa.nombre}": Solo quedan ${disponibleReal} unidad(es) disponibles.`,
-        });
+        return res.status(400).json({ error: mensajeSinStock(bolsa.nombre, disponibleReal) });
       }
     }
 
@@ -496,7 +578,7 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
     }));
     const { error: itemsInsertErr } = await supabase.from('pedido_items').insert(pedidoItemsData);
     if (itemsInsertErr) {
-      await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+      await revertirPedidoSinPago(pedido.id, 'items del pedido no se pudieron insertar');
       return res.status(500).json({ error: 'Error al registrar los items del pedido.' });
     }
 
@@ -518,7 +600,7 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
         p_monto_pedido: total, // total antes de descuento
       });
       if (rpcErr || !rpcRes?.ok) {
-        await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+        await revertirPedidoSinPago(pedido.id, 'reserva de cupón falló');
         const msg = ERRORES_CUPON[rpcRes?.resultado] || rpcErr?.message || 'Error al aplicar el cupón';
         console.error('[PREPARAR] reservar_cupon fallo:', rpcRes?.resultado || rpcErr?.message);
         return res.status(400).json({ error: msg });
@@ -530,7 +612,7 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
         descuento_cupon: descuentoCupon,
       }).eq('id', pedido.id);
       if (updErr) {
-        await supabase.from('pedidos').update({ estado: 'cancelado', estado_pago: 'fallido' }).eq('id', pedido.id);
+        await revertirPedidoSinPago(pedido.id, 'descuento de cupón no se pudo aplicar');
         return res.status(500).json({ error: 'Error al aplicar el descuento al pedido' });
       }
       total = totalConDescuento;
@@ -590,18 +672,17 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
     );
     if (checkoutError) return res.status(400).json({ error: checkoutError });
 
-    // Volver a validar reservas justo antes de abrir Cubo. El borrador propio aún
-    // no cuenta como reserva, así que `reservado` representa únicamente pedidos
-    // de otros clientes que ya llegaron a la pasarela.
+    // Volver a validar reservas justo antes de abrir Cubo, para no gastar una
+    // llamada a la pasarela por un carrito que ya no cabe. El borrador propio se
+    // excluye del conteo: todavía no reserva nada. La comprobación vinculante es
+    // la de reservar_stock_pedido, más abajo, con las bolsas bloqueadas.
     for (const item of items) {
-      const reservado = await getReservadoPendiente(item.bolsa_id);
-      const disponible = Math.max(0, Number(item.bolsas.cantidad_disponible) - reservado);
+      const { disponible } = await getDisponibilidadRealBolsa(
+        { id: item.bolsa_id, cantidad_disponible: item.bolsas.cantidad_disponible },
+        { excluirPedidoId: pedido.id },
+      );
       if (Number(item.cantidad) > disponible) {
-        return res.status(409).json({
-          error: disponible === 0
-            ? `"${item.bolsas.nombre}": ya no tiene unidades disponibles.`
-            : `"${item.bolsas.nombre}": solo quedan ${disponible} unidad(es) disponibles.`,
-        });
+        return res.status(409).json({ error: mensajeSinStock(item.bolsas.nombre, disponible) });
       }
     }
 
@@ -668,15 +749,72 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
       items: cuboItems,
     });
 
+    // El pedido se leyó como 'borrador' antes de llamar a Cubo, y generarLinkPago
+    // es una llamada de red: el barrido de borradores expirados (server.js) pudo
+    // cancelarlo en esa ventana. Sin el `.eq('estado', 'borrador')` de abajo,
+    // este UPDATE resucitaría a 'pendiente' un pedido ya cancelado.
+    const transicion = validarTransicion(pedido.estado, 'pendiente');
+    if (!transicion.ok) {
+      return res.status(transicion.status).json({
+        ok: false, error: transicion.error, codigo: transicion.codigo, detalle: transicion.detalle,
+      });
+    }
+
+    // El token se guarda con el pedido TODAVÍA en borrador, antes de reservar:
+    // si la reserva se cae, queda un borrador con token que el barrido cancela.
+    // Al revés (reservar primero) el fallo dejaría una reserva viva sin
+    // referencia de pago, bloqueando stock que nadie puede llegar a comprar.
     const montoCentavos = Math.round(pedido.total * 100);
-    const { error: tokenPersistErr } = await supabase.from('pedidos').update({
-      estado: 'pendiente',
+    const { data: persistido, error: tokenPersistErr } = await supabase.from('pedidos').update({
       cubo_payment_intent_token: paymentIntentToken || null,
       monto_esperado_centavos: montoCentavos,
-    }).eq('id', pedido.id);
+    }).eq('id', pedido.id).eq('estado', 'borrador').select('id').maybeSingle();
     if (tokenPersistErr) {
       console.error('[GENERAR LINK] No se pudo persistir el token de Cubo:', tokenPersistErr.message);
       return res.status(503).json({ error: 'No se pudo asegurar la referencia del pago. Intenta nuevamente.' });
+    }
+    if (!persistido) {
+      // El link quedó creado en Cubo pero el pedido ya no lo admite. No se
+      // devuelve la URL: cobrar contra un pedido cancelado es peor que pedir al
+      // cliente que reinicie el checkout.
+      console.warn('[GENERAR LINK] el pedido dejó de ser borrador mientras se generaba el link:', pedido.id);
+      return res.status(409).json({
+        ok: false,
+        error: 'CONFLICTO_DE_ESTADO',
+        detalle: 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
+      });
+    }
+
+    // 'borrador' → 'pendiente' con las bolsas bloqueadas. Este es el instante en
+    // que nace la reserva y se sella `reservado_at`: a partir de aquí el cliente
+    // tiene RESERVA_TTL_MINUTOS para pagar antes de que el stock vuelva al feed.
+    const reserva = await reservarStockPedido(pedido.id);
+    if (!reserva.ok) {
+      if (reserva.tipo === 'stock_insuficiente') {
+        const itemSinStock = items.find(i => i.bolsa_id === reserva.bolsaId);
+        registrarStock('warn', 'generar_link_sin_stock', {
+          pedido_id: pedido.id, bolsa_id: reserva.bolsaId ?? null,
+          disponible: reserva.disponible ?? null, solicitado: reserva.solicitado ?? null,
+        });
+        return res.status(409).json({ error: mensajeSinStock(itemSinStock?.bolsas?.nombre, reserva.disponible) });
+      }
+
+      // FAIL-CLOSED, igual que en /cubopago: sin reserva atómica no se entrega
+      // el link. El pedido se queda en 'borrador' (el barrido lo cancela) y el
+      // link creado en Cubo nunca llega al cliente. Pasar el pedido a
+      // 'pendiente' con un UPDATE a mano reabriría el TOCTOU.
+      const status = reserva.status || 409;
+      registrarStock('error', 'generar_link_sin_reserva', {
+        pedido_id: pedido.id, tipo: reserva.tipo, status,
+        detalle: typeof reserva.detalle === 'string' ? reserva.detalle : JSON.stringify(reserva.detalle ?? null),
+      });
+      return res.status(status).json({
+        ok: false,
+        error: status === 503 ? 'RESERVA_NO_DISPONIBLE' : 'CONFLICTO_DE_ESTADO',
+        detalle: status === 503
+          ? 'No se pudo reservar el producto. Vuelve a intentarlo en unos minutos.'
+          : 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
+      });
     }
 
     console.log('[GENERAR LINK] pedido:', pedido.id, '| link generado');

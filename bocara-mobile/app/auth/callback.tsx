@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, Platform, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -15,129 +16,143 @@ export default function AuthCallbackScreen() {
   const { setSession } = useAuth();
   const router = useRouter();
 
-  const processCallback = useCallback(async () => {
-    try {
-      const intentRaw = await AsyncStorage.getItem('bocara_pending_intent');
-      const intent = intentRaw ? JSON.parse(intentRaw) : null;
-      console.log('[AUTH CALLBACK] intent:', intent);
+  useEffect(() => {
+    let active = true;
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
+    let cancelSessionWait: (() => void) | undefined;
+    const processCallback = async () => {
+      try {
+        const intentRaw = await AsyncStorage.getItem('bocara_pending_intent');
+        if (!active) return;
+        const intent = intentRaw ? JSON.parse(intentRaw) : null;
 
-      if (Platform.OS === 'web') {
-        console.log('[AUTH CALLBACK] URL:', window.location.href);
-        const url = new URL(window.location.href);
-        const params = Object.fromEntries(url.searchParams.entries());
-        console.log('[AUTH CALLBACK] params:', params);
+        if (Platform.OS === 'web') {
+          const url = new URL(window.location.href);
 
-        // ── Error de Supabase (ej. otp_expired, access_denied) ───────────────
-        const errorParam    = url.searchParams.get('error');
-        const errorCode     = url.searchParams.get('error_code');
-        const errorDesc     = url.searchParams.get('error_description');
-        if (errorParam) {
-          console.log('[AUTH CALLBACK] error de Supabase:', errorParam, errorCode, errorDesc);
-          const isExpired = errorCode === 'otp_expired' || errorParam === 'access_denied';
-          setIntentRole(intent?.role ?? null);
-          setFallbackRoute(intent?.returnTo || '/login');
-          setErrorDetail(errorDesc || errorParam);
-          setState(isExpired ? 'expired' : 'error');
-          return;
-        }
-
-        const tokenHash = url.searchParams.get('token_hash');
-        const type      = url.searchParams.get('type') as any;
-
-        // ── Confirmación de email por link ───────────────────────────────────
-        if (tokenHash && type) {
-          console.log('[AUTH CALLBACK] procesando confirmación de email, type:', type);
-          const { data: otpData, error: otpErr } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
-          if (otpErr) {
-            console.error('[AUTH CALLBACK] verifyOtp error:', otpErr.message);
+          // ── Error de Supabase (ej. otp_expired, access_denied) ───────────────
+          const errorParam    = url.searchParams.get('error');
+          const errorCode     = url.searchParams.get('error_code');
+          const errorDesc     = url.searchParams.get('error_description');
+          if (errorParam) {
+            const isExpired = errorCode === 'otp_expired' || errorParam === 'access_denied';
             setIntentRole(intent?.role ?? null);
             setFallbackRoute(intent?.returnTo || '/login');
-            setState('expired');
+            setErrorDetail(errorDesc || errorParam);
+            setState(isExpired ? 'expired' : 'error');
             return;
           }
 
-          const userMeta = otpData?.user?.user_metadata;
-          console.log('[AUTH CALLBACK] user metadata:', userMeta);
+          const tokenHash = url.searchParams.get('token_hash');
+          const type      = url.searchParams.get('type') as any;
 
-          // Determinar rol: intent > user_metadata > 'cliente'
-          const resolvedRole = intent?.role || userMeta?.rol || userMeta?.role || 'cliente';
-          const redirectTarget = intent?.returnTo
-            || (resolvedRole === 'restaurante' ? '/registro-restaurante' : '/login');
-          console.log('[AUTH CALLBACK] redirect target:', redirectTarget);
+          // ── Confirmación de email por link ───────────────────────────────────
+          if (tokenHash && type) {
+            const { data: otpData, error: otpErr } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+            if (!active) return;
+            if (otpErr) {
+              setIntentRole(intent?.role ?? null);
+              setFallbackRoute(intent?.returnTo || '/login');
+              setState('expired');
+              return;
+            }
 
-          // Marcar email como confirmado en el intent para que el form lo detecte
-          const updatedIntent = {
-            ...(intent || {}),
-            role: resolvedRole,
-            emailConfirmed: true,
-          };
-          await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify(updatedIntent));
-          // Mantener la sesión de Supabase para que el form la use
+            const userMeta = otpData?.user?.user_metadata;
 
-          setIntentRole(resolvedRole);
-          setState('confirmed');
-          setTimeout(() => router.replace(redirectTarget as any), 2000);
-          return;
+            // Determinar rol: intent > user_metadata > 'cliente'
+            const resolvedRole = intent?.role || userMeta?.rol || userMeta?.role || 'cliente';
+            const redirectTarget = intent?.returnTo
+              || (resolvedRole === 'restaurante' ? '/registro-restaurante' : '/login');
+
+            // Marcar email como confirmado en el intent para que el form lo detecte
+            const updatedIntent = {
+              ...(intent || {}),
+              role: resolvedRole,
+              emailConfirmed: true,
+            };
+            await AsyncStorage.setItem('bocara_pending_intent', JSON.stringify(updatedIntent));
+            if (!active) return;
+            // Mantener la sesión de Supabase para que el form la use
+
+            setIntentRole(resolvedRole);
+            setState('confirmed');
+            redirectTimer = setTimeout(() => { if (active) router.replace(redirectTarget as any); }, 2000);
+            return;
+          }
         }
-      }
 
-      // ── Google OAuth — leer tokens del hash fragment ──────────────────────
-      let { data: { session } } = await supabase.auth.getSession();
-      console.log('[OAuth Callback] session (inmediata):', session?.user?.email ?? null);
+        // ── Google OAuth — leer tokens del hash fragment ──────────────────────
+        let { data: { session } } = await supabase.auth.getSession();
+        if (!active) return;
 
-      if (!session && Platform.OS === 'web') {
-        const hash = window.location.hash.substring(1);
-        const params = new URLSearchParams(hash);
+        if (!session && Platform.OS === 'web') {
+          const hash = window.location.hash.substring(1);
+          const params = new URLSearchParams(hash);
 
-        const hashError = params.get('error');
-        const hashErrorDesc = params.get('error_description');
-        if (hashError) throw new Error(`OAuth error: ${hashError} — ${hashErrorDesc}`);
+          const hashError = params.get('error');
+          const hashErrorDesc = params.get('error_description');
+          if (hashError) throw new Error(`OAuth error: ${hashError} — ${hashErrorDesc}`);
 
-        const access_token  = params.get('access_token');
-        const refresh_token = params.get('refresh_token');
-        console.log('[OAuth Callback] tokens en hash:', { access_token: !!access_token, refresh_token: !!refresh_token });
+          const access_token  = params.get('access_token');
+          const refresh_token = params.get('refresh_token');
 
-        if (access_token) {
-          const { data, error: setErr } = await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
-          if (setErr) throw new Error(`setSession falló: ${setErr.message}`);
-          session = data.session;
+          if (access_token) {
+            const { data, error: setErr } = await supabase.auth.setSession({ access_token, refresh_token: refresh_token || '' });
+            if (!active) return;
+            if (setErr) throw new Error(`setSession falló: ${setErr.message}`);
+            session = data.session;
+          }
         }
-      }
 
-      if (!session) {
-        session = await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('Timeout: no se recibió sesión en 8 segundos')), 8000);
-          const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-            console.log('[OAuth Callback] onAuthStateChange event:', _event);
-            if (s) { clearTimeout(timeout); subscription.unsubscribe(); resolve(s); }
+        if (!session) {
+          session = await new Promise<Session | null>((resolve, reject) => {
+            let subscription: { unsubscribe: () => void } | undefined;
+            let settled = false;
+            const cleanup = () => {
+              settled = true;
+              clearTimeout(timeout);
+              subscription?.unsubscribe();
+            };
+            const timeout = setTimeout(() => {
+              cleanup();
+              reject(new Error('Timeout: no se recibió sesión en 8 segundos'));
+            }, 8000);
+            cancelSessionWait = () => { cleanup(); resolve(null); };
+            subscription = supabase.auth.onAuthStateChange((_event, session) => {
+              if (session && !settled) { cleanup(); resolve(session); }
+            }).data.subscription;
+            // Cubre también una entrega síncrona durante la suscripción.
+            if (settled) subscription.unsubscribe();
           });
-        });
+        }
+        if (!active) return;
+
+        if (!session) throw new Error('Supabase no devolvió sesión válida.');
+
+        const res = await authAPI.oauthComplete((session as any).access_token);
+        if (!active) return;
+        await setSession(res.data.token, res.data.usuario);
+        await AsyncStorage.removeItem('bocara_pending_intent');
+        if (!active) return;
+
+        const rol = res.data.usuario?.rol;
+        if (rol === 'restaurante') router.replace('/restaurante');
+        else if (rol === 'admin') router.replace('/admin');
+        else router.replace('/(tabs)/');
+      } catch (e: any) {
+        if (!active) return;
+        console.warn('[AUTH CALLBACK] No se pudo completar la autenticación.');
+        setErrorDetail(e?.message || 'Error inesperado.');
+        setState('error');
+        redirectTimer = setTimeout(() => { if (active) router.replace('/login'); }, 4000);
       }
-
-      if (!session) throw new Error('Supabase no devolvió sesión válida.');
-
-      console.log('[OAuth Callback] user:', (session as any).user?.email);
-      const res = await authAPI.oauthComplete((session as any).access_token);
-      console.log('[OAuth Callback] backend response:', res.data);
-      await setSession(res.data.token, res.data.usuario);
-      await AsyncStorage.removeItem('bocara_pending_intent');
-
-      const rol = res.data.usuario?.rol;
-      console.log('[AUTH CALLBACK] user role:', rol);
-      if (rol === 'restaurante') router.replace('/restaurante');
-      else if (rol === 'admin') router.replace('/admin');
-      else router.replace('/(tabs)/');
-    } catch (e: any) {
-      console.error('[AUTH CALLBACK] error:', e?.message, e);
-      setErrorDetail(e?.message || 'Error inesperado.');
-      setState('error');
-      setTimeout(() => router.replace('/login'), 4000);
-    }
+    };
+    void processCallback();
+    return () => {
+      active = false;
+      clearTimeout(redirectTimer);
+      cancelSessionWait?.();
+    };
   }, [router, setSession]);
-
-  useEffect(() => {
-    processCallback();
-  }, [processCallback]);
 
   if (state === 'confirmed') {
     const esRestaurante = intentRole === 'restaurante';
