@@ -25,8 +25,9 @@ function load(file, mocks = {}, globals = {}, extraSource = '') {
   return exports;
 }
 const horarioReal = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } });
+const stockReal = load('src/utils/stock.ts', {});
 const relojMock = { useRelojPublicaciones: () => new Date(), usePublicacionesVigentes: items => horarioReal.publicacionesVigentes(items) };
-const { createCartStore, createCartPersistence } = load('src/context/cartStore.ts', { '../utils/horarioRecogida': horarioReal });
+const { createCartStore, createCartPersistence } = load('src/context/cartStore.ts', { '../utils/horarioRecogida': horarioReal, '../utils/stock': stockReal });
 const tick = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const bolsa = (stock = 3, negocio = 'rest-1', id = 'bolsa-1') => ({
@@ -290,6 +291,7 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
     '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/context/CartContext': { useCart: () => cart }, '@/src/utils/cartFeedback': feedback,
     '@/src/utils/horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }),
+    '@/src/utils/stock': stockReal,
     '@/src/context/AuthContext': { useAuth: () => ({ usuario: { rol: 'cliente' } }) },
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) },
     '@/constants/Colors': { Colors: {} }, '@/src/services/api': {},
@@ -383,6 +385,7 @@ test('Tarjeta tienda desaparece, impide agregar y revalida al tocar tras vencer;
     '@/src/context/CartContext': { useCart: () => ({ loaded: true, items: [] }) },
     '@/src/utils/cartFeedback': { mostrarErrorCarrito: result => !result.ok },
     '@/src/utils/horarioRecogida': horario, '@/src/utils/usePublicacionesVigentes': relojMock,
+    '@/src/utils/stock': stockReal,
     '@/src/utils/backNavigation': { volver: (router, fallback) => router.replace?.(fallback) },
   }, { setInterval: fn => { interval = fn; return 7; }, clearInterval: id => { assert.equal(id, 7); cleared = true; } }, '\nexport { ProductCard };');
   const product = { ...bolsa(), es_tiempo_limitado: true, hora_recogida_inicio: '10:00', hora_recogida_fin: '12:00' };
@@ -409,7 +412,7 @@ test('A4 tarjeta no permite agregar durante hidratación y muestra rechazo del c
   const h = hooks(); const alerts = []; const native = { Platform: { OS: 'android' }, Dimensions: { get: () => ({ width: 400 }) }, StyleSheet: { create: x => x }, Alert: { alert: (...args) => alerts.push(args) } };
   let loaded = false;
   const Component = load('components/ProductCard.tsx', { react: h.react, 'react-native': native, 'expo-image': {}, '@expo/vector-icons': {}, 'expo-router': { useRouter: () => ({}) },
-    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/horarioRecogida': horarioReal, '@/src/context/CartContext': { useCart: () => ({ loaded, items: [] }) }, '@/src/services/api': {}, '@/src/utils/cartFeedback': load('src/utils/cartFeedback.ts', { 'react-native': native }) }).default;
+    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/horarioRecogida': horarioReal, '@/src/utils/stock': stockReal, '@/src/context/CartContext': { useCart: () => ({ loaded, items: [] }) }, '@/src/services/api': {}, '@/src/utils/cartFeedback': load('src/utils/cartFeedback.ts', { 'react-native': native }) }).default;
   const render = () => { h.reset(); return Component({ bolsa: bolsa(), onAgregar: () => ({ ok: false, motivo: 'otro_negocio' }) }); };
   let button = walk(render()).find(n => n.props?.hitSlop && n.props?.onPress);
   assert.equal(button.props.disabled, true); loaded = true; button = walk(render()).find(n => n.props?.hitSlop && n.props?.onPress);

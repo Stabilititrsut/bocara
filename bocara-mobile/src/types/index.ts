@@ -48,6 +48,7 @@ export interface Bolsa {
   precio_original: number;
   precio_descuento: number;
   cantidad_disponible: number;
+  cantidad_disponible_real?: number;
   tipo: 'bolsa' | 'cupon';
   categoria?: string;
   imagen_url?: string;

@@ -14,6 +14,7 @@ import { negociosAPI, bolsasAPI } from '@/src/services/api';
 import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { calcularEstadoHorario } from '@/src/utils/horarioRecogida';
+import { disponibilidadReal } from '@/src/utils/stock';
 
 const GOLD = '#C8960C';
 const DARK = '#0A2A2A';
@@ -65,7 +66,7 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
 
   const pct = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
-  const agotado   = bolsa.cantidad_disponible === 0;
+  const agotado   = disponibilidadReal(bolsa) <= 0;
   const vencido = horario.bloqueado === true;
   const noDisponible = agotado || vencido;
   const tipoBadge = bolsa.tipo === 'cupon' ? 'PROMO' : 'T.LIM.';
@@ -173,17 +174,23 @@ export default function TiendaScreen() {
   const bolsas = usePublicacionesVigentes(bolsasGuardadas);
   const [filtro,  setFiltro]  = useState<FilterKey>('todos');
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [reintentoId, setReintentoId] = useState(0);
 
   useEffect(() => {
     if (!id) return;
+    setLoading(true);
+    setErrorMsg(null);
     Promise.all([
       negociosAPI.detalle(id),
       bolsasAPI.listar({ negocio_id: id }),
     ]).then(([negRes, bolsasRes]) => {
       setNegocio(negRes.data);
       setBolsas(bolsasRes.data || []);
-    }).catch(() => {}).finally(() => setLoading(false));
-  }, [id]);
+    }).catch((e: any) => {
+      setErrorMsg(e?.status === 404 ? 'No encontramos esta tienda.' : (e?.message || 'No pudimos cargar esta tienda.'));
+    }).finally(() => setLoading(false));
+  }, [id, reintentoId]);
 
   const filtradas = useMemo(() => {
     switch (filtro) {
@@ -240,6 +247,23 @@ export default function TiendaScreen() {
     return (
       <View style={s.loadingWrap}>
         <ActivityIndicator color={GOLD} size="large" />
+      </View>
+    );
+  }
+
+  if (errorMsg || !negocio) {
+    return (
+      <View style={[s.loadingWrap, { padding: 28, gap: 14 }]}>
+        <Ionicons name="alert-circle-outline" size={40} color={GRAY} />
+        <Text style={{ fontSize: 15, fontWeight: '700', color: DARK, textAlign: 'center' }}>
+          {errorMsg || 'No pudimos cargar esta tienda.'}
+        </Text>
+        <TouchableOpacity onPress={() => setReintentoId((n) => n + 1)} style={{ backgroundColor: GOLD, borderRadius: 12, paddingVertical: 12, paddingHorizontal: 24 }}>
+          <Text style={{ color: '#fff', fontWeight: '800' }}>Reintentar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => volver(router, '/(tabs)/')}>
+          <Text style={{ color: GRAY, fontWeight: '700' }}>Volver</Text>
+        </TouchableOpacity>
       </View>
     );
   }

@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { favoritosAPI } from '@/src/services/api';
+import { disponibilidadReal } from '@/src/utils/stock';
 import { Bolsa } from '@/src/types';
 
 const { width: SW } = Dimensions.get('window');
@@ -38,7 +39,7 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
 
   const pct = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
-  const agotado = bolsa.cantidad_disponible === 0;
+  const agotado = disponibilidadReal(bolsa) <= 0;
   const w       = width ?? CARD_W;
 
   async function toggleFav() {

@@ -1,4 +1,5 @@
 import { publicacionVencida } from '../utils/horarioRecogida';
+import { campoDisponibilidad } from '../utils/stock';
 import type { Bolsa, CartItem } from '../types';
 
 export type ResultadoAgregar =
@@ -120,7 +121,9 @@ export function createCartStore(key: string, persistence: ReturnType<typeof crea
         return { ok: false, motivo: 'otro_negocio' };
       }
       // Validación local del campo existente; no representa una reserva de inventario.
-      const stock = stockLocal(bolsa.cantidad_disponible);
+      // Prioriza cantidad_disponible_real (DB - reservas pendientes) sobre el
+      // histórico de DB, que solo se usa si el backend no mandó el campo real.
+      const stock = stockLocal(campoDisponibilidad(bolsa));
       if (stock === null) return { ok: false, motivo: 'stock_invalido' };
       const existing = snapshot.items.find(i => i.bolsa.id === bolsa.id);
       if (existing && existing.cantidad >= stock) {
@@ -147,6 +150,25 @@ export function createCartStore(key: string, persistence: ReturnType<typeof crea
       // Conservar una limpieza válida aunque se cambie de cuenta durante la lectura.
       if (!snapshot.loaded) { pendingClear = true; save([]); return; }
       change([]);
+    },
+    // Aplica disponibilidad real recién consultada al backend (carrito antes de
+    // checkout, o tras un 409 en pago). Nunca borra el item en 0: lo deja
+    // marcado como agotado para que la UI ofrezca quitar o reintentar, y recorta
+    // la cantidad guardada si excede el stock real (incluida una cantidad
+    // resucitada por hidratación con stock más viejo que el actual).
+    sincronizarDisponibilidad(actualizaciones: Record<string, number>) {
+      if (!active || !snapshot.loaded) return;
+      let cambio = false;
+      const items = snapshot.items.map(i => {
+        const real = actualizaciones[i.bolsa.id];
+        if (real === undefined || !Number.isFinite(real)) return i;
+        const realClamp = Math.max(0, real);
+        const cantidad = realClamp > 0 ? Math.min(i.cantidad, realClamp) : i.cantidad;
+        if (i.bolsa.cantidad_disponible_real === realClamp && cantidad === i.cantidad) return i;
+        cambio = true;
+        return { ...i, bolsa: { ...i.bolsa, cantidad_disponible_real: realClamp }, cantidad };
+      });
+      if (cambio) change(items);
     },
   };
 }

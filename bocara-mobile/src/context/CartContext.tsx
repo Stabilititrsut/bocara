@@ -6,7 +6,7 @@ export type { ResultadoAgregar } from './cartStore';
 export const CART_KEY_PREFIX = 'carrito_';
 const persistence = createCartPersistence(AsyncStorage);
 
-type CartContextType = Pick<ReturnType<typeof createCartStore>, 'agregar' | 'quitar' | 'limpiar'> &
+type CartContextType = Pick<ReturnType<typeof createCartStore>, 'agregar' | 'quitar' | 'limpiar' | 'sincronizarDisponibilidad'> &
   ReturnType<ReturnType<typeof createCartStore>['getSnapshot']> & { total: number; cantidad: number };
 
 const CartContext = createContext<CartContextType>({} as CartContextType);
@@ -24,6 +24,7 @@ export function CartProvider({ children, userId }: { children: React.ReactNode; 
     agregar: store.agregar,
     quitar: store.quitar,
     limpiar: store.limpiar,
+    sincronizarDisponibilidad: store.sincronizarDisponibilidad,
   }), [snapshot, store]);
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }

@@ -14,6 +14,7 @@ import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useCart } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
+import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 
@@ -160,6 +161,27 @@ export default function ProductoScreen() {
     return () => clearInterval(timerRef.current);
   }, [bolsa]);
 
+  // Refresca solo la disponibilidad mientras la pantalla sigue abierta, para que
+  // un producto que se agota (o vuelve a haber stock) se refleje sin recargar.
+  // Silencioso ante error de red: se mantiene el último dato bueno, no se rompe la UI.
+  useEffect(() => {
+    const bolsaId = Array.isArray(id) ? id[0] : id;
+    if (!bolsaId) return;
+    let cancelado = false;
+    const interval = setInterval(async () => {
+      try {
+        const r = await bolsasAPI.detalle(bolsaId);
+        if (cancelado || !r.data) return;
+        setBolsa(prev => prev ? {
+          ...prev,
+          cantidad_disponible: r.data.cantidad_disponible ?? prev.cantidad_disponible,
+          cantidad_disponible_real: r.data.cantidad_disponible_real,
+        } : prev);
+      } catch { /* mantener último dato conocido */ }
+    }, 20000);
+    return () => { cancelado = true; clearInterval(interval); };
+  }, [id]);
+
   if (loading) {
     return (
       <View style={s.root}>
@@ -202,7 +224,8 @@ export default function ProductoScreen() {
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const enCarrito = items.find(i => i.bolsa.id === bolsa.id);
-  const agotada = bolsa.cantidad_disponible === 0;
+  const stockReal = disponibilidadReal(bolsa);
+  const agotada = stockReal <= 0;
   const horarioBloqueado = horario?.bloqueado ?? false;
   const puedeComprar = !agotada && !horarioBloqueado;
   const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
@@ -417,12 +440,10 @@ export default function ProductoScreen() {
               <Ionicons
                 name="cube-outline"
                 size={15}
-                color={bolsa.cantidad_disponible <= 3 ? Colors.error : Colors.textSecondary}
+                color={stockReal <= 3 ? Colors.error : Colors.textSecondary}
               />
-              <Text style={[s.stockText, bolsa.cantidad_disponible <= 3 && { color: Colors.error }]}>
-                {agotada
-                  ? 'Sin stock disponible'
-                  : `${bolsa.cantidad_disponible} unidad${bolsa.cantidad_disponible !== 1 ? 'es' : ''} disponible${bolsa.cantidad_disponible !== 1 ? 's' : ''}`}
+              <Text style={[s.stockText, stockReal <= 3 && { color: Colors.error }]}>
+                {textoDisponibilidad(stockReal)}
               </Text>
             </View>
 

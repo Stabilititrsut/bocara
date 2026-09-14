@@ -11,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { pagosAPI, pedidosAPI, cuponesAPI } from '@/src/services/api';
+import { pagosAPI, pedidosAPI, cuponesAPI, bolsasAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
@@ -86,7 +86,7 @@ export default function PagoScreen() {
 }
 
 function PagoContent() {
-  const { items, total, limpiar } = useCart();
+  const { items, total, limpiar, sincronizarDisponibilidad } = useCart();
   const { usuario } = useAuth();
   const router = useRouter();
   const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
@@ -236,6 +236,25 @@ function PagoContent() {
     if (tarjetaSelId === id) setTarjetaSelId(null);
   }
 
+  // Reconsulta la disponibilidad real de los items del carrito. Se usa cuando
+  // /preparar o /generar-link rechazan por stock insuficiente (400/409): el
+  // carrito refleja el stock actual aunque el usuario vuelva a él sin recargar.
+  const refrescarDisponibilidad = useCallback(async () => {
+    try {
+      const resultados = await Promise.allSettled(items.map(i => bolsasAPI.detalle(i.bolsa.id)));
+      const actualizaciones: Record<string, number> = {};
+      resultados.forEach((r, idx) => {
+        if (r.status === 'fulfilled' && r.value?.data) {
+          const data = r.value.data;
+          actualizaciones[items[idx].bolsa.id] = typeof data.cantidad_disponible_real === 'number'
+            ? data.cantidad_disponible_real
+            : data.cantidad_disponible;
+        }
+      });
+      if (Object.keys(actualizaciones).length > 0) sincronizarDisponibilidad(actualizaciones);
+    } catch { /* la disponibilidad se revisará de nuevo en el carrito */ }
+  }, [items, sincronizarDisponibilidad]);
+
   // ── Preparar pedido borrador ─────────────────────────────────────────────
   const prepararPedido = useCallback(async (cupon: CuponAplicado | null) => {
     setFase('preparando');
@@ -269,11 +288,14 @@ function PagoContent() {
       }
       setFase('listo');
     } catch (e: any) {
+      // 400 aquí es la reserva atómica de /preparar rechazando por stock
+      // insuficiente (ver backend/routes/pagos.js) — jamás se muestra éxito.
+      if (e.status === 400 || e.status === 409) refrescarDisponibilidad();
       setErrorFase('preparar');
       setFase('error');
       setErrorMsg(e.message || 'Error al preparar el pedido.');
     }
-  }, [items, propina]);
+  }, [items, propina, refrescarDisponibilidad]);
 
   // Preparar una sola vez el pedido borrador cuando el carrito esté disponible.
   useEffect(() => {
@@ -296,6 +318,10 @@ function PagoContent() {
         (window as any).location.href = visaLinkUrl;
       }
     } catch (e: any) {
+      // 409: la reserva atómica de /generar-link encontró stock insuficiente
+      // justo antes de abrir Cubo (ver backend/routes/pagos.js). Se refresca la
+      // disponibilidad del carrito y jamás se muestra éxito.
+      if (e.status === 409) refrescarDisponibilidad();
       setErrorFase('generar');
       setFase('error');
       setErrorMsg(e.message || 'Error al generar el link de pago.');
