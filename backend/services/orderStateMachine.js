@@ -73,6 +73,18 @@ const ESTADOS_TERMINALES = Object.freeze([
 // reservados), no un descuento real de `bolsas.cantidad_disponible`.
 const ESTADOS_SIN_COBRO = Object.freeze(['borrador', 'pendiente']);
 
+// Estados en los que la comida YA llegó a manos del cliente. Es el único
+// conjunto que puede alimentar una métrica de impacto: nada se ha rescatado
+// mientras el pedido siga pagado pero sin recoger, y un pedido 'confirmado' o
+// 'en_preparacion' todavía puede cancelarse.
+//
+// 'completado' es el nombre canónico; 'recogido' es su nombre anterior, que
+// sobrevive en filas previas a sql/renombrar-recogido-completado.sql. El plan
+// de producto los llama "entregado/completado" — en esta base de datos el
+// estado 'entregado' no existe, y añadirlo aquí solo agregaría un valor que
+// ningún flujo escribe.
+const ESTADOS_ENTREGADOS = Object.freeze(['completado', 'recogido']);
+
 // ── Matriz canónica ─────────────────────────────────────────────────────────
 
 const TRANSICIONES = Object.freeze({
@@ -392,6 +404,7 @@ module.exports = {
   ESTADOS_TODOS,
   ESTADOS_TERMINALES,
   ESTADOS_SIN_COBRO,
+  ESTADOS_ENTREGADOS,
   TRANSICIONES,
   TRANSICIONES_OPERATIVAS,
   TRANSICIONES_PROHIBIDAS,

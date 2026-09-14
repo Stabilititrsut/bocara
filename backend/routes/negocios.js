@@ -5,6 +5,8 @@ const { geocodeAddress } = require('../utils/geo');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { hoyGuatemala, filtrarVigentes } = require('../services/horarioGuatemala');
+const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
+const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../services/impactoAmbiental');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -177,27 +179,81 @@ router.get('/:id/detalle', async (req, res) => {
   });
 });
 
+// ── Impacto ambiental de un negocio ─────────────────────────────────────────
+//
+// Dos filtros, los dos obligatorios:
+//
+//   1. `negocio_id` — la métrica es SIEMPRE de un negocio concreto. El
+//      endpoint autenticado (/mi-negocio/impacto) lo resuelve desde
+//      propietario_id, nunca desde un parámetro de la URL.
+//   2. `estado ∈ ESTADOS_ENTREGADOS` + `estado_pago = 'pagado'` — nada se
+//      rescató mientras la comida siga en el mostrador. Un pedido 'confirmado'
+//      o 'en_preparacion' todavía puede cancelarse; contarlo como impacto sería
+//      acreditar comida que quizá nunca salga.
+//
+// El cálculo (unidades, kg, CO₂, dinero) vive entero en
+// services/impactoAmbiental.js — aquí solo se decide QUÉ pedidos entran.
+async function impactoDeNegocio(negocioId) {
+  const { data: pedidos, error } = await supabase
+    .from('pedidos')
+    // cantidad y bolsa_id son para los pedidos heredados sin filas en
+    // pedido_items; el modelo híbrido lo resuelve services/impactoAmbiental.js.
+    .select('id, bolsa_id, cantidad, precio_bolsa')
+    .eq('negocio_id', negocioId)
+    .in('estado', ESTADOS_ENTREGADOS)
+    .eq('estado_pago', 'pagado');
+
+  if (error) {
+    const e = new Error(error.message);
+    e.status = 500;
+    throw e;
+  }
+
+  const impacto = await impactoDePedidos(pedidos || []);
+  return {
+    negocio_id: negocioId,
+    ...impacto,
+    // La cifra es una ESTIMACIÓN basada en el peso declarado por el restaurante.
+    // Se devuelve la metodología con el dato para que la app pueda decirlo y
+    // nadie la presente como una medición.
+    metodologia: {
+      formula: 'peso_estimado_kg × factor_kgCO2e_por_kg (por categoría de alimento)',
+      fuente_factores: FUENTE_FACTORES,
+      factor_por_defecto: FACTOR_CO2_DEFECTO,
+      estados_contados: ESTADOS_ENTREGADOS,
+      nota: 'Impacto estimado, no medido. Excluye cambio de uso de suelo (LUC).',
+    },
+  };
+}
+
+// GET /api/negocios/mi-negocio/impacto — impacto del restaurante AUTENTICADO
+//
+// Declarada antes que /:id/impacto a propósito: Express resuelve por orden y
+// '/mi-negocio/impacto' encajaría en '/:id/impacto' con id='mi-negocio'.
+//
+// El negocio sale de propietario_id, nunca de la URL: así un restaurante no
+// puede pedir el panel de otro cambiando un id, que es justo lo que este
+// endpoint existe para impedir.
+router.get('/mi-negocio/impacto', authMiddleware, async (req, res) => {
+  try {
+    const { data: negocio } = await supabase
+      .from('negocios').select('id,nombre').eq('propietario_id', req.usuario.id).single();
+    if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+    const impacto = await impactoDeNegocio(negocio.id);
+    res.json({ negocio: { id: negocio.id, nombre: negocio.nombre }, ...impacto });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // GET /api/negocios/:id/impacto — contribución real al aprovechamiento del negocio
+// Público: es la tarjeta de impacto del perfil del restaurante.
 router.get('/:id/impacto', async (req, res) => {
   try {
-    const { data: pedidos, error } = await supabase
-      .from('pedidos')
-      .select('precio_bolsa, bolsas!bolsa_id(peso_estimado_kg)')
-      .eq('negocio_id', req.params.id)
-      .in('estado', ['completado', 'recogido']);
-    if (error) return res.status(500).json({ error: error.message });
-    const rows = pedidos || [];
-    const pedidos_completados = rows.length;
-    const unidades_rescatadas = rows.length; // sin columna cantidad; cada pedido = 1 unidad
-    const kg_rescatados = Math.round(
-      rows.reduce((sum, p) => sum + (parseFloat(p.bolsas?.peso_estimado_kg) || 0), 0) * 10
-    ) / 10;
-    const ventas_recuperadas = Math.round(
-      rows.reduce((sum, p) => sum + (parseFloat(p.precio_bolsa) || 0), 0) * 100
-    ) / 100;
-    res.json({ kg_rescatados, unidades_rescatadas, pedidos_completados, ventas_recuperadas });
+    res.json(await impactoDeNegocio(req.params.id));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -407,25 +463,60 @@ router.put('/:id', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// GET /api/negocios/:id/estadisticas
+// GET /api/negocios/:id/estadisticas — panel del restaurante
+//
+// Solo el dueño del negocio (o un admin) puede verlo. Antes bastaba con estar
+// autenticado con CUALQUIER cuenta: un restaurante podía leer las ventas de su
+// competencia cambiando el id de la URL.
 router.get('/:id/estadisticas', authMiddleware, async (req, res) => {
-  let { data: pedidos } = await supabase
+  const { data: negocio } = await supabase
+    .from('negocios').select('id,propietario_id').eq('id', req.params.id).maybeSingle();
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+  if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin') {
+    return res.status(403).json({ error: 'No autorizado' });
+  }
+
+  // El filtro por pago NO tiene alternativa: antes, si la consulta fallaba, se
+  // reintentaba SIN `.eq('estado_pago','pagado')` y el panel pasaba a contar
+  // borradores, pendientes y cancelados como ventas. Un error de BD tiene que
+  // verse como error, no convertirse en cifras infladas.
+  const { data: pedidos, error } = await supabase
     .from('pedidos')
     .select('total, estado, created_at')
     .eq('negocio_id', req.params.id)
-    .eq('estado_pago', 'pagado');
-  if (!pedidos) {
-    const r = await supabase.from('pedidos').select('total, estado, created_at').eq('negocio_id', req.params.id);
-    pedidos = r.data;
+    .eq('estado_pago', 'pagado')
+    .neq('estado', 'cancelado');
+  if (error) return res.status(500).json({ error: error.message });
+
+  const filas = pedidos || [];
+  const entregados = filas.filter(p => ESTADOS_ENTREGADOS.includes(p.estado));
+  const totalVentas = filas.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
+  const hoyLocal = new Date().toDateString();
+
+  let impacto = null;
+  try {
+    impacto = await impactoDeNegocio(req.params.id);
+  } catch (err) {
+    // El impacto es informativo: que falle no puede tumbar el panel de ventas.
+    console.error('[ESTADISTICAS] impacto no disponible para negocio', req.params.id, ':', err.message);
   }
-  const totalVentas = (pedidos || []).reduce((s, p) => s + (p.total || 0), 0);
+
   res.json({
-    total_pedidos: (pedidos || []).length,
-    total_ventas: totalVentas,
-    pedidos_hoy: (pedidos || []).filter(p => {
+    total_pedidos: filas.length,
+    total_ventas: Math.round(totalVentas * 100) / 100,
+    pedidos_hoy: filas.filter(p => {
       const d = p.created_at || p.creado_en;
-      return d && new Date(d).toDateString() === new Date().toDateString();
+      return d && new Date(d).toDateString() === hoyLocal;
     }).length,
+    // Ventas ≠ impacto: lo primero cuenta dinero cobrado, lo segundo solo la
+    // comida que el cliente llegó a recoger.
+    pedidos_entregados: entregados.length,
+    impacto: impacto && {
+      unidades_rescatadas: impacto.unidades_rescatadas,
+      kg_rescatados: impacto.kg_rescatados,
+      co2_evitado_kg: impacto.co2_evitado_kg,
+      metodologia: impacto.metodologia,
+    },
   });
 });
 

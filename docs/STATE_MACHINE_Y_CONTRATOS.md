@@ -231,7 +231,8 @@ disponible_real = bolsas.cantidad_disponible − reservado_por_pedidos_pendiente
 | Momento | `estado` | `cantidad_disponible` | Reserva implícita |
 |---|---|---|---|
 | `POST /pagos/preparar` crea el carrito | `borrador` | sin cambios | — |
-| `POST /pagos/generar-link` | `pendiente` | sin cambios | **activa** |
+| `POST /pagos/generar-link` | `pendiente` | sin cambios | **activa** (nace `reservado_at`) |
+| Pasan 15 minutos sin pagar | `pendiente` | sin cambios | **caducada** (la unidad vuelve al catálogo) |
 | Webhook Cubo `SUCCEEDED` → `confirmar_pago_cubo` | `confirmado` | **−N** (atómico, con `FOR UPDATE`) | liberada |
 | Restaurante prepara y entrega | `en_preparacion` → `listo` → `completado` | sin cambios | — |
 | Cancelación de un pedido **no cobrado** | `cancelado` | **sin cambios** | liberada |
@@ -245,6 +246,47 @@ disponible_real = bolsas.cantidad_disponible − reservado_por_pedidos_pendiente
 
 En código: `orderStateMachine.requiereDevolucionDeStock(estado)` → `false` para
 `borrador` y `pendiente`, `true` a partir de `pagado`.
+
+### La reserva caduca a los 15 minutos — y el pago, con ella
+
+`RESERVA_TTL_MINUTOS = 15` (`services/stock.js`; su gemela en SQL es
+`reserva_ttl_minutos()`). Una reserva nace cuando `reservar_stock_pedido` pasa
+el pedido a `pendiente` y sella `pedidos.reservado_at`; a los 15 minutos deja
+de contar y la unidad vuelve al catálogo.
+
+**La expiración es de lectura**: la disponibilidad ignora las reservas vencidas
+en el mismo instante en que se cumple el plazo, sin depender de ningún cron.
+
+Eso obliga a que el **link de pago caduque a la vez**. Si el link vive más que
+la reserva, el cliente puede pagar a los 40 minutos una bolsa que el catálogo
+devolvió al stock en el minuto 15 y que otro cliente ya compró: sobreventa con
+el dinero cobrado. Tres capas lo impiden, en este orden:
+
+| # | Dónde | Qué hace |
+|---|---|---|
+| 1 | `services/visaLink.js` | El link de Cubo se emite con TTL = `RESERVA_TTL_MINUTOS` (`metadata.expiraEn` siempre; campo de API si se configura `CUBO_LINK_EXPIRACION_CAMPO`). Evita el cobro. |
+| 2 | `server.js` → `expirar_reservas_vencidas` | Cada 5 min cierra a `cancelado` los pedidos cuya reserva venció. Sin limbo pagable. |
+| 3 | `confirmar_pago_cubo` (v6) + `services/cuboWebhook.js` | Un `SUCCEEDED` con la reserva vencida **no confirma nada**: 409 y log `pago_tardio_reserva_expirada` con `accion: reembolso_manual`. Es la única comprobación sin carrera (fila bloqueada con `FOR UPDATE`). |
+
+Resultados nuevos de `confirmar_pago_cubo`:
+
+| `resultado` | HTTP | Significado |
+|---|---|---|
+| `estado_no_pagable` | 409 | El pedido ya no está en `pendiente` (cancelado por el barrido, por ejemplo). No se revive con un pago tardío. |
+| `reserva_expirada` | 409 | Sigue en `pendiente` pero pasó el TTL. Hubo cargo: requiere reembolso manual. |
+
+**Dos fail-closed en direcciones opuestas, la misma decisión.** Sin marca
+temporal utilizable (`reservado_at` y `created_at` nulos o ilegibles):
+
+- al **calcular disponibilidad**, la reserva cuenta como VIVA → no se libera stock;
+- al **confirmar un pago**, la reserva cuenta como VENCIDA → no se confirma.
+
+En los dos casos la elección es la misma: ante un dato incompleto, nunca vender
+de más.
+
+**El pago tardío no se confirma "porque todavía hay stock".** Aunque quedaran
+unidades, la reserva ya no es de ese cliente. Confirmarla le quitaría la bolsa a
+quien sí la tiene reservada ahora.
 
 ### Idempotencia: `liberarInventarioPedido`
 

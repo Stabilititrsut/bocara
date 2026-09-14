@@ -47,6 +47,7 @@ const supabase = require('./config/supabase');
 const { corsMiddleware } = require('./middleware/cors');
 const { enviarNotificacionPush, guardarNotificacion } = require('./services/notificaciones');
 const { procesarEventosFallidos } = require('./services/pagoEventos');
+const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -200,29 +201,57 @@ app.listen(PORT, () => {
   // El stock YA está liberado sin necesidad de este barrido: la disponibilidad
   // real ignora toda reserva de más de RESERVA_TTL_MINUTOS (services/stock.js),
   // así que la unidad vuelve al feed en el minuto 15 aunque el cron no corra.
-  // Esto solo cierra las filas para que no se acumulen en el panel del cliente.
+  // Lo que este barrido cierra es el ESTADO del pedido.
   //
-  // Por eso el margen es de 2 horas y no de 15 minutos: cancelar la fila a los
-  // 15 rompería al cliente que paga tarde — el webhook encontraría el pedido en
-  // 'cancelado' y devolvería 409 con el dinero ya cobrado. Liberar el stock
-  // pronto y cerrar la fila tarde es lo correcto en los dos frentes.
-  const MARGEN_CIERRE_RESERVAS_MIN = 120;
-  setInterval(async () => {
+  // ── Por qué el margen ya no es de 2 horas (AC-03) ──────────────────────────
+  //
+  // Antes se esperaban 120 minutos para no romper al cliente que pagaba tarde:
+  // con la fila en 'cancelado' su webhook devolvía 409 con el dinero cobrado.
+  // El efecto secundario era peor que el problema que evitaba — el pedido
+  // quedaba pagable durante dos horas sobre un stock que ya se había devuelto
+  // al catálogo a los 15 minutos, así que pagarlo tarde era exactamente la
+  // sobreventa que AC-03 prohíbe.
+  //
+  // Ahora el plazo es el mismo TTL de la reserva, y el pago tardío se ataja
+  // antes de cobrarse: el link de Cubo caduca a los 15 minutos
+  // (services/visaLink.js) y, si aun así llega un SUCCEEDED tarde, el webhook
+  // lo rechaza sin confirmar nada y lo registra para reembolso manual
+  // (services/cuboWebhook.js + confirmar_pago_cubo v6). Cerrar la fila al
+  // vencer deja de ser un riesgo y pasa a ser parte de la garantía: ningún
+  // pedido se queda en un limbo pagable.
+  //
+  // Cada 5 minutos en vez de cada 30: el cierre tiene que ir pegado al TTL para
+  // que la ventana de limbo sea de minutos, no de media hora.
+  const cerrarReservasVencidas = async () => {
     try {
       const { data, error } = await supabase.rpc('expirar_reservas_vencidas', {
-        p_ttl_minutos: MARGEN_CIERRE_RESERVAS_MIN,
+        p_ttl_minutos: RESERVA_TTL_MINUTOS,
         p_limite: 500,
       });
       if (error) {
         console.error('[CLEANUP] expirar_reservas_vencidas — ejecutar migración 202609121200:', error.message);
         return;
       }
-      if (data?.expirados) console.log('[CLEANUP] reservas vencidas cerradas:', data.expirados);
+      if (!data?.expirados) return;
+      console.log('[CLEANUP] reservas vencidas cerradas:', data.expirados, `(TTL ${RESERVA_TTL_MINUTOS} min)`);
+
+      // Un pedido cancelado no debe seguir reteniendo la reserva de su cupón.
+      // try/catch por iteración: .rpc(...) lanza de forma síncrona si algo va
+      // mal y un fallo no puede abortar el resto del lote.
+      for (const id of (data.pedido_ids || [])) {
+        try {
+          await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: id });
+        } catch (err) {
+          console.error('[CLEANUP] liberar_reserva_cupon error:', err.message);
+        }
+      }
     } catch (err) {
       console.error('[CLEANUP] error cerrando reservas vencidas:', err.message);
     }
-  }, 30 * 60 * 1000);
-  console.log('⏰ Cron de cierre de reservas vencidas activo (cada 30 min)');
+  };
+  setInterval(cerrarReservasVencidas, 5 * 60 * 1000);
+  setTimeout(cerrarReservasVencidas, 10 * 1000);
+  console.log(`⏰ Cron de cierre de reservas vencidas activo (cada 5 min, TTL ${RESERVA_TTL_MINUTOS} min)`);
 
   // Las publicaciones se conservan aunque estén ocultas o rechazadas. Nunca se
   // borran automáticamente: `activo=false` funciona como archivo recuperable.
