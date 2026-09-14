@@ -6,6 +6,7 @@ const soloCliente = require('../middleware/soloCliente');
 const { generarLinkPago } = require('../services/visaLink');
 const {
   getDisponibilidadRealBolsa, reservarStockPedido, RESERVA_TTL_MINUTOS,
+  registrar: registrarStock,
 } = require('../services/stock');
 const { ESTADOS_SIN_COBRO, puedeTransicionar, validarTransicion } = require('../services/orderStateMachine');
 const { procesarWebhookCubo } = require('./webhooks');
@@ -267,32 +268,33 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     // aquí: el segundo re-lee la reserva del primero y sale con 409.
     const reserva = await reservarStockPedido(pedido.id);
     if (!reserva.ok) {
-      if (reserva.tipo === 'rpc_ausente') {
-        // La migración 202609121200 no está aplicada. Se conserva el
-        // comportamiento anterior (chequeo en Node, ya hecho arriba) en vez de
-        // dejar el checkout caído: es el mismo riesgo de carrera que había
-        // antes de este cambio, ni más ni menos, y queda registrado.
-        console.error('[PAGO] Reserva atómica no disponible — checkout degradado a la validación previa. Ejecutar migración 202609121200.');
-        const { error: degradadoErr } = await supabase.from('pedidos')
-          .update({ estado: 'pendiente' })
-          .eq('id', pedido.id)
-          .eq('estado', 'borrador');
-        if (degradadoErr) {
-          await revertirPedidoSinPago(pedido.id, 'no se pudo activar la reserva');
-          return res.status(503).json({ error: 'No se pudo reservar el producto. Intenta de nuevo.' });
-        }
-      } else if (reserva.tipo === 'stock_insuficiente') {
-        await revertirPedidoSinPago(pedido.id, 'stock insuficiente al reservar');
+      await revertirPedidoSinPago(pedido.id, `reserva rechazada (${reserva.tipo})`);
+
+      if (reserva.tipo === 'stock_insuficiente') {
         const bolsaSinStock = bolsas.find(b => b.id === reserva.bolsaId);
-        console.warn('[PAGO] reserva rechazada por stock:', JSON.stringify(reserva.detalle));
-        return res.status(409).json({ error: mensajeSinStock(bolsaSinStock?.nombre, reserva.disponible) });
-      } else {
-        await revertirPedidoSinPago(pedido.id, `reserva rechazada (${reserva.tipo})`);
-        console.error('[PAGO] reserva rechazada:', reserva.tipo, JSON.stringify(reserva.detalle));
-        return res.status(reserva.status || 503).json({
-          error: 'No se pudo reservar el producto. Vuelve a iniciar el checkout.',
+        registrarStock('warn', 'checkout_sin_stock', {
+          pedido_id: pedido.id, bolsa_id: reserva.bolsaId ?? null,
+          disponible: reserva.disponible ?? null, solicitado: reserva.solicitado ?? null,
         });
+        return res.status(409).json({ error: mensajeSinStock(bolsaSinStock?.nombre, reserva.disponible) });
       }
+
+      // FAIL-CLOSED: si la reserva atómica no se puede hacer (RPC caída, sin
+      // desplegar, error de BD) el checkout se corta aquí con 503. NO existe un
+      // camino degradado: comprobar el stock en Node y marcar 'pendiente' a
+      // mano es justo el TOCTOU que reservar_stock_pedido cierra, y con él
+      // vuelve la sobreventa. Antes que vender una bolsa que no existe, el
+      // cliente ve "intenta de nuevo".
+      const status = reserva.status || 503;
+      registrarStock('error', 'checkout_sin_reserva', {
+        pedido_id: pedido.id, tipo: reserva.tipo, status,
+        detalle: typeof reserva.detalle === 'string' ? reserva.detalle : JSON.stringify(reserva.detalle ?? null),
+      });
+      return res.status(status).json({
+        error: status === 503
+          ? 'No se pudo reservar el producto. Vuelve a intentarlo en unos minutos.'
+          : 'No se pudo reservar el producto. Vuelve a iniciar el checkout.',
+      });
     }
 
     const { data: usuario } = await supabase
@@ -787,30 +789,31 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
     // que nace la reserva y se sella `reservado_at`: a partir de aquí el cliente
     // tiene RESERVA_TTL_MINUTOS para pagar antes de que el stock vuelva al feed.
     const reserva = await reservarStockPedido(pedido.id);
-    if (!reserva.ok && reserva.tipo === 'rpc_ausente') {
-      // Migración 202609121200 pendiente: mismo CAS de siempre.
-      console.error('[GENERAR LINK] Reserva atómica no disponible — CAS degradado. Ejecutar migración 202609121200.');
-      const { data: caso, error: casoErr } = await supabase.from('pedidos')
-        .update({ estado: 'pendiente' })
-        .eq('id', pedido.id).eq('estado', 'borrador').select('id').maybeSingle();
-      if (casoErr || !caso) {
-        return res.status(409).json({
-          ok: false,
-          error: 'CONFLICTO_DE_ESTADO',
-          detalle: 'El pedido dejó de estar disponible para pago. Vuelve a iniciar el checkout.',
-        });
-      }
-    } else if (!reserva.ok) {
+    if (!reserva.ok) {
       if (reserva.tipo === 'stock_insuficiente') {
         const itemSinStock = items.find(i => i.bolsa_id === reserva.bolsaId);
-        console.warn('[GENERAR LINK] reserva rechazada por stock:', JSON.stringify(reserva.detalle));
+        registrarStock('warn', 'generar_link_sin_stock', {
+          pedido_id: pedido.id, bolsa_id: reserva.bolsaId ?? null,
+          disponible: reserva.disponible ?? null, solicitado: reserva.solicitado ?? null,
+        });
         return res.status(409).json({ error: mensajeSinStock(itemSinStock?.bolsas?.nombre, reserva.disponible) });
       }
-      console.warn('[GENERAR LINK] reserva rechazada:', reserva.tipo, JSON.stringify(reserva.detalle));
-      return res.status(reserva.status || 409).json({
+
+      // FAIL-CLOSED, igual que en /cubopago: sin reserva atómica no se entrega
+      // el link. El pedido se queda en 'borrador' (el barrido lo cancela) y el
+      // link creado en Cubo nunca llega al cliente. Pasar el pedido a
+      // 'pendiente' con un UPDATE a mano reabriría el TOCTOU.
+      const status = reserva.status || 409;
+      registrarStock('error', 'generar_link_sin_reserva', {
+        pedido_id: pedido.id, tipo: reserva.tipo, status,
+        detalle: typeof reserva.detalle === 'string' ? reserva.detalle : JSON.stringify(reserva.detalle ?? null),
+      });
+      return res.status(status).json({
         ok: false,
-        error: 'CONFLICTO_DE_ESTADO',
-        detalle: 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
+        error: status === 503 ? 'RESERVA_NO_DISPONIBLE' : 'CONFLICTO_DE_ESTADO',
+        detalle: status === 503
+          ? 'No se pudo reservar el producto. Vuelve a intentarlo en unos minutos.'
+          : 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
       });
     }
 

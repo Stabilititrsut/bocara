@@ -4,6 +4,7 @@ const {
   procesarWebhookCubo, validarWebhookCubo, esReintentoDeUnPagoYaRegistrado,
   normalizarEstadoCubo, ESTADOS_FALLIDO,
 } = require('../services/cuboWebhook');
+const { RESERVA_TTL_MINUTOS } = require('../services/stock');
 
 // ════════════════════════════════════════════════════════════════════════════
 // Dobles de prueba
@@ -32,7 +33,10 @@ function rpcConfirmarPagoCubo(params, st) {
   return { data: { resultado: 'procesado', codigo_recogida: 'BOC-8842' }, error: null };
 }
 
-function crearEntorno({ pedido = null, rpc = {}, consulta, errorConsulta = null, columnasCuboFaltan = false } = {}) {
+function crearEntorno({
+  pedido = null, rpc = {}, consulta, errorConsulta = null,
+  columnasCuboFaltan = false, columnasReservaFaltan = false,
+} = {}) {
   const st = {
     pedido: pedido ? { ...pedido } : null,
     updates: [],
@@ -81,7 +85,24 @@ function crearEntorno({ pedido = null, rpc = {}, consulta, errorConsulta = null,
         error: null,
       };
     }
-    const { cubo_payment_intent_token, monto_esperado_centavos, ...resto } = st.pedido;
+    // Tercer select: la marca temporal de la reserva. Va aparte porque
+    // `reservado_at` puede no existir todavía (migración 202609121200).
+    if (q.campos.includes('reservado_at')) {
+      if (columnasReservaFaltan) {
+        return { data: null, error: { message: 'column "reservado_at" does not exist' } };
+      }
+      return {
+        data: {
+          reservado_at: st.pedido.reservado_at ?? null,
+          created_at:   st.pedido.created_at ?? null,
+        },
+        error: null,
+      };
+    }
+    const {
+      cubo_payment_intent_token, monto_esperado_centavos,
+      reservado_at, created_at, ...resto
+    } = st.pedido;
     return { data: resto, error: null };
   }
 
@@ -124,7 +145,15 @@ function crearEntorno({ pedido = null, rpc = {}, consulta, errorConsulta = null,
   return { st, deps };
 }
 
-const pedidoPendiente = () => ({
+// Reloj del proceso, fijado una sola vez: dos llamadas a pedidoPendiente()
+// tienen que devolver EXACTAMENTE el mismo pedido (hay pruebas que comparan la
+// fila contra una copia recién construida para comprobar que nadie la tocó).
+const T0 = Date.now();
+const haceMinutos = (m) => new Date(T0 - m * 60 * 1000).toISOString();
+
+// Reserva recién nacida: el caso normal. Los pagos tardíos se construyen con
+// `pedidoPendiente({ reservado_at: haceMinutos(40) })`.
+const pedidoPendiente = (extra = {}) => ({
   id: PEDIDO_ID,
   codigo_recogida: 'BOC-8842',
   estado: 'pendiente',
@@ -136,6 +165,9 @@ const pedidoPendiente = () => ({
   total: 50,
   cubo_payment_intent_token: TOKEN,
   monto_esperado_centavos: 5000,
+  created_at:   haceMinutos(1),
+  reservado_at: haceMinutos(1),
+  ...extra,
 });
 
 const consultaSucceeded = () => ({
@@ -697,4 +729,213 @@ test('stock insuficiente con el pago ya cobrado se marca para intervención manu
   const registro = lineas.find(l => l.evento === 'stock_insuficiente_con_pago_cobrado');
   assert.ok(registro);
   assert.equal(registro.accion, 'intervencion_manual');
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5. Pagos tardíos — la reserva manda sobre el cobro (AC-03)
+//
+// El pedido deja de bloquear stock a los RESERVA_TTL_MINUTOS. Un SUCCEEDED que
+// llega después puede estar cobrando una bolsa que ya se vendió a otro cliente:
+// confirmarlo es sobreventa con el dinero encima. Se rechaza en firme y queda
+// registrado para reembolso manual.
+// ════════════════════════════════════════════════════════════════════════════
+
+test('un SUCCEEDED con la reserva vencida NO confirma el pedido', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente({ reservado_at: haceMinutos(40), created_at: haceMinutos(45) }),
+    consulta: consultaSucceeded(),
+    rpc: { confirmar_pago_cubo: rpcConfirmarPagoCubo },
+  });
+
+  const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 409, '409: Cubo no debe reintentar, esto lo resuelve una persona');
+  assert.equal(st.vecesStockDescontado, 0, 'jamás se descuenta stock de una reserva vencida');
+  assert.equal(st.pedido.estado, 'pendiente', 'el pedido no se confirma');
+  assert.equal(st.pedido.estado_pago, 'pendiente');
+  assert.equal(st.rpcLlamadas.filter(l => l.nombre === 'confirmar_pago_cubo').length, 0,
+    'ni siquiera se llega a llamar a la RPC de confirmación');
+
+  const registro = lineas.find(l => l.evento === 'pago_tardio_reserva_expirada');
+  assert.ok(registro, 'el cargo existe: tiene que quedar una línea que dispare el reembolso');
+  assert.equal(registro.accion, 'reembolso_manual');
+  assert.equal(registro.ttl_minutos, RESERVA_TTL_MINUTOS);
+  assert.equal(registro.pedido_id, PEDIDO_ID);
+});
+
+test('dentro del TTL el pago se confirma con normalidad', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente({ reservado_at: haceMinutos(RESERVA_TTL_MINUTOS - 1) }),
+    consulta: consultaSucceeded(),
+    rpc: { confirmar_pago_cubo: rpcConfirmarPagoCubo },
+  });
+
+  const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 200);
+  assert.equal(resultado.tipo, 'procesado');
+  assert.equal(st.vecesStockDescontado, 1);
+});
+
+test('la frontera es la misma que la del catálogo: a los 15:00 exactos ya no se confirma', () => {
+  const ahora = Date.parse('2026-09-14T12:00:00.000Z');
+  const enElLimite = {
+    ...pedidoPendiente(),
+    reservado_at: new Date(ahora - RESERVA_TTL_MINUTOS * 60 * 1000).toISOString(),
+  };
+  const justoAntes = {
+    ...pedidoPendiente(),
+    reservado_at: new Date(ahora - RESERVA_TTL_MINUTOS * 60 * 1000 + 1000).toISOString(),
+  };
+
+  const vencido = validarWebhookCubo({
+    body: webhook('SUCCEEDED'), pedido: enElLimite, consulta: consultaSucceeded(),
+    monedaEsperada: 'GTQ', ahora,
+  });
+  assert.equal(vencido.ok, false);
+  assert.equal(vencido.tipo, 'reserva_expirada');
+  assert.equal(vencido.statusCode, 409);
+
+  const vivo = validarWebhookCubo({
+    body: webhook('SUCCEEDED'), pedido: justoAntes, consulta: consultaSucceeded(),
+    monedaEsperada: 'GTQ', ahora,
+  });
+  assert.equal(vivo.ok, true, 'a 14:59 el cliente todavía tiene su bolsa');
+  assert.equal(vivo.tipo, 'aprobado');
+});
+
+test('reservado_at manda sobre created_at también al cobrar', () => {
+  const ahora = Date.parse('2026-09-14T12:00:00.000Z');
+  // Carrito creado hace una hora que llegó a la pasarela hace dos minutos: la
+  // reserva nació hace dos minutos y el pago es perfectamente válido.
+  const pedido = {
+    ...pedidoPendiente(),
+    created_at:   new Date(ahora - 60 * 60 * 1000).toISOString(),
+    reservado_at: new Date(ahora - 2 * 60 * 1000).toISOString(),
+  };
+
+  const r = validarWebhookCubo({
+    body: webhook('SUCCEEDED'), pedido, consulta: consultaSucceeded(),
+    monedaEsperada: 'GTQ', ahora,
+  });
+  assert.equal(r.ok, true, 'medir desde created_at rechazaría un pago legítimo');
+});
+
+test('un reintento de un pago YA confirmado sigue siendo 200 aunque la reserva esté vencida', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente({
+      estado: 'confirmado', estado_pago: 'pagado', reservado_at: haceMinutos(300),
+    }),
+    consulta: consultaSucceeded(),
+    rpc: { confirmar_pago_cubo: rpcConfirmarPagoCubo },
+  });
+
+  const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 200, 'la idempotencia se comprueba antes que la vigencia');
+  assert.equal(resultado.tipo, 'duplicado');
+  assert.equal(st.vecesStockDescontado, 0);
+  assert.equal(lineas.find(l => l.evento === 'pago_tardio_reserva_expirada'), undefined,
+    'un duplicado no es un pago tardío: nadie tiene que reembolsar nada');
+});
+
+test('si la columna reservado_at no existe se falla cerrado con 503', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente(),
+    consulta: consultaSucceeded(),
+    columnasReservaFaltan: true,
+    rpc: { confirmar_pago_cubo: rpcConfirmarPagoCubo },
+  });
+
+  const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 503, 'Cubo reintenta; cuando la migración corra, el pago entrará');
+  assert.equal(st.vecesStockDescontado, 0);
+  assert.match(resultado.error, /202609121200/);
+});
+
+test('si la RPC dice reserva_expirada (carrera con el barrido) se responde 409 y no se confirma', async () => {
+  const { st, deps } = crearEntorno({
+    // Vigente para la validación de Node: la reserva vence entre medias y solo
+    // la RPC, con la fila bloqueada, puede verlo.
+    pedido: pedidoPendiente(),
+    consulta: consultaSucceeded(),
+    rpc: {
+      confirmar_pago_cubo: () => ({
+        data: { resultado: 'reserva_expirada', pedido_id: PEDIDO_ID, ttl_minutos: RESERVA_TTL_MINUTOS },
+        error: null,
+      }),
+    },
+  });
+
+  const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 409);
+  assert.equal(st.vecesStockDescontado, 0);
+  assert.equal(st.pedido.estado_pago, 'pendiente');
+  const registro = lineas.find(l => l.evento === 'pago_tardio_reserva_expirada');
+  assert.ok(registro);
+  assert.equal(registro.via, 'rpc');
+  assert.equal(registro.accion, 'reembolso_manual');
+});
+
+test('si la RPC dice estado_no_pagable (pedido ya cancelado) se responde 409 y no se confirma', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente(),
+    consulta: consultaSucceeded(),
+    rpc: {
+      confirmar_pago_cubo: () => ({
+        data: { resultado: 'estado_no_pagable', pedido_id: PEDIDO_ID, estado: 'cancelado' },
+        error: null,
+      }),
+    },
+  });
+
+  const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 409, 'un pedido cancelado no se revive con un pago tardío');
+  assert.equal(st.vecesStockDescontado, 0);
+  assert.equal(lineas.find(l => l.evento === 'pago_tardio_reserva_expirada')?.accion, 'reembolso_manual');
+});
+
+test('un pedido ya cancelado no se confirma aunque llegue un SUCCEEDED válido', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente({ estado: 'cancelado', estado_pago: 'fallido' }),
+    consulta: consultaSucceeded(),
+    rpc: { confirmar_pago_cubo: rpcConfirmarPagoCubo },
+  });
+
+  const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 409);
+  assert.equal(st.vecesStockDescontado, 0);
+  assert.equal(st.pedido.estado, 'cancelado');
+});
+
+test('un pedido sin marca de reserva no se confirma: lo que no se demuestra no se cobra', async () => {
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente({ reservado_at: null, created_at: null }),
+    consulta: consultaSucceeded(),
+    rpc: { confirmar_pago_cubo: rpcConfirmarPagoCubo },
+  });
+
+  const { resultado, lineas } = await capturandoLogs(() => procesarWebhookCubo(webhook('SUCCEEDED'), deps));
+
+  assert.equal(resultado.statusCode, 409);
+  assert.equal(st.vecesStockDescontado, 0);
+  assert.equal(lineas.find(l => l.evento === 'pago_tardio_reserva_expirada')?.accion, 'reembolso_manual');
+});
+
+test('un REJECTED tardío sigue liberando la reserva con normalidad', async () => {
+  // La vigencia solo gobierna las confirmaciones. Un rechazo tardío no cobra
+  // nada y debe cerrar el pedido igual que siempre.
+  const { st, deps } = crearEntorno({
+    pedido: pedidoPendiente({ reservado_at: haceMinutos(90) }),
+  });
+
+  const { resultado } = await capturandoLogs(() => procesarWebhookCubo(webhook('REJECTED'), deps));
+
+  assert.equal(resultado.statusCode, 200);
+  assert.equal(resultado.tipo, 'rechazado');
+  assert.equal(st.pedido.estado, 'cancelado');
 });

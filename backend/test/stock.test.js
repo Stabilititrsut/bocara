@@ -5,6 +5,7 @@ const {
   RESERVA_TTL_MS,
   instanteReserva,
   reservaVigente,
+  reservaPagable,
   disponibilidadReal,
   getReservadoPendiente,
   getReservasMap,
@@ -131,6 +132,37 @@ test('sin marca temporal la reserva se considera vigente (fail-closed)', () => {
   assert.equal(reservaVigente({ reservado_at: null, created_at: null }, AHORA), true);
   assert.equal(reservaVigente({ reservado_at: 'no-es-una-fecha' }, AHORA), true,
     'ante un dato ilegible se prefiere bloquear stock antes que sobrevender');
+});
+
+// ── Las dos caras del fail-closed ───────────────────────────────────────────
+//
+// reservaVigente responde "¿libero stock?" y reservaPagable "¿confirmo el
+// pago?". Comparten ventana y discrepan solo ante un dato ilegible, porque el
+// riesgo es el contrario en cada caso: ninguna de las dos puede terminar
+// vendiendo la misma bolsa dos veces.
+
+test('reservaPagable usa la misma ventana de 15 minutos', () => {
+  const dentro = { reservado_at: new Date(AHORA - (15 * 60 * 1000 - 1000)).toISOString() };
+  const justo  = { reservado_at: new Date(AHORA - 15 * 60 * 1000).toISOString() };
+  const fuera  = { reservado_at: haceMinutos(40) };
+
+  assert.equal(reservaPagable(dentro, AHORA), true, 'a 14:59 el cliente todavía tiene su bolsa');
+  assert.equal(reservaPagable(justo, AHORA), false, 'a los 15:00 exactos ya no se confirma');
+  assert.equal(reservaPagable(fuera, AHORA), false);
+});
+
+test('sin marca temporal NO se confirma el pago, aunque el stock sí siga bloqueado', () => {
+  for (const pedido of [{}, { reservado_at: null, created_at: null }, { reservado_at: 'ayer' }]) {
+    assert.equal(reservaVigente(pedido, AHORA), true,
+      'para el catálogo, un dato ilegible mantiene la unidad reservada');
+    assert.equal(reservaPagable(pedido, AHORA), false,
+      'para el cobro, lo que no se puede demostrar no se confirma');
+  }
+});
+
+test('reservaPagable también mide desde reservado_at, no desde created_at', () => {
+  const p = { created_at: haceMinutos(60), reservado_at: haceMinutos(2) };
+  assert.equal(reservaPagable(p, AHORA), true, 'el carrito es viejo, la reserva no');
 });
 
 test('reservado_at manda sobre created_at', () => {
@@ -592,14 +624,102 @@ test('reservarStockPedido traduce cada resultado de la RPC a un status HTTP', as
   }
 });
 
-test('si la RPC no está desplegada se señala rpc_ausente, no un fallo genérico', async () => {
+// ── Fail-closed estricto ────────────────────────────────────────────────────
+//
+// El fallback `rpc_ausente` (comprobar en Node y marcar 'pendiente' a mano
+// cuando la migración no estaba aplicada) se eliminó: era el TOCTOU que
+// reservar_stock_pedido cierra, y devolvía la sobreventa por la puerta de
+// atrás. Estas pruebas fijan que NO puede volver.
+
+/** Ejecuta `fn` capturando las líneas de log estructurado (y silenciándolas). */
+async function capturandoLogs(fn) {
+  const lineas = [];
+  const originales = { log: console.log, warn: console.warn, error: console.error };
+  const capturar = (linea) => { lineas.push(linea); };
+  console.log = capturar; console.warn = capturar; console.error = capturar;
+  try {
+    const valor = await fn();
+    return { valor, lineas: lineas.map((l) => { try { return JSON.parse(l); } catch { return { crudo: l }; } }) };
+  } finally {
+    Object.assign(console, originales);
+  }
+}
+
+test('si la RPC no está desplegada el checkout se corta con 503 — sin camino degradado', async () => {
   // Sin manejador registrado, el doble responde PGRST202 como PostgREST.
   const cliente = crearCliente({});
-  const r = await reservarStockPedido('p1', { cliente });
+  const { valor: r, lineas } = await capturandoLogs(() => reservarStockPedido('p1', { cliente }));
+
   assert.equal(r.ok, false);
-  assert.equal(r.tipo, 'rpc_ausente',
-    'las rutas distinguen este caso para degradar al chequeo anterior en vez de tumbar el checkout');
+  assert.equal(r.status, 503, 'sin reserva atómica no se vende: 503, nunca una reserva a medias');
+  assert.equal(r.tipo, 'error_bd',
+    'no hay un tipo propio para "falta la migración": ninguna ruta puede ramificar para degradar');
+  assert.equal(r.migracionPendiente, true, 'el diagnóstico viaja como dato, no como tipo');
+
+  const log = lineas.find((l) => l.evento === 'reserva_atomica_no_disponible');
+  assert.ok(log, 'la caída se registra en una línea estructurada, no en texto suelto');
+  assert.equal(log.origen, 'stock');
+  assert.equal(log.pedido_id, 'p1');
+  assert.equal(log.migracion_pendiente, true);
+  assert.match(log.accion, /202609121200/, 'el log dice exactamente qué hay que ejecutar');
+});
+
+test('un error de BD cualquiera también es 503 y nunca ok', async () => {
+  const cliente = crearCliente({}, {
+    rpc: {
+      reservar_stock_pedido: async () => ({
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      }),
+    },
+  });
+  const { valor: r, lineas } = await capturandoLogs(() => reservarStockPedido('p1', { cliente }));
+
+  assert.equal(r.ok, false);
+  assert.equal(r.tipo, 'error_bd');
   assert.equal(r.status, 503);
+  assert.equal(r.migracionPendiente, false, 'un timeout no es una migración pendiente');
+  assert.equal(lineas.find((l) => l.evento === 'reserva_atomica_no_disponible')?.codigo, '57014');
+});
+
+test('si la RPC lanza, la reserva falla cerrada', async () => {
+  const cliente = {
+    from: () => { throw new Error('no debería consultarse nada'); },
+    rpc: async () => { throw new Error('socket hang up'); },
+  };
+  const { valor: r } = await capturandoLogs(() => reservarStockPedido('p1', { cliente }));
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 503);
+  assert.equal(r.tipo, 'error_bd');
+});
+
+test('un resultado que la RPC no documenta no se interpreta como reserva', async () => {
+  const cliente = crearCliente({}, {
+    rpc: { reservar_stock_pedido: async () => ({ data: { resultado: 'algo_nuevo' }, error: null }) },
+  });
+  const { valor: r } = await capturandoLogs(() => reservarStockPedido('p1', { cliente }));
+  assert.equal(r.ok, false, 'ante la duda no se reserva');
+  assert.equal(r.status, 503);
+  assert.equal(r.tipo, 'error_bd');
+});
+
+test('ningún resultado de reservarStockPedido puede volver a significar "sigue sin reservar"', async () => {
+  // Contrato con las rutas: o hay reserva (ok:true) o hay error. No existe un
+  // tercer estado del que routes/pagos.js pueda tirar para continuar igualmente.
+  const respuestas = [
+    { data: null, error: { code: 'PGRST202', message: 'Could not find the function public.reservar_stock_pedido' } },
+    { data: null, error: { code: '42883', message: 'function reservar_stock_pedido does not exist' } },
+    { data: { resultado: 'estado_invalido', estado: 'cancelado' }, error: null },
+    { data: { resultado: 'carrera' }, error: null },
+    { data: {}, error: null },
+  ];
+  for (const respuesta of respuestas) {
+    const cliente = crearCliente({}, { rpc: { reservar_stock_pedido: async () => respuesta } });
+    const { valor: r } = await capturandoLogs(() => reservarStockPedido('p1', { cliente }));
+    assert.equal(r.ok, false);
+    assert.ok(r.status === 409 || r.status === 503, `status de corte para ${JSON.stringify(respuesta)}`);
+    assert.notEqual(r.tipo, 'rpc_ausente', 'el tipo que habilitaba el fallback ya no existe');
+  }
 });
 
 test('un pedido que ya no es borrador no puede reservar', async () => {
