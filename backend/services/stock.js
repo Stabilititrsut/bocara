@@ -14,6 +14,24 @@ const {
   requiereDevolucionDeStock,
 } = require('./orderStateMachine');
 
+// ── Log estructurado ────────────────────────────────────────────────────────
+//
+// Una línea JSON por decisión, con el mismo juego de campos siempre — mismo
+// formato que services/cuboWebhook.js. El checkout y el webhook son las dos
+// mitades de la misma historia (se reservó / se cobró) y en los logs de Render
+// se leen juntos filtrando por `pedido_id`.
+function registrar(nivel, evento, datos = {}) {
+  const linea = JSON.stringify({
+    ts: new Date().toISOString(),
+    origen: 'stock',
+    evento,
+    ...datos,
+  });
+  if (nivel === 'error') console.error(linea);
+  else if (nivel === 'warn') console.warn(linea);
+  else console.log(linea);
+}
+
 // ── Reservas con expiración ─────────────────────────────────────────────────
 //
 // Un pedido en 'pendiente' (link de pago abierto, sin cobrar) es una RESERVA
@@ -56,6 +74,31 @@ function reservaVigente(pedido, ahora = Date.now(), ttlMs = RESERVA_TTL_MS) {
   const ms = Date.parse(marca);
   if (Number.isNaN(ms)) return true;
   // Estrictamente menor: a los 15:00 exactos la reserva ya expiró.
+  return (ahora - ms) < ttlMs;
+}
+
+/**
+ * ¿Esta reserva todavía habilita un COBRO?
+ *
+ * Misma ventana que reservaVigente y la decisión contraria ante un dato
+ * ilegible, porque el riesgo también es el contrario:
+ *
+ *   · reservaVigente  → ¿libero stock?  Sin fecha utilizable: NO (sigue viva).
+ *   · reservaPagable  → ¿confirmo pago? Sin fecha utilizable: NO (se da por vencida).
+ *
+ * Las dos son la misma decisión fail-closed vista desde sus dos lados: ante un
+ * dato incompleto, nunca vender de más. Confirmar un pago cuya vigencia no se
+ * puede demostrar es exactamente lo que produce la sobreventa que AC-03
+ * prohíbe; el cliente recupera su dinero, pero la bolsa no se duplica.
+ *
+ * Su gemela en SQL es la puerta del paso 6 de confirmar_pago_cubo (migración
+ * 202609141200), que aplica la misma regla con la fila bloqueada.
+ */
+function reservaPagable(pedido, ahora = Date.now(), ttlMs = RESERVA_TTL_MS) {
+  const marca = instanteReserva(pedido);
+  if (!marca) return false;
+  const ms = Date.parse(marca);
+  if (Number.isNaN(ms)) return false;
   return (ahora - ms) < ttlMs;
 }
 
@@ -237,10 +280,14 @@ async function getDisponibilidadRealBolsa(bolsa, opciones = {}) {
  * Comprobar la disponibilidad desde Node NO sustituye a esta llamada: entre el
  * SELECT y el UPDATE no hay nada que impida que otro cliente se cuele.
  *
+ * FAIL-CLOSED ESTRICTO: si la RPC no existe, falla o devuelve algo que no
+ * entendemos, esto responde 503 y punto. No hay camino alternativo. Ver
+ * fallaDeReserva.
+ *
  * @returns {Promise<{ ok: boolean, tipo: string, status: number, ... }>}
  *   tipo: 'reservado' | 'ya_reservado' | 'stock_insuficiente' | 'estado_invalido'
  *       | 'pedido_no_encontrado' | 'items_ausentes' | 'bolsa_no_encontrada'
- *       | 'carrera' | 'rpc_ausente' | 'error_bd'
+ *       | 'carrera' | 'error_bd'
  */
 async function reservarStockPedido(pedidoId, opciones = {}) {
   const cliente = opciones.cliente || supabasePorDefecto();
@@ -254,24 +301,15 @@ async function reservarStockPedido(pedidoId, opciones = {}) {
       p_ttl_minutos: ttlMinutos,
     }));
   } catch (err) {
-    console.error('[STOCK] reservar_stock_pedido no disponible:', err.message);
-    return { ok: false, tipo: 'error_bd', status: 503, detalle: err.message, pedidoId };
+    return fallaDeReserva(pedidoId, { detalle: err.message, codigo: err.code ?? null });
   }
 
   if (error) {
-    // La migración 202609121200 puede no haberse aplicado todavía. Quien llama
-    // decide: hoy los dos flujos de checkout caen al camino anterior (chequeo
-    // en Node + UPDATE), que es exactamente el comportamiento previo a este
-    // cambio — degradado, pero nunca peor que lo que había.
-    const ausente = error.code === 'PGRST202'
-      || error.code === '42883'
-      || /reservar_stock_pedido/i.test(error.message || '');
-    if (ausente) {
-      console.error('[STOCK] RPC reservar_stock_pedido no existe — ejecutar migración 202609121200:', error.message);
-      return { ok: false, tipo: 'rpc_ausente', status: 503, detalle: error.message, pedidoId };
-    }
-    console.error('[STOCK] reservar_stock_pedido falló:', error.message);
-    return { ok: false, tipo: 'error_bd', status: 503, detalle: error.message, pedidoId };
+    return fallaDeReserva(pedidoId, {
+      detalle: error.message,
+      codigo: error.code ?? null,
+      migracionPendiente: rpcNoDesplegada(error),
+    });
   }
 
   const resultado = data?.resultado;
@@ -306,9 +344,46 @@ async function reservarStockPedido(pedidoId, opciones = {}) {
       return { ok: false, tipo: resultado, status: 422, pedidoId, detalle: data };
 
     default:
-      console.error('[STOCK] reservar_stock_pedido devolvió algo inesperado:', JSON.stringify(data));
-      return { ok: false, tipo: 'error_bd', status: 503, pedidoId, detalle: data };
+      // Un resultado que este código no sabe interpretar tampoco se degrada:
+      // no reservar es la única respuesta segura.
+      return fallaDeReserva(pedidoId, {
+        detalle: `resultado inesperado de reservar_stock_pedido: ${JSON.stringify(data)}`,
+      });
   }
+}
+
+/** ¿El error dice que reservar_stock_pedido no está desplegada? */
+function rpcNoDesplegada(error) {
+  return error.code === 'PGRST202'
+    || error.code === '42883'
+    || /reservar_stock_pedido/i.test(error.message || '');
+}
+
+/**
+ * Único final para toda falla de la reserva atómica: 503, sin alternativa.
+ *
+ * Hasta AC-03 este camino distinguía `rpc_ausente` (migración sin aplicar) para
+ * que las rutas cayeran a "comprobar en Node y hacer el UPDATE a mano". Ese
+ * fallback ERA exactamente el TOCTOU que reservar_stock_pedido vino a cerrar:
+ * sin FOR UPDATE, la lectura de disponibilidad y la escritura del pedido
+ * vuelven a ser dos operaciones separadas y 10 checkouts simultáneos reservan
+ * 10 unidades sobre 3. Que la migración falte no es una excusa para reabrirlo:
+ * sin reserva atómica no se vende.
+ *
+ * El diagnóstico (¿falta la migración? ¿se cayó la BD?) va al log estructurado,
+ * no a un `tipo` que alguna ruta pueda usar para degradar el checkout.
+ */
+function fallaDeReserva(pedidoId, { detalle, codigo = null, migracionPendiente = false }) {
+  registrar('error', 'reserva_atomica_no_disponible', {
+    pedido_id: pedidoId,
+    codigo,
+    detalle,
+    migracion_pendiente: migracionPendiente,
+    accion: migracionPendiente
+      ? 'aplicar migración 202609121200 (crea reservar_stock_pedido)'
+      : 'revisar disponibilidad de la base de datos',
+  });
+  return { ok: false, tipo: 'error_bd', status: 503, detalle, pedidoId, migracionPendiente };
 }
 
 /**
@@ -524,10 +599,12 @@ async function liberarInventarioPedido(pedidoId, opciones = {}) {
 }
 
 module.exports = {
+  registrar,
   RESERVA_TTL_MINUTOS,
   RESERVA_TTL_MS,
   instanteReserva,
   reservaVigente,
+  reservaPagable,
   disponibilidadReal,
   getReservadoPendiente,
   getReservasMap,

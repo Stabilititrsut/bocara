@@ -9,6 +9,9 @@ const {
 } = require('../services/stock');
 const { obtenerConfigNumerica } = require('../services/configuracion');
 const {
+  co2PorUnidad, factorCO2, PESO_UNIDAD_DEFECTO_KG,
+} = require('../services/impactoAmbiental');
+const {
   ahoraGuatemala, hoyGuatemala, filtrarVigentes, estaVencida, validarHorarioFuturo,
   MENSAJE_HORARIO_VENCIDO,
 } = require('../services/horarioGuatemala');
@@ -379,7 +382,18 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 
   const estadoAprobacion = req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente';
-  const pesoKg = parseFloat(peso_estimado_kg) || 0.5;
+  const pesoKg = parseFloat(peso_estimado_kg) || PESO_UNIDAD_DEFECTO_KG;
+
+  // CO₂ estimado POR UNIDAD = peso × factor de su categoría alimentaria.
+  // Se calcula aquí, con los datos que el restaurante acaba de declarar, y se
+  // guarda como foto para la ficha del producto. Las métricas agregadas NO
+  // suman esta columna: la recalculan desde peso y categoría
+  // (services/impactoAmbiental.js), para que sumar no arrastre redondeos.
+  const co2Unidad = co2PorUnidad(pesoKg, categoria_alimento);
+  const factorAplicado = factorCO2(categoria_alimento);
+  console.log('[CO2] bolsa nueva |', pesoKg, 'kg ×', factorAplicado.factor, 'kgCO₂e/kg',
+    '(' + factorAplicado.categoria + (factorAplicado.esDefecto ? ', factor de plataforma' : '') + ') =',
+    co2Unidad, 'kgCO₂e/unidad');
 
   let { data, error } = await supabase
     .from('bolsas')
@@ -393,6 +407,7 @@ router.post('/', authMiddleware, async (req, res) => {
       hora_recogida_fin: hora_recogida_fin || '20:00',
       permite_envio: permite_envio || false,
       peso_estimado_kg: pesoKg,
+      co2_salvado_kg: co2Unidad,
       categoria_alimento: categoria_alimento || null,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
@@ -410,9 +425,13 @@ router.post('/', authMiddleware, async (req, res) => {
 
   if (error) {
     // Fallback: solo omite las columnas de metadata más recientes (fecha_caducidad,
-    // categoria_menu) que pueden faltar en despliegues antiguos. peso_estimado_kg y los
-    // flags es_tiempo_limitado/es_promocion/es_descuento se preservan siempre:
-    // son los que definen el tipo real de la publicación y no deben perderse.
+    // categoria_menu, categoria_alimento, co2_salvado_kg) que pueden faltar en
+    // despliegues antiguos. peso_estimado_kg y los flags
+    // es_tiempo_limitado/es_promocion/es_descuento se preservan siempre: son los
+    // que definen el tipo real de la publicación y no deben perderse.
+    //
+    // Perder co2_salvado_kg aquí no pierde la métrica: peso_estimado_kg sí se
+    // guarda, y el impacto agregado se recalcula desde el peso.
     const r = await supabase
       .from('bolsas')
       .insert([{
@@ -480,6 +499,10 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
   }
 
+  // co2_salvado_kg NO está en esta lista a propósito: es un campo derivado. Lo
+  // recalcula el backend desde peso y categoría (más abajo), nunca lo manda el
+  // cliente — si el restaurante pudiera enviarlo, podría publicar el impacto
+  // ambiental que quisiera.
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
     'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
@@ -521,6 +544,18 @@ router.put('/:id', authMiddleware, async (req, res) => {
   if (updates.nombre !== undefined) updates.nombre = updates.nombre.trim();
   for (const campo of ['precio_original', 'precio_descuento', 'cantidad_disponible', 'peso_estimado_kg']) {
     if (updates[campo] !== undefined && updates[campo] !== '') updates[campo] = Number(updates[campo]);
+  }
+
+  // Si cambió el peso o la categoría alimentaria, el CO₂ por unidad deja de
+  // corresponder al producto: se recalcula sobre `datosResultantes` (lo que
+  // quedará guardado), no sobre el body suelto. Sin esto, editar una bolsa de
+  // 0.5 kg a 3 kg dejaba publicado el impacto de la versión vieja.
+  if (updates.peso_estimado_kg !== undefined || updates.categoria_alimento !== undefined) {
+    const pesoResultante = Number(datosResultantes.peso_estimado_kg) || PESO_UNIDAD_DEFECTO_KG;
+    updates.co2_salvado_kg = co2PorUnidad(pesoResultante, datosResultantes.categoria_alimento);
+    console.log('[CO2] bolsa %s recalculada | %s kg | categoria=%s | %s kgCO₂e/unidad',
+      req.params.id, pesoResultante, datosResultantes.categoria_alimento ?? 'sin categoría',
+      updates.co2_salvado_kg);
   }
 
   // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
