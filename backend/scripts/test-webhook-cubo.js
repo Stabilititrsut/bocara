@@ -13,6 +13,7 @@
  * Tests 1-12: unitarios (función pura, sin mocks de red ni BD)
  * Tests 13:   conversión de montos centavos ↔ unidades mayores
  * Tests 14:   arquitecturales (comportamiento garantizado por diseño del sistema)
+ * Tests 15:   vigencia de la reserva — un pago tardío no se confirma (AC-03)
  */
 'use strict';
 
@@ -52,13 +53,20 @@ function test(nombre, fn) {
 const TOKEN = 'TOKEN_CUBO_ABC123';
 const UUID  = '11111111-1111-1111-1111-111111111111';
 
+// reservado_at recién sellado: un pedido solo es pagable mientras su reserva
+// sigue viva (RESERVA_TTL_MINUTOS). Ver el Test 15 al final y
+// services/stock.js → reservaPagable.
 const PEDIDO_BASE = {
   id:                        UUID,
   estado_pago:               'pendiente',
   cubo_payment_intent_token: TOKEN,
   monto_esperado_centavos:   1000,   // Q10.00 → 1000 centavos
   _cuboColumnsMissing:       false,
+  reservado_at:              new Date().toISOString(),
+  created_at:                new Date().toISOString(),
 };
+
+const haceMinutos = (m) => new Date(Date.now() - m * 60 * 1000).toISOString();
 
 // Cubo devuelve currency="GTQ" y amount como string decimal
 const CONSULTA_OK = {
@@ -371,6 +379,46 @@ test('currency=USD rechazado con monedaEsperada=GTQ → 409', () => {
   assert.strictEqual(r.ok, false);
   assert.strictEqual(r.statusCode, 409);
   assert.match(r.error, /USD.*GTQ|GTQ.*USD/i);
+});
+
+// ── Test 15: la reserva vencida no se puede cobrar (AC-03) ───────────────────
+console.log('\n── Test 15: pago tardío sobre reserva vencida ────────────────────');
+
+test('reserva de 40 min → 409, no confirma (sobreventa evitada)', () => {
+  const pedido = { ...PEDIDO_BASE, reservado_at: haceMinutos(40), created_at: haceMinutos(45) };
+  const r = validarWebhookCubo({ body: BODY_OK, pedido, consulta: CONSULTA_OK, monedaEsperada: MONEDA_GTQ });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.statusCode, 409, `statusCode debe ser 409, got ${r.statusCode}`);
+  assert.strictEqual(r.tipo, 'reserva_expirada');
+});
+
+test('reserva de 14 min → sigue siendo pagable', () => {
+  const pedido = { ...PEDIDO_BASE, reservado_at: haceMinutos(14) };
+  const r = validarWebhookCubo({ body: BODY_OK, pedido, consulta: CONSULTA_OK, monedaEsperada: MONEDA_GTQ });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.tipo, 'aprobado');
+});
+
+test('sin marca de reserva → 409 (no se confirma lo que no se puede demostrar)', () => {
+  const pedido = { ...PEDIDO_BASE, reservado_at: null, created_at: null };
+  const r = validarWebhookCubo({ body: BODY_OK, pedido, consulta: CONSULTA_OK, monedaEsperada: MONEDA_GTQ });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.tipo, 'reserva_expirada');
+});
+
+test('columna reservado_at ausente en BD → 503 (fail-closed, Cubo reintenta)', () => {
+  const pedido = { ...PEDIDO_BASE, _reservaColumnasFaltan: true };
+  const r = validarWebhookCubo({ body: BODY_OK, pedido, consulta: CONSULTA_OK, monedaEsperada: MONEDA_GTQ });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(r.statusCode, 503);
+  assert.match(r.error, /migración|columna/i);
+});
+
+test('un pago ya registrado sigue siendo duplicado aunque la reserva venciera', () => {
+  const pedido = { ...PEDIDO_BASE, estado_pago: 'pagado', reservado_at: haceMinutos(300) };
+  const r = validarWebhookCubo({ body: BODY_OK, pedido, consulta: CONSULTA_OK, monedaEsperada: MONEDA_GTQ });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.tipo, 'duplicado');
 });
 
 // ── Resumen ───────────────────────────────────────────────────────────────────

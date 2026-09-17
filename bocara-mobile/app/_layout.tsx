@@ -7,7 +7,7 @@ import { CartProvider } from '@/src/context/CartContext';
 import { LocationProvider } from '@/src/context/LocationContext';
 import { Colors } from '@/constants/Colors';
 import { notificacionesAPI } from '@/src/services/api';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { OnboardingProvider, useOnboarding } from '@/src/context/OnboardingContext';
 import * as SplashScreen from 'expo-splash-screen';
 
 // Mantener el splash nativo visible hasta que la app esté lista
@@ -78,21 +78,24 @@ function BocaraSplash({ fast, onDone }: { fast: boolean; onDone: () => void }) {
   const screenOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
+    let animation: Animated.CompositeAnimation;
     if (fast) {
       // Sesión en caché: aparición rápida ≈ 600ms total
-      Animated.sequence([
+      animation = Animated.sequence([
         Animated.timing(textOpacity,   { toValue: 1, duration: 200, useNativeDriver: true }),
         Animated.delay(150),
         Animated.timing(screenOpacity, { toValue: 0, duration: 250, useNativeDriver: true }),
-      ]).start(() => onDone());
+      ]);
     } else {
       // Primera vez / sesión expirada: intro completo ≈ 1.5s
-      Animated.sequence([
+      animation = Animated.sequence([
         Animated.timing(textOpacity,   { toValue: 1, duration: 400, useNativeDriver: true }),
         Animated.delay(700),
         Animated.timing(screenOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
-      ]).start(() => onDone());
+      ]);
     }
+    animation.start(({ finished }) => { if (finished) onDone(); });
+    return () => animation.stop();
   }, [fast, onDone, screenOpacity, textOpacity]);
 
   return (
@@ -113,30 +116,19 @@ const ss = StyleSheet.create({
 });
 
 // ── Auth guard + routing ──────────────────────────────────────────────────────
+const AUTH_SECTIONS = ['login', 'auth', 'registro-cliente', 'registro-restaurante', 'registro-telefono', 'forgot-password', 'verificar-email', 'socios'];
+// modal es un placeholder sin flujo activo: permanece fuera de los permisos.
+const SHARED_SECTIONS = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios', 'tienda', 'negocio', 'cupones', 'referidos'];
+const NEW_SECTIONS = ['pago-retorno', 'editar-perfil'];
+
 function AuthGuard() {
   const { usuario, loading } = useAuth();
   const router = useRouter();
   const segments = useSegments();
   const pushRegistered = useRef(false);
-  const [onboardingChecked, setOnboardingChecked] = useState(false);
-  const [onboardingDone, setOnboardingDone]       = useState(true);
+  const { onboardingChecked, onboardingDone } = useOnboarding();
   const [splashDone, setSplashDone]               = useState(false);
   const handleSplashDone = useCallback(() => setSplashDone(true), []);
-
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      setOnboardingDone(true);
-      setOnboardingChecked(true);
-      return;
-    }
-    AsyncStorage.getItem('bocara_onboarding_done').then((val) => {
-      setOnboardingDone(val === 'true');
-      setOnboardingChecked(true);
-    }).catch(() => {
-      setOnboardingDone(true);
-      setOnboardingChecked(true);
-    });
-  }, []);
 
   // Ocultar splash nativo cuando la app esté lista; luego el JS splash toma el relevo
   useEffect(() => {
@@ -155,7 +147,7 @@ function AuthGuard() {
 
   useEffect(() => {
     if (loading || !onboardingChecked) return;
-    const inAuth = segments[0] === 'login' || segments[0] === 'auth' || segments[0] === 'registro-cliente' || segments[0] === 'registro-restaurante' || segments[0] === 'registro-telefono' || segments[0] === 'forgot-password' || segments[0] === 'verificar-email' || segments[0] === 'socios';
+    const inAuth = AUTH_SECTIONS.includes(segments[0]);
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!usuario && !inAuth && !inOnboarding) {
@@ -174,7 +166,9 @@ function AuthGuard() {
         (usuario.rol === 'restaurante' && segments[0] === 'restaurante') ||
         (usuario.rol === 'admin'       && segments[0] === 'admin');
 
-      const allowedSections = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios', 'tienda', 'negocio', 'cupones', 'referidos'];
+      const allowedSections = usuario.rol === 'suspendido'
+        ? SHARED_SECTIONS
+        : [...SHARED_SECTIONS, ...NEW_SECTIONS];
 
       if (!inCorrectSection && !allowedSections.includes(segments[0] as string)) {
         let rutaDestino = '/(tabs)/';
@@ -191,7 +185,26 @@ function AuthGuard() {
   return (
     <>
       <StatusBar style={splashDone ? 'dark' : 'light'} />
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack
+        screenOptions={{ headerShown: false }}
+        screenLayout={({ route, children }) => {
+          const section = route.name.split('/')[0];
+          // El navegador permanece montado para poder redirigir, pero sus pantallas
+          // no montan efectos ni hacen solicitudes mientras el guard las rechaza.
+          // Suspendido conserva el flujo anterior hasta acordar su contrato.
+          if (usuario?.rol === 'suspendido') return <>{children}</>;
+          const allowed = !usuario
+            ? AUTH_SECTIONS.includes(section) || section === 'onboarding'
+            : Platform.OS !== 'web' && usuario.rol === 'cliente' && !onboardingDone
+              ? section === 'onboarding'
+              : SHARED_SECTIONS.includes(section) ||
+                NEW_SECTIONS.includes(section) ||
+                (usuario.rol === 'cliente' && section === '(tabs)') ||
+                (usuario.rol === 'restaurante' && section === 'restaurante') ||
+                (usuario.rol === 'admin' && section === 'admin');
+          return <>{allowed ? children : null}</>;
+        }}
+      >
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="restaurante" />
         <Stack.Screen name="admin" />
@@ -206,6 +219,8 @@ function AuthGuard() {
         <Stack.Screen name="negocio/[id]"  options={{ headerShown: false }} />
         <Stack.Screen name="producto/[id]" options={{ headerShown: true, headerTitle: '', headerBackTitle: 'Volver', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
         <Stack.Screen name="pago"          options={{ headerShown: false }} />
+        <Stack.Screen name="pago-retorno"  options={{ headerShown: false }} />
+        <Stack.Screen name="editar-perfil" options={{ headerShown: false }} />
         <Stack.Screen name="pago-exitoso"  options={{ headerShown: false }} />
         <Stack.Screen name="qr-recogida"   options={{ headerShown: true, headerTitle: '¡Pedido confirmado!', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
         <Stack.Screen name="configuracion" options={{ headerShown: true, headerTitle: 'Configuración', headerTintColor: Colors.primary, headerStyle: { backgroundColor: Colors.background } }} />
@@ -228,11 +243,13 @@ function AuthGuard() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <LocationProvider>
-        <CartProviderWithUser>
-          <AuthGuard />
-        </CartProviderWithUser>
-      </LocationProvider>
+      <OnboardingProvider>
+        <LocationProvider>
+          <CartProviderWithUser>
+            <AuthGuard />
+          </CartProviderWithUser>
+        </LocationProvider>
+      </OnboardingProvider>
     </AuthProvider>
   );
 }

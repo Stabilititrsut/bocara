@@ -3,6 +3,9 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
+const { validarTransicion, esEstadoValido, ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
+const { liberarInventarioPedido } = require('../services/stock');
+const { impactoDePedidos } = require('../services/impactoAmbiental');
 const router = express.Router();
 
 // Ruta heredada retirada: ningún cliente puede crear un pedido pagado sin una
@@ -127,67 +130,36 @@ router.get('/previos/:negocioId', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/pedidos/resumen-cliente — estadísticas del cliente autenticado
+// GET /api/pedidos/resumen-cliente — impacto del cliente autenticado
+//
+// "Rescatado" = recogido. Antes esta consulta contaba también los pedidos
+// 'confirmado', 'en_preparacion' y 'listo': comida pagada que todavía estaba en
+// el mostrador y que aún podía cancelarse. El número subía al pagar y no volvía
+// a bajar si el pedido se caía después.
+//
+// El modelo híbrido (pedido_items para carritos multi-bolsa, pedidos.bolsa_id
+// para los heredados) y el cálculo de kg/CO₂/ahorro viven ahora en
+// services/impactoAmbiental.js — el mismo código que alimenta el panel del
+// restaurante, para que las dos pantallas no puedan contar distinto.
 router.get('/resumen-cliente', authMiddleware, async (req, res) => {
   try {
-    const usuario_id = req.usuario.id;
-
-    // Incluir todos los estados de pago confirmado: confirmado, en_preparacion, listo, recogido
-    // y el estado legacy "completado". Excluir borrador/pendiente/cancelado.
-    const { data: pedidos } = await supabase
+    const { data: pedidos, error } = await supabase
       .from('pedidos')
-      .select('id, bolsa_id, precio_bolsa')
-      .eq('usuario_id', usuario_id)
+      .select('id, bolsa_id, cantidad, precio_bolsa')
+      .eq('usuario_id', req.usuario.id)
       .eq('estado_pago', 'pagado')
-      .not('estado', 'in', '(borrador,pendiente,cancelado)');
+      .in('estado', ESTADOS_ENTREGADOS);
 
-    if (!pedidos || pedidos.length === 0) {
-      return res.json({ bolsas_rescatadas: 0, total_ahorrado: 0 });
-    }
+    if (error) return res.status(500).json({ error: error.message });
 
-    const pedidoIds = pedidos.map(p => p.id);
-
-    // Flujo nuevo (Cubo): items en pedido_items con FK a bolsas
-    const { data: items } = await supabase
-      .from('pedido_items')
-      .select('pedido_id, cantidad, precio_unitario, bolsas(precio_original)')
-      .in('pedido_id', pedidoIds);
-
-    const pedidosConItems = new Set((items || []).map(i => i.pedido_id));
-
-    // Flujo legacy: pedidos sin pedido_items — usar bolsa_id del pedido directamente
-    const pedidosSinItems = pedidos.filter(p => !pedidosConItems.has(p.id));
-    let bolsasLegacy = [];
-    if (pedidosSinItems.length > 0) {
-      const bolsaIds = [...new Set(pedidosSinItems.map(p => p.bolsa_id).filter(Boolean))];
-      const { data: bData } = await supabase
-        .from('bolsas').select('id, precio_original').in('id', bolsaIds);
-      bolsasLegacy = bData || [];
-    }
-    const precioOriginalMap = {};
-    for (const b of bolsasLegacy) precioOriginalMap[b.id] = parseFloat(b.precio_original || 0);
-
-    let bolsas_rescatadas = 0;
-    let total_ahorrado = 0;
-
-    for (const item of (items || [])) {
-      const cant = item.cantidad || 0;
-      const precioOriginal = parseFloat(item.bolsas?.precio_original || 0);
-      const precioPagado   = parseFloat(item.precio_unitario || 0);
-      bolsas_rescatadas += cant;
-      total_ahorrado    += (precioOriginal - precioPagado) * cant;
-    }
-
-    for (const pedido of pedidosSinItems) {
-      bolsas_rescatadas += 1;
-      const precioOriginal = precioOriginalMap[pedido.bolsa_id] || 0;
-      const precioPagado   = parseFloat(pedido.precio_bolsa || 0);
-      total_ahorrado += Math.max(0, precioOriginal - precioPagado);
-    }
+    const impacto = await impactoDePedidos(pedidos || []);
 
     res.json({
-      bolsas_rescatadas,
-      total_ahorrado: parseFloat(Math.max(0, total_ahorrado).toFixed(2)),
+      bolsas_rescatadas: impacto.unidades_rescatadas,
+      total_ahorrado: impacto.dinero_ahorrado,
+      kg_rescatados: impacto.kg_rescatados,
+      co2_evitado_kg: impacto.co2_evitado_kg,
+      pedidos_completados: impacto.pedidos_completados,
     });
   } catch (err) {
     console.error('[PEDIDOS] resumen-cliente error:', err.message);
@@ -209,49 +181,100 @@ router.get('/:id', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// Transiciones válidas del estado de pedido
-const TRANSICIONES_VALIDAS = {
-  confirmado:      ['en_preparacion', 'cancelado'],
-  en_preparacion:  ['listo', 'cancelado'],
-  listo:           ['completado', 'cancelado'],
-  completado:      [], // terminal
-  recogido:        [], // terminal (legacy — datos anteriores a renombrado)
-  cancelado:       [], // terminal
-  pendiente:       ['confirmado', 'cancelado'], // legacy
-};
+// La matriz de transiciones vive ahora en services/orderStateMachine.js — era
+// una copia local que había divergido y permitía 'pendiente' → 'confirmado'
+// (confirmar un pedido sin pago verificado). No volver a declararla aquí.
+
+// Estados que el restaurante puede pedir desde su panel. Es un subconjunto de
+// la máquina, no una matriz alterna: la validación real la hace validarTransicion.
+const ESTADOS_SOLICITABLES_RESTAURANTE = ['en_preparacion', 'listo', 'completado', 'recogido', 'cancelado'];
 
 // PUT /api/pedidos/:id/estado — cambiar estado (restaurante)
 router.put('/:id/estado', authMiddleware, async (req, res) => {
   const { estado } = req.body;
-  const estadosValidos = ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido', 'cancelado'];
-  if (!estadosValidos.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
-
-  const { data: pedido } = await supabase
-    .from('pedidos')
-    .select('estado, usuario_id, negocio_id, codigo_recogida, total, tipo_entrega, negocios(propietario_id), usuarios(expo_push_token)')
-    .eq('id', req.params.id)
-    .single();
-
-  if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
-  if (pedido.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
-    return res.status(403).json({ error: 'No autorizado' });
-
-  // Validar que la transición sea permitida
-  const transicionesPermitidas = TRANSICIONES_VALIDAS[pedido.estado] || [];
-  if (!transicionesPermitidas.includes(estado)) {
+  if (!esEstadoValido(estado) || !ESTADOS_SOLICITABLES_RESTAURANTE.includes(estado)) {
     return res.status(400).json({
-      error: `No se puede cambiar de "${pedido.estado}" a "${estado}". Transiciones válidas: ${transicionesPermitidas.join(', ') || 'ninguna'}`,
+      ok: false,
+      error: 'ESTADO_INVALIDO',
+      detalle: `Estado "${estado}" no es un destino válido desde el panel del restaurante. Válidos: ${ESTADOS_SOLICITABLES_RESTAURANTE.join(', ')}.`,
     });
   }
 
-  const { data, error } = await supabase
+  const { data: pedido, error: pedidoErr } = await supabase
     .from('pedidos')
-    .update({ estado })
+    .select('estado, estado_pago, cubo_payment_intent_token, cubo_identifier, usuario_id, negocio_id, codigo_recogida, total, tipo_entrega, negocios(propietario_id), usuarios(expo_push_token)')
     .eq('id', req.params.id)
-    .select()
-    .single();
+    .maybeSingle();
 
-  if (error) return res.status(400).json({ error: error.message });
+  if (pedidoErr) {
+    console.error('[PEDIDOS] no se pudo leer el pedido', req.params.id, ':', pedidoErr.message);
+    return res.status(503).json({ ok: false, error: 'BD_NO_DISPONIBLE', detalle: 'No se pudo consultar el pedido. Intenta de nuevo.' });
+  }
+  if (!pedido) return res.status(404).json({ ok: false, error: 'PEDIDO_NO_ENCONTRADO', detalle: 'Pedido no encontrado' });
+  if (pedido.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
+    return res.status(403).json({ ok: false, error: 'NO_AUTORIZADO', detalle: 'No autorizado' });
+
+  // Fuente canónica: rechaza terminales, la arista prohibida y las condiciones
+  // de pago, todo con la misma forma de respuesta.
+  const validacion = validarTransicion(pedido.estado, estado, { pedido });
+  if (!validacion.ok) {
+    return res.status(validacion.status).json({
+      ok: false,
+      error: validacion.error,
+      codigo: validacion.codigo,
+      detalle: validacion.detalle,
+      estado_actual: validacion.estadoActual,
+      transiciones_permitidas: validacion.transicionesPermitidas,
+    });
+  }
+
+  // Cancelar desde el panel pasa por el liberador idempotente: es el único
+  // camino que devuelve inventario, y hacerlo con un UPDATE suelto aquí
+  // duplicaría stock si el restaurante toca el botón dos veces.
+  if (estado === 'cancelado') {
+    const resultado = await liberarInventarioPedido(req.params.id, {
+      canceladoPor: req.usuario.rol === 'admin' ? 'admin' : 'restaurante',
+      motivo: `cancelado desde panel|actor:${req.usuario.id}`,
+    });
+    if (!resultado.ok) {
+      return res.status(resultado.status || 500).json({
+        ok: false,
+        error: resultado.error || 'CANCELACION_FALLIDA',
+        codigo: resultado.codigo,
+        detalle: resultado.detalle || 'No se pudo cancelar el pedido.',
+      });
+    }
+    return res.json({ ok: true, tipo: resultado.tipo, estado: 'cancelado', stock_devuelto: resultado.stockDevuelto === true });
+  }
+
+  // El CAS sobre `estado` cierra la ventana entre el SELECT y el UPDATE: si el
+  // pedido se movió en medio, no se pisa el estado nuevo.
+  let data;
+  try {
+    const r = await supabase
+      .from('pedidos')
+      .update({ estado })
+      .eq('id', req.params.id)
+      .eq('estado', pedido.estado)
+      .select()
+      .maybeSingle();
+    if (r.error) {
+      console.error('[PEDIDOS] UPDATE de estado falló para', req.params.id, ':', r.error.message);
+      return res.status(503).json({ ok: false, error: 'BD_NO_DISPONIBLE', detalle: 'No se pudo actualizar el pedido. Intenta de nuevo.' });
+    }
+    data = r.data;
+  } catch (err) {
+    console.error('[PEDIDOS] UPDATE de estado no disponible para', req.params.id, ':', err.message);
+    return res.status(503).json({ ok: false, error: 'BD_NO_DISPONIBLE', detalle: 'No se pudo actualizar el pedido. Intenta de nuevo.' });
+  }
+
+  if (!data) {
+    return res.status(409).json({
+      ok: false,
+      error: 'CONFLICTO_DE_ESTADO',
+      detalle: `El pedido cambió de estado mientras se procesaba la solicitud (estaba en "${pedido.estado}"). Recarga y vuelve a intentar.`,
+    });
+  }
 
   const tokenCliente = pedido.usuarios?.expo_push_token;
 
@@ -305,75 +328,56 @@ router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
     if (!monto_reembolsado || !referencia_reembolso || !fecha_reembolso) {
       return res.status(400).json({
         ok: false,
-        error: 'Se debe registrar el reembolso antes de cancelar: monto_reembolsado, referencia_reembolso, fecha_reembolso.',
+        error: 'REEMBOLSO_NO_REGISTRADO',
+        detalle: 'Se debe registrar el reembolso antes de cancelar: monto_reembolsado, referencia_reembolso, fecha_reembolso.',
       });
     }
 
     // Admin puede cancelar pedidos de cualquier usuario — sin filtro por usuario_id
-    const { data: pedido } = await supabase
+    const { data: pedido, error: leerErr } = await supabase
       .from('pedidos')
       .select('id, estado, estado_pago, negocio_id, codigo_recogida, negocios(propietario_id)')
       .eq('id', req.params.id)
-      .single();
-
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
-
-    if (pedido.estado === 'cancelado')
-      return res.json({ ok: true, tipo: 'ya_cancelado' });
-
-    // listo, completado y recogido no se cancelan: el pedido ya está en manos del cliente
-    const estadosNoCancelables = ['listo', 'completado', 'recogido'];
-    if (estadosNoCancelables.includes(pedido.estado)) {
-      return res.status(409).json({
-        ok: false,
-        tipo: 'estado_no_cancelable',
-        error: `El pedido en estado "${pedido.estado}" ya no puede cancelarse. El cliente ya tiene la bolsa o está lista para recoger.`,
-      });
-    }
-
-    if (!['confirmado', 'en_preparacion'].includes(pedido.estado)) {
-      return res.status(409).json({
-        ok: false,
-        tipo: 'estado_no_cancelable',
-        error: `Solo se pueden cancelar pedidos en estado confirmado o en_preparacion. Estado actual: "${pedido.estado}".`,
-      });
-    }
-
-    const ahora = new Date().toISOString();
-    const auditoria = `reembolso:Q${monto_reembolsado}|ref:${referencia_reembolso}|fecha:${fecha_reembolso}|admin:${req.usuario.id}`;
-
-    // .maybeSingle() detecta si 0 filas coincidieron (race condition si el restaurante
-    // avanzó el estado entre el SELECT y este UPDATE)
-    const { data: cancelado, error: cancelErr } = await supabase.from('pedidos')
-      .update({
-        estado: 'cancelado',
-        cancelado_por: 'admin',
-        cancelado_at: ahora,
-        motivo_cancelacion: auditoria,
-      })
-      .eq('id', pedido.id)
-      .in('estado', ['confirmado', 'en_preparacion'])
-      .select('id')
       .maybeSingle();
 
-    let cancelConfirmado = cancelado;
-
-    if (cancelErr) {
-      // Columnas de auditoría aún no existen — fallback sin ellas
-      const { data: cancelado2, error: cancelErr2 } = await supabase.from('pedidos')
-        .update({ estado: 'cancelado' })
-        .eq('id', pedido.id)
-        .in('estado', ['confirmado', 'en_preparacion'])
-        .select('id')
-        .maybeSingle();
-      if (cancelErr2) return res.status(500).json({ error: cancelErr2.message });
-      cancelConfirmado = cancelado2;
+    if (leerErr) {
+      console.error('[CANCELAR ADMIN] lectura falló:', leerErr.message);
+      return res.status(503).json({ ok: false, error: 'BD_NO_DISPONIBLE', detalle: 'No se pudo consultar el pedido. Intenta de nuevo.' });
     }
+    if (!pedido) return res.status(404).json({ ok: false, error: 'PEDIDO_NO_ENCONTRADO', detalle: 'Pedido no encontrado' });
 
-    if (!cancelConfirmado) {
+    const auditoria = `reembolso:Q${monto_reembolsado}|ref:${referencia_reembolso}|fecha:${fecha_reembolso}|admin:${req.usuario.id}`;
+
+    // Una sola puerta para cancelar: el CAS sobre `estado` dentro de
+    // liberarInventarioPedido garantiza que el inventario se devuelve una vez
+    // aunque soporte reintente. estadosPermitidos mantiene la política de este
+    // endpoint — 'listo', 'completado' y 'recogido' no se cancelan porque el
+    // cliente ya tiene la bolsa o está lista para recoger.
+    const resultado = await liberarInventarioPedido(pedido.id, {
+      canceladoPor: 'admin',
+      motivo: auditoria,
+      estadosPermitidos: ['confirmado', 'en_preparacion'],
+    });
+
+    if (resultado.tipo === 'ya_cancelado')
+      return res.json({ ok: true, tipo: 'ya_cancelado' });
+
+    if (resultado.tipo === 'transicion_invalida') {
       return res.status(409).json({
         ok: false,
-        error: 'El pedido cambió de estado justo antes de cancelar. Verifique el estado actual e intente de nuevo.',
+        tipo: 'estado_no_cancelable',
+        error: resultado.error,
+        codigo: resultado.codigo,
+        detalle: resultado.detalle,
+        estado_actual: pedido.estado,
+      });
+    }
+
+    if (!resultado.ok) {
+      return res.status(resultado.status || 500).json({
+        ok: false,
+        error: resultado.error || 'CANCELACION_FALLIDA',
+        detalle: resultado.detalle || 'No se pudo cancelar el pedido.',
       });
     }
 
@@ -390,9 +394,15 @@ router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
         .catch(err => console.warn('[CANCELAR ADMIN] guardarNotificacion:', err.message));
     }
 
-    res.json({ ok: true, tipo: 'cancelado_por_admin', mensaje: 'Pedido cancelado y reembolso registrado correctamente' });
+    res.json({
+      ok: true,
+      tipo: 'cancelado_por_admin',
+      stock_devuelto: resultado.stockDevuelto === true,
+      mensaje: 'Pedido cancelado y reembolso registrado correctamente',
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('[CANCELAR ADMIN] error no capturado:', err.message);
+    res.status(500).json({ ok: false, error: 'ERROR_INTERNO', detalle: err.message });
   }
 });
 
