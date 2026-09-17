@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && find routes services middleware scripts -maxdepth 2 -type f -name '*.js' -print0 | xargs -0 -n1 node --check",
+    "check": "node scripts/check.js",
     "test": "node --test test/*.test.js && node scripts/test-checkout-validation.js && node scripts/test-webhook-cubo.js"
   },
   "dependencies": {

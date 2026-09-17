@@ -6,6 +6,7 @@ const { enviarNotificacionPush, guardarNotificacion } = require('../services/not
 const { validarTransicion, esEstadoValido, ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { liberarInventarioPedido } = require('../services/stock');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // Ruta heredada retirada: ningún cliente puede crear un pedido pagado sin una
@@ -277,6 +278,22 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   }
 
   const tokenCliente = pedido.usuarios?.expo_push_token;
+
+  // El CAS de arriba ya garantiza que solo la llamada ganadora llega aquí, así
+  // que la clave por defecto (pedido:id:evento) no necesita discriminador: cada
+  // transición del catálogo ocurre como máximo una vez en la vida del pedido.
+  const eventoPorEstado = {
+    en_preparacion: 'pedido.en_preparacion',
+    listo: 'pedido.listo',
+    completado: 'pedido.completado',
+    recogido: 'pedido.completado',
+  };
+  if (eventoPorEstado[estado]) {
+    enqueueEventBestEffort({
+      eventType: eventoPorEstado[estado], aggregateType: 'pedido', aggregateId: req.params.id,
+      payload: { negocio_id: pedido.negocio_id, actor_id: req.usuario.id, estado_anterior: pedido.estado },
+    });
+  }
 
   if (estado === 'en_preparacion') {
     await enviarNotificacionPush(tokenCliente, '👨‍🍳 Preparando tu pedido',

@@ -5,6 +5,9 @@ const supabase = require('../config/supabase');
 
 const DEFAULTS = {
   comision_porcentaje: 25,
+  // La promoción tiene una tarifa propia. Estos valores son defaults de
+  // servidor: el cliente nunca participa en el cálculo.
+  comision_promocion_porcentaje: 20,
   puntos_por_pedido: 10,
   min_puntos_canje: 100,
   puntos_a_quetzales: 0.10,
@@ -51,4 +54,9 @@ async function obtenerComisionFraccion() {
   return pct / 100;
 }
 
-module.exports = { obtenerConfig, obtenerConfigNumerica, obtenerComisionFraccion, DEFAULTS, COMISION_PLATAFORMA_FRACCION };
+async function obtenerComisionPromocionFraccion() {
+  const pct = await obtenerConfigNumerica('comision_promocion_porcentaje');
+  return pct / 100;
+}
+
+module.exports = { obtenerConfig, obtenerConfigNumerica, obtenerComisionFraccion, obtenerComisionPromocionFraccion, DEFAULTS, COMISION_PLATAFORMA_FRACCION };

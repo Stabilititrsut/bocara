@@ -13,6 +13,7 @@ const {
   estadosCancelables,
   requiereDevolucionDeStock,
 } = require('./orderStateMachine');
+const { enqueueEventBestEffort } = require('./eventosDominio');
 
 // ── Log estructurado ────────────────────────────────────────────────────────
 //
@@ -553,6 +554,15 @@ async function liberarInventarioPedido(pedidoId, opciones = {}) {
   if (!ganador) {
     return { ok: true, tipo: 'ya_cancelado', status: 200, pedidoId, stockDevuelto: false };
   }
+
+  // Único choke point de cancelación (usuario, restaurante, admin y webhook de
+  // rechazo pasan todos por aquí) — el evento de catálogo se emite una sola vez,
+  // justo cuando el CAS de arriba gana de verdad la transición.
+  enqueueEventBestEffort({
+    eventType: 'pedido.cancelado', aggregateType: 'pedido', aggregateId: pedidoId,
+    discriminator: canceladoPor, payload: { cancelado_por: canceladoPor, motivo: motivo || null },
+    cliente,
+  });
 
   if (!requiereDevolucionDeStock(pedido.estado)) {
     return {

@@ -45,6 +45,7 @@
 
 const { validarConfirmacionPago } = require('./orderStateMachine');
 const { reservaPagable, instanteReserva, RESERVA_TTL_MINUTOS } = require('./stock');
+const { enqueueEventBestEffort } = require('./eventosDominio');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -558,6 +559,15 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
         procesarEventosPedido(pedido.id).catch(err =>
           registrar('warn', 'eventos_post_pago_fallo', { pedido_id: pedido.id, detalle: err.message }));
 
+        // Clave determinista por transacción (no por reintento): dos webhooks
+        // SUCCEEDED con el mismo `identifier` son el mismo cobro y colapsan al
+        // mismo registro; ver catálogo en docs/EVENTOS_NOTIFICACIONES.md.
+        enqueueEventBestEffort({
+          eventType: 'pedido.pago_confirmado', aggregateType: 'pedido', aggregateId: pedido.id,
+          discriminator: paymentIntentToken, payload: { codigo_recogida: codigoRecogida },
+          cliente: supabase,
+        });
+
         registrar('info', 'pago_confirmado', { pedido_id: pedido.id, codigo_recogida: codigoRecogida });
         return { statusCode: 200, tipo: 'procesado' };
       }
@@ -627,6 +637,12 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedido.id })
       .then(({ error }) => { if (error) registrar('error', 'liberar_cupon_fallo', { pedido_id: pedido.id, detalle: error.message }); })
       .catch(err => registrar('error', 'liberar_cupon_excepcion', { pedido_id: pedido.id, detalle: err.message }));
+
+    enqueueEventBestEffort({
+      eventType: 'pedido.pago_rechazado', aggregateType: 'pedido', aggregateId: pedido.id,
+      discriminator: paymentIntentToken, payload: { status: rawStatus },
+      cliente: supabase,
+    });
 
     registrar('info', 'pago_rechazado_registrado', {
       pedido_id: pedido.id,
