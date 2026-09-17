@@ -48,6 +48,8 @@ const { corsMiddleware } = require('./middleware/cors');
 const { enviarNotificacionPush, guardarNotificacion } = require('./services/notificaciones');
 const { procesarEventosFallidos } = require('./services/pagoEventos');
 const { RESERVA_TTL_MINUTOS } = require('./services/stock');
+const { enqueueEventBestEffort } = require('./services/eventosDominio');
+const { resolverRequestId } = require('./utils/requestId');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -57,7 +59,22 @@ app.use(helmet());
 // Orígenes permitidos y reglas de preflight: middleware/cors.js
 app.use(corsMiddleware());
 
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+// Se expone en el header de respuesta y se agrega a los logs y al error 500
+// genérico de abajo — nunca a las respuestas 2xx/4xx explícitas de cada ruta,
+// para no tocar un contrato que el frontend ya consume. Validación en
+// utils/requestId.js (ver test/requestId.test.js).
+app.use((req, res, next) => {
+  req.requestId = resolverRequestId(req.headers['x-request-id']);
+  res.setHeader('X-Request-Id', req.requestId);
+  next();
+});
+
+morgan.token('request_id', (req) => req.requestId);
+app.use(morgan(
+  process.env.NODE_ENV === 'production'
+    ? ':remote-addr - [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] request_id=:request_id'
+    : ':method :url :status :response-time ms request_id=:request_id',
+));
 
 // PayU webhook envía application/x-www-form-urlencoded
 app.use('/api/pagos/webhook', express.urlencoded({ extended: false }));
@@ -82,8 +99,16 @@ app.get('/', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.message);
-  res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
+  console.error('❌ Error:', err.message, '| request_id:', req.requestId, '| ruta:', req.method, req.originalUrl);
+  // Aditivo: agrega code/request_id sin quitar `error`, que es lo único que
+  // las rutas explícitas garantizan hoy. Este handler solo corre para
+  // excepciones no capturadas por una ruta — nunca para un res.status(...)
+  // ya enviado desde dentro de un router.
+  res.status(err.status || 500).json({
+    error: err.message || 'Error interno del servidor',
+    code: err.code || 'ERROR_INTERNO',
+    request_id: req.requestId,
+  });
 });
 
 // ── Recordatorios de recogida (corre cada minuto) ────────────────────────────
@@ -244,6 +269,10 @@ app.listen(PORT, () => {
         } catch (err) {
           console.error('[CLEANUP] liberar_reserva_cupon error:', err.message);
         }
+        enqueueEventBestEffort({
+          eventType: 'reserva.expirada', aggregateType: 'pedido', aggregateId: id,
+          payload: { ttl_minutos: RESERVA_TTL_MINUTOS },
+        });
       }
     } catch (err) {
       console.error('[CLEANUP] error cerrando reservas vencidas:', err.message);

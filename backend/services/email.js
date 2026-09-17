@@ -25,6 +25,20 @@ function esperar(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Para logs: conserva el dominio (útil para depurar — Gmail vs. corporativo,
+// dominio mal escrito, etc.) pero nunca el local-part completo. Un email es
+// PII igual que un teléfono; no debe quedar legible en los logs de Render.
+function enmascararEmail(email) {
+  if (!email || typeof email !== 'string' || !email.includes('@')) return '(sin email)';
+  const [local, dominio] = email.split('@');
+  const visible = local.slice(0, 2);
+  return `${visible}${'*'.repeat(Math.max(local.length - visible.length, 1))}@${dominio}`;
+}
+
+function enmascararDestino(to) {
+  return Array.isArray(to) ? to.map(enmascararEmail).join(', ') : enmascararEmail(to);
+}
+
 // Solo vale la pena reintentar fallos transitorios (timeout, red caída, 5xx de
 // Resend). Un 4xx (API key inválida, dominio no verificado, payload mal
 // formado) va a fallar igual las veces que se reintente.
@@ -41,7 +55,7 @@ function esTransitorio(err) {
 //               (vive solo en el header Authorization del cliente axios)
 // Quien llame NUNCA debe reportar éxito al cliente si ok=false.
 async function enviarEmail({ to, subject, html }) {
-  const dest = Array.isArray(to) ? to.join(', ') : to;
+  const dest = enmascararDestino(to);
   if (!process.env.RESEND_API_KEY) {
     console.warn(`[email] ⚠️  RESEND_API_KEY no configurada — email NO enviado a: ${dest} | asunto: "${subject}"`);
     return { ok: false, motivo: 'sin_api_key', status: null, detalle: 'RESEND_API_KEY no configurada en el servidor' };
@@ -1032,4 +1046,4 @@ function templateLiquidacionPagada({ nombrePropietario, nombreNegocio, monto, ve
 </html>`;
 }
 
-module.exports = { enviarEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateConfirmacionPedidoCliente, templateNuevoPedidoNegocio, templateLiquidacionPagada };
+module.exports = { enviarEmail, enmascararEmail, templateAprobado, templateRechazado, templateOlvidoContrasena, templateBienvenidaRestaurante, templateSuspendido, templateVerificacionOTP, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateConfirmacionPedidoCliente, templateNuevoPedidoNegocio, templateLiquidacionPagada };

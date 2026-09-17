@@ -69,7 +69,7 @@ router.get('/check/:tipo/:referenciaId', authMiddleware, async (req, res) => {
 
 // POST /api/favoritos — agrega favorito
 router.post('/', authMiddleware, async (req, res) => {
-  console.log('[FAV] POST /favoritos body:', req.body, 'usuario:', req.usuario?.id);
+  console.log('[FAV] POST /favoritos', { usuario_id: req.usuario?.id, tipo: req.body?.tipo });
   const { tipo, referencia_id } = req.body;
   const usuario_id = req.usuario.id;
   if (!tipo || !referencia_id)

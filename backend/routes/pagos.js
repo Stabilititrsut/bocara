@@ -10,8 +10,10 @@ const {
 } = require('../services/stock');
 const { ESTADOS_SIN_COBRO, puedeTransicionar, validarTransicion } = require('../services/orderStateMachine');
 const { procesarWebhookCubo } = require('./webhooks');
-const { obtenerComisionFraccion, obtenerConfigNumerica, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
+const { obtenerComisionFraccion, obtenerComisionPromocionFraccion, obtenerConfigNumerica, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
+const { calcularSnapshotFinanciero, actualizarPropinaEnSnapshot } = require('../services/finanzasSnapshot');
 const { normalizeCartItems, validateCheckoutBags } = require('../services/checkoutValidation');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // Números de Guatemala tienen 8 dígitos locales. Algunos registros en `usuarios.telefono`
@@ -93,7 +95,7 @@ router.post('/webhook', (_req, res) => res.status(410).json({ received: false, e
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
   try {
-    console.log('1. Endpoint /pagos/cubopago recibido', req.body);
+    console.log('[PAGO] checkout recibido', { usuario_id: req.usuario.id, items: Array.isArray(req.body.items) ? req.body.items.length : 1 });
     const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
     const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
 
@@ -186,11 +188,15 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     //   · El restaurante recibe 75% del producto + el 100% de la propina + el 100% del
     //     costo de envío (no existe un tercer actor — repartidor — en el sistema; si se
     //     agrega uno más adelante, este es el punto a ajustar).
-    const comisionFraccion     = await obtenerComisionFraccion();
-    const comisionBocara       = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
-    const comisionPasarela     = Math.round(baseTransaccion * COMISION_PLATAFORMA_FRACCION * 100) / 100;
-    const total                = Math.round((baseTransaccion + comisionPasarela) * 100) / 100;
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara + propina + costoEnvio) * 100) / 100;
+    const snapshotFinanciero = calcularSnapshotFinanciero({
+      items: cartItems, bolsas, costoEnvio, propina,
+      comisionMerma: await obtenerComisionFraccion(),
+      comisionPromocion: await obtenerComisionPromocionFraccion(),
+    });
+    const comisionBocara = snapshotFinanciero.comision_bocara;
+    const comisionPasarela = snapshotFinanciero.comision_pasarela;
+    const total = snapshotFinanciero.total_cliente;
+    const montoNetoRestaurante = snapshotFinanciero.monto_neto_restaurante;
 
     console.log('[PAGO] items recibidos:', JSON.stringify(cartItems));
     console.log('[PAGO] subtotalProductos:', subtotalProductos);
@@ -219,6 +225,9 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       comision_bocara:        comisionBocara,
       comision_pasarela:      comisionPasarela,
       monto_neto_restaurante: montoNetoRestaurante,
+      snapshot_financiero:    snapshotFinanciero,
+      tipo_financiero:        snapshotFinanciero.tipo_financiero,
+      porcentaje_comision_aplicado: snapshotFinanciero.porcentaje_comision_aplicado,
       total,
       // Nace como borrador y solo pasa a 'pendiente' (= reserva viva) dentro de
       // reservar_stock_pedido, con las bolsas bloqueadas. Insertarlo ya en
@@ -245,6 +254,11 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       pedido = r3.data; pedidoErr = r3.error;
     }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
+
+    enqueueEventBestEffort({
+      eventType: 'pedido.creado', aggregateType: 'pedido', aggregateId: pedido.id,
+      payload: { usuario_id: pedido.usuario_id, negocio_id: pedido.negocio_id, tipo_financiero: snapshotFinanciero.tipo_financiero },
+    });
 
     // Guardar todos los items del carrito en pedido_items
     const pedidoItemsData = cartItems.map((item, i) => ({
@@ -347,7 +361,7 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       console.error('[PAGO] Error guardando token Cubo — pedido cancelado. Columnas Cubo pueden no existir (ejecutar migración SQL):', tokenUpdateErr.message);
       return res.status(500).json({ error: 'Error al guardar el token de pago. Ejecuta la migración SQL (cubo-pago-schema.sql) e intenta de nuevo.' });
     }
-    console.log('[PAGO] token guardado en pedido:', paymentIntentToken, '| monto_esperado_centavos:', montoCentavos);
+    console.log('[PAGO] intención de pago guardada', { pedido_id: pedido.id, monto_esperado_centavos: montoCentavos });
 
     res.json({
       pedidoId: pedido.id,
@@ -514,18 +528,22 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
     // Base de la transacción para el cargo de plataforma: producto + envío + propina
     // (el 3.5% incluye la propina en su base, nunca solo el producto).
     const baseTransaccion = subtotalProductos + costoEnvio + propina;
-    const comisionFraccion = await obtenerComisionFraccion();
-    const comisionBocara = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
-    const comisionPasarela = Math.round(baseTransaccion * COMISION_PLATAFORMA_FRACCION * 100) / 100;
+    const snapshotFinanciero = calcularSnapshotFinanciero({
+      items: cartItems, bolsas, costoEnvio, propina,
+      comisionMerma: await obtenerComisionFraccion(),
+      comisionPromocion: await obtenerComisionPromocionFraccion(),
+    });
+    const comisionBocara = snapshotFinanciero.comision_bocara;
+    const comisionPasarela = snapshotFinanciero.comision_pasarela;
     // Total sin descuento — se actualiza después de la reserva atómica del cupón
-    let total = Math.round((baseTransaccion + comisionPasarela) * 100) / 100;
+    let total = snapshotFinanciero.total_cliente;
     // No restar comisionPasarela: es 100% ingreso de Bocara y el cliente ya la paga
     // aparte (incluida en `total`) — restarla aquí también sería cobrarla dos veces.
     // El descuento de cupón (si se aplica después) tampoco se resta aquí: lo absorbe
     // Bocara de su propia comisión, nunca el restaurante — ver aplicar_cupon_borrador.
     // + costoEnvio: 100% al restaurante, igual que la propina (no hay repartidor en
     // el sistema; ajustar este punto si se agrega un tercer actor de reparto).
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara + propina + costoEnvio) * 100) / 100;
+    const montoNetoRestaurante = snapshotFinanciero.monto_neto_restaurante;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
@@ -547,6 +565,9 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
       comision_bocara: comisionBocara,
       comision_pasarela: comisionPasarela,
       monto_neto_restaurante: montoNetoRestaurante,
+      snapshot_financiero: snapshotFinanciero,
+      tipo_financiero: snapshotFinanciero.tipo_financiero,
+      porcentaje_comision_aplicado: snapshotFinanciero.porcentaje_comision_aplicado,
       total,
       estado: 'borrador',
       estado_pago: 'pendiente',
@@ -568,6 +589,11 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
       pedido = r3.data; pedidoErr = r3.error;
     }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
+
+    enqueueEventBestEffort({
+      eventType: 'pedido.creado', aggregateType: 'pedido', aggregateId: pedido.id,
+      payload: { usuario_id: pedido.usuario_id, negocio_id: pedido.negocio_id, tipo_financiero: snapshotFinanciero.tipo_financiero },
+    });
 
     const pedidoItemsData = cartItems.map((item, i) => ({
       pedido_id: pedido.id,
@@ -907,8 +933,17 @@ router.patch('/borrador/:id', authMiddleware, async (req, res) => {
     // igual que la propina.
     const montoNetoRestaurante = Math.round((subtotalProductos - pedido.comision_bocara + propina + pedido.costo_envio) * 100) / 100;
 
+    // El snapshot ya persistido fija para siempre `porcentaje_comision_aplicado`,
+    // `tipo_financiero`, `comision_bocara` y las líneas por bolsa — nada de eso
+    // depende de la propina y no se toca. Solo se recalculan los componentes
+    // derivados de ella (comisión de pasarela, total al cliente, neto del
+    // restaurante), y solo porque el pedido sigue en 'borrador': la guarda de
+    // arriba ya impide llegar aquí con un pedido pagado/confirmado/completado.
+    const snapshotActualizado = actualizarPropinaEnSnapshot(pedido.snapshot_financiero, propina);
+
     const { error: updateErr } = await supabase.from('pedidos').update({
       propina, total, comision_pasarela: comisionPasarela, monto_neto_restaurante: montoNetoRestaurante,
+      ...(snapshotActualizado ? { snapshot_financiero: snapshotActualizado } : {}),
     }).eq('id', req.params.id);
 
     if (updateErr) return res.status(400).json({ error: updateErr.message });

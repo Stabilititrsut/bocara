@@ -380,6 +380,20 @@ Todo error nuevo responde con esta forma:
 | **409** | `TRANSICION_INVALIDA` | `ESTADO_NO_CANCELABLE` | Estado válido en general, pero no cancelable desde *este* flujo (p. ej. soporte no cancela un `listo`) | No |
 | **500** | `ERROR_INTERNO` | — | Excepción no prevista | Sí, una vez |
 | **503** | `BD_NO_DISPONIBLE` | — | La BD no respondió. **No se mutó nada** | **Sí, con backoff** |
+| **422** | `UBICACION_INVALIDA` | — | `GET /api/bolsas`: falta `lat` o `lng`, o están fuera de rango (`lat` ∉ [-90,90], `lng` ∉ [-180,180], NaN) | No — corrige las coordenadas |
+| **422** | `RADIO_INVALIDO` | — | `GET /api/bolsas`: `max_distancia` no es un número positivo | No |
+
+### `request_id` de correlación
+
+Todo request recibe un `X-Request-Id` en la respuesta (header), heredado del
+caller si ya traía uno válido (`x-request-id`) o generado en `server.js`. Se
+usa en los logs de cada capa (`morgan`, `cuboWebhook.registrar`, etc.) para
+seguir un mismo request de punta a punta. El handler global de errores no
+capturados (excepciones que ninguna ruta atrapó) lo agrega también al cuerpo
+de la respuesta como `request_id`, junto a un `code` — de forma **aditiva**:
+nunca reemplaza ni quita el campo `error` que ya devolvía. Las respuestas
+explícitas de cada ruta (los `res.status(...).json(...)` de arriba) no se
+tocaron: siguen exactamente igual que antes de esta auditoría.
 
 ### Errores propios del webhook de Cubo (`POST /api/webhooks/cubo`)
 
