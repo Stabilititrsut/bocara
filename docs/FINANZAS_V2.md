@@ -7,3 +7,7 @@ El snapshot contiene subtotal de productos, comisión Bocara, porcentaje por lí
 El frontend solo envía bolsas, cantidades, entrega y propina; no puede elegir porcentajes ni importes de comisión. `calcularSnapshotFinanciero` (`services/finanzasSnapshot.js`) solo lee porcentaje y precio de `bolsas` (el catálogo que el backend acaba de consultar) — cualquier `porcentaje_comision_aplicado`/`comision_bocara` que un cliente hostil incluya en `items` se ignora (`test/finanzasSnapshot.test.js`).
 
 La función es pura: recibe `comisionMerma`/`comisionPromocion` como parámetros explícitos (leídos de `configuracion.js` una sola vez, antes de calcular) y nunca vuelve a consultar la configuración. Por eso un cambio posterior en `comision_porcentaje`/`comision_promocion_porcentaje` no puede alterar un pedido ya calculado — solo afecta al siguiente pedido que se cree (probado explícitamente).
+
+## Ajustar propina en borrador (`PATCH /pagos/borrador/:id`)
+
+Antes de pagar, el cliente puede cambiar la propina sobre un pedido en `estado='borrador'` (la ruta corta con 400 fuera de ese estado — un pedido pagado/confirmado/completado nunca llega a este código). `services/finanzasSnapshot.js#actualizarPropinaEnSnapshot` recalcula sobre el snapshot ya persistido solo lo que depende de la propina — `propina`, `comision_pasarela`, `cargo_plataforma_cliente`, `total_cliente`, `monto_neto_restaurante` — y conserva intactos `porcentaje_comision_aplicado`, `tipo_financiero`, `comision_bocara` y `lineas` (el registro histórico de qué comisión se fijó al crear el pedido).
