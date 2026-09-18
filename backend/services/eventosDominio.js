@@ -21,11 +21,16 @@ async function enqueueEvent({ eventType, aggregateType, aggregateId, payload = {
   throw new Error(`No se pudo encolar evento ${eventType}: ${error.message}`);
 }
 
-// Encola sin lanzar y sin bloquear al llamador: el catálogo de eventos es un
-// registro de auditoría adicional, nunca una condición para que el flujo de
-// negocio (pago, cancelación, moderación) tenga éxito o falle.
+// Encola sin bloquear al llamador, pero registrando cualquier fallo en los logs
+// estructurados para auditoría y depuración sin suprimir errores a ciegas.
 function enqueueEventBestEffort(args) {
-  enqueueEvent(args).catch(() => {});
+  enqueueEvent(args).catch((err) => {
+    console.error('[EVENTOS_DOMINIO] Fallo al encolar evento best-effort:', {
+      tipo: args?.eventType,
+      id: args?.aggregateId,
+      error: err.message,
+    });
+  });
 }
 
 async function markProcessed(id, cliente) {
