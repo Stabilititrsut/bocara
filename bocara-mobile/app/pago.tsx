@@ -53,6 +53,27 @@ const TIPO_COLORS: Record<string, string> = {
 // ── Componente ────────────────────────────────────────────────────────────────
 
 export default function PagoScreen() {
+  const { loaded, items } = useCart();
+  const router = useRouter();
+  if (!loaded) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <ActivityIndicator color={Colors.primary} />
+      <Text style={s.errorMsg}>Cargando carrito...</Text>
+    </SafeAreaView>
+  );
+  if (items.length === 0) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={s.errorTitulo}>Tu carrito está vacío</Text>
+      <TouchableOpacity onPress={() => router.replace('/(tabs)/carrito')}>
+        <Text style={s.linkVolver}>Volver al carrito</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+  // El flujo existente solo monta cuando terminó la hidratación y hay productos.
+  return <PagoContent />;
+}
+
+function PagoContent() {
   const { items, total, limpiar } = useCart();
   const { usuario } = useAuth();
   const router = useRouter();

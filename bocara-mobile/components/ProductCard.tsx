@@ -3,7 +3,8 @@ import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-nati
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCart } from '@/src/context/CartContext';
+import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
+import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { favoritosAPI } from '@/src/services/api';
 import { Bolsa } from '@/src/types';
 
@@ -18,7 +19,7 @@ const RED   = '#E53935';
 
 export interface ProductCardProps {
   bolsa: Bolsa;
-  onAgregar: (bolsa: Bolsa) => void;
+  onAgregar: (bolsa: Bolsa) => ResultadoAgregar;
   width?: number;
   showFavorite?: boolean;
   isFavorited?: boolean;
@@ -26,7 +27,7 @@ export interface ProductCardProps {
 
 export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isFavorited }: ProductCardProps) {
   const router = useRouter();
-  const { items } = useCart();
+  const { items, loaded } = useCart();
   const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
   const [isFav, setIsFav] = useState(!!isFavorited);
 
@@ -111,7 +112,8 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
           {!agotado && (
             <TouchableOpacity
               style={[s.addBtn, cartCount > 0 && s.addBtnActive]}
-              onPress={() => onAgregar(bolsa)}
+              onPress={() => mostrarErrorCarrito(onAgregar(bolsa))}
+              disabled={!loaded}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               activeOpacity={0.85}
             >

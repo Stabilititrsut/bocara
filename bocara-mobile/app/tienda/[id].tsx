@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Dimensions, Linking, ActivityIndicator, Platform, StatusBar,
@@ -6,10 +6,11 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, bolsasAPI } from '@/src/services/api';
-import { useCart } from '@/src/context/CartContext';
+import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
+import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 
 const GOLD = '#C8960C';
 const DARK = '#0A2A2A';
@@ -47,9 +48,9 @@ function limpiarTexto(txt: string | undefined | null) {
 }
 
 // ─── Product Card ─────────────────────────────────────────────────────────────
-function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => void }) {
+function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => ResultadoAgregar }) {
   const router = useRouter();
-  const { items } = useCart();
+  const { items, loaded } = useCart();
   const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
 
   const pct = bolsa.precio_original > 0
@@ -113,7 +114,8 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
           {!agotado && (
             <TouchableOpacity
               style={[pc.addBtn, cartCount > 0 && pc.addBtnActive]}
-              onPress={() => onAgregar(bolsa)}
+              onPress={() => mostrarErrorCarrito(onAgregar(bolsa))}
+              disabled={!loaded}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               activeOpacity={0.85}
             >
@@ -134,7 +136,15 @@ export default function TiendaScreen() {
   const { id }   = useLocalSearchParams<{ id: string }>();
   const router   = useRouter();
   const insets   = useSafeAreaInsets();
-  const { total, cantidad, agregar } = useCart();
+  const { total, cantidad, agregar, loaded, items } = useCart();
+  const checkoutPending = useRef(false);
+  useFocusEffect(useCallback(() => { checkoutPending.current = false; }, []));
+
+  function iniciarCheckout() {
+    if (!loaded || items.length === 0 || checkoutPending.current) return;
+    checkoutPending.current = true;
+    router.push('/pago');
+  }
 
   const [negocio, setNegocio] = useState<any>(null);
   const [bolsas,  setBolsas]  = useState<any[]>([]);
@@ -317,7 +327,7 @@ export default function TiendaScreen() {
       </ScrollView>
 
       {/* ── Barra de carrito fija ─────────────────────────────── */}
-      {cantidad > 0 && (
+      {loaded && cantidad > 0 && (
         <View style={[s.cartBar, { paddingBottom: insets.bottom + 10 }]}>
           <View style={s.cartLeft}>
             <View style={s.cartBadge}>
@@ -329,7 +339,7 @@ export default function TiendaScreen() {
           </View>
           <TouchableOpacity
             style={s.cartBtn}
-            onPress={() => router.push('/pago' as any)}
+            onPress={iniciarCheckout}
             activeOpacity={0.9}
           >
             <Text style={s.cartBtnTxt}>Ver carrito</Text>

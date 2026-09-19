@@ -72,7 +72,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { usuario } = useAuth();
   const { locationName, permissionStatus, requestPermission, loading: locLoading } = useLocation();
-  const { cantidad: cantidadCarrito } = useCart();
+  const { cantidad: cantidadCarrito, loaded: cartLoaded } = useCart();
 
   useEffect(() => {
     notificacionesAPI.listar().then((r) => {
@@ -160,7 +160,7 @@ export default function HomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={s.headerIconBtn} onPress={() => router.push('/(tabs)/carrito' as any)}>
             <Ionicons name="bag-outline" size={22} color={Colors.primary} />
-            {cantidadCarrito > 0 && (
+            {cartLoaded && cantidadCarrito > 0 && (
               <View style={s.cartBadge}>
                 <Text style={s.cartBadgeText}>{cantidadCarrito > 9 ? '9+' : cantidadCarrito}</Text>
               </View>

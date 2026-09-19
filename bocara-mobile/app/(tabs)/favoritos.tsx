@@ -7,7 +7,7 @@ import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { favoritosAPI } from '@/src/services/api';
-import { useCart } from '@/src/context/CartContext';
+import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
 import { useAuth } from '@/src/context/AuthContext';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 import { Colors } from '@/constants/Colors';
@@ -19,7 +19,7 @@ const RED  = '#C0392B';
 type TabKey = 'negocios' | 'bolsas';
 
 // ─── 2-col grid ──────────────────────────────────────────────────────────────
-function BolsasGrid({ bolsas, onAgregar }: { bolsas: any[]; onAgregar: (b: any) => void }) {
+function BolsasGrid({ bolsas, onAgregar }: { bolsas: any[]; onAgregar: (b: any) => ResultadoAgregar }) {
   const rows: React.ReactNode[] = [];
   for (let i = 0; i < bolsas.length; i += 2) {
     rows.push(
