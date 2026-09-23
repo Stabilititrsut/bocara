@@ -1,6 +1,7 @@
 import { create } from 'axios';
 import { emitSessionInvalid } from './sessionEvents';
 import { getAuthToken } from './authTokenStorage';
+import type { CrearBolsaPayload, ActualizarBolsaPayload } from '../types';
 
 // La URL de producción es siempre el fallback — __DEV__ nunca se usa para la URL
 // para evitar que bocara.vercel.app apunte a localhost por error de bundler.
@@ -100,6 +101,11 @@ export const authAPI = {
     api.post('/auth/enviar-otp-email', { email }),
   verificarOtpRegistro: (data: { email: string; codigo: string; nombre: string; apellido?: string; password: string; telefono?: string }) =>
     api.post('/auth/verificar-otp-email', data),
+  // Persiste la ubicación del cliente autenticado (backend/routes/auth.js —
+  // migración 202609171200_ubicacion_usuario.sql). Nunca manda un id de
+  // usuario: el backend siempre escribe sobre el dueño del token.
+  actualizarUbicacion: (latitud: number, longitud: number) =>
+    api.patch('/auth/ubicacion', { latitud, longitud }),
 };
 
 export const negociosAPI = {
@@ -120,8 +126,8 @@ export const negociosAPI = {
 export const bolsasAPI = {
   listar: (params?: any) => api.get('/bolsas', { params }),
   detalle: (id: string) => api.get(`/bolsas/${id}`),
-  crear: (data: any) => api.post('/bolsas', data),
-  actualizar: (id: string, data: any) => api.put(`/bolsas/${id}`, data),
+  crear: (data: CrearBolsaPayload) => api.post('/bolsas', data),
+  actualizar: (id: string, data: ActualizarBolsaPayload) => api.put(`/bolsas/${id}`, data),
   eliminar: (id: string) => api.delete(`/bolsas/${id}`),
 };
 

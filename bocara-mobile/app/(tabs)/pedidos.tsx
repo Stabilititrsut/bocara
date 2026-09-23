@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { pedidosAPI, resenasAPI } from '@/src/services/api';
 import { Pedido } from '@/src/types';
 import { Colors } from '@/constants/Colors';
+import { useRealtime } from '@/src/context/RealtimeContext';
 
 const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
   pendiente:       { label: 'Pendiente',          color: '#FF9800',            bg: '#FFF3E0',       icon: 'time-outline' },
@@ -153,6 +154,7 @@ export default function PedidosScreen() {
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [errorCarga, setErrorCarga] = useState(false);
   const [resenasEnviadas, setResenasEnviadas] = useState<Set<string>>(new Set());
   const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
   const pollingRef = useRef<any>(null);
@@ -167,12 +169,14 @@ export default function PedidosScreen() {
     try {
       const res = await pedidosAPI.listar();
       const data: Pedido[] = res.data || [];
-      console.log('[PEDIDOS] backend rows:', data.length, 'ids:', data.map(p => p.id));
       const dedup = Array.from(new Map(data.map(p => [String(p.id), p])).values())
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      console.log('[PEDIDOS] after dedup:', dedup.length, 'ids:', dedup.map(p => p.id));
       setPedidos(dedup);
-    } catch { setPedidos([]); }
+      setErrorCarga(false);
+    } catch {
+      // No se vacía la lista: un error de red no debe leerse como "no tienes pedidos".
+      setErrorCarga(true);
+    }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
 
@@ -187,6 +191,12 @@ export default function PedidosScreen() {
     }
     return () => clearInterval(pollingRef.current);
   }, [pedidos, cargar]);
+
+  // Realtime: recarga inmediata en cuanto el backend cambia un pedido propio,
+  // sin esperar al próximo tick del polling de arriba (que sigue como
+  // respaldo defensivo — ver src/services/realtime.ts sobre el estado de RLS).
+  const { onPedidoCambiado } = useRealtime();
+  useEffect(() => onPedidoCambiado(() => { cargar(); }), [onPedidoCambiado, cargar]);
 
   async function confirmarCancelacion(pedidoId: string, estadoPedido: string) {
     const estadoLabel = estadoPedido === 'en_preparacion' ? 'en preparación' : 'confirmado';
@@ -247,7 +257,18 @@ export default function PedidosScreen() {
         )}
       </View>
 
-      {pedidos.length === 0 ? (
+      {pedidos.length === 0 && errorCarga ? (
+        <View style={s.empty}>
+          <View style={s.emptyIconWrap}>
+            <Ionicons name="cloud-offline-outline" size={40} color={Colors.textLight} />
+          </View>
+          <Text style={s.emptyTitle}>No pudimos cargar tus pedidos</Text>
+          <Text style={s.emptyText}>Revisa tu conexión e intenta de nuevo.</Text>
+          <TouchableOpacity style={s.btnResena} onPress={() => { setLoading(true); cargar(); }}>
+            <Text style={s.btnResenaText}>Reintentar</Text>
+          </TouchableOpacity>
+        </View>
+      ) : pedidos.length === 0 ? (
         <View style={s.empty}>
           <View style={s.emptyIconWrap}>
             <Ionicons name="receipt-outline" size={40} color={Colors.textLight} />

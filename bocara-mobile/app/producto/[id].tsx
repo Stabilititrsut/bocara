@@ -15,6 +15,7 @@ import { Colors } from '@/constants/Colors';
 import { useCart } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
+import { etiquetaTipoProducto, emojiTipoProducto } from '@/src/utils/tipoPublicacion';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 
@@ -321,9 +322,9 @@ export default function ProductoScreen() {
 
           {/* Badges at bottom of image */}
           <View style={s.heroBadges}>
-            {bolsa.tipo === 'cupon' && (
-              <View style={s.cuponBadge}><Text style={s.cuponBadgeText}>🎫 Cupón</Text></View>
-            )}
+            <View style={s.cuponBadge}>
+              <Text style={s.cuponBadgeText}>{emojiTipoProducto(bolsa.tipo)} {etiquetaTipoProducto(bolsa.tipo)}</Text>
+            </View>
             <View style={s.discBadge}>
               <Text style={s.discBadgeText}>-{desc}% OFF</Text>
             </View>

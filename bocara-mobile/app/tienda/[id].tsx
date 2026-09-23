@@ -15,6 +15,7 @@ import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { calcularEstadoHorario } from '@/src/utils/horarioRecogida';
 import { disponibilidadReal } from '@/src/utils/stock';
+import { etiquetaTipoProductoCorta, esTiempoLimitado, esPromocion } from '@/src/utils/tipoPublicacion';
 
 const GOLD = '#C8960C';
 const DARK = '#0A2A2A';
@@ -69,7 +70,7 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
   const agotado   = disponibilidadReal(bolsa) <= 0;
   const vencido = horario.bloqueado === true;
   const noDisponible = agotado || vencido;
-  const tipoBadge = bolsa.tipo === 'cupon' ? 'PROMO' : 'T.LIM.';
+  const tipoBadge = etiquetaTipoProductoCorta(bolsa.tipo);
 
   function agregarProducto() {
     // Revalidar al tocar: puede vencer entre dos actualizaciones de la tarjeta.
@@ -197,9 +198,12 @@ export default function TiendaScreen() {
       case 'descuentos':
         return bolsas.filter(b => b.es_descuento || b.precio_original > b.precio_descuento);
       case 'tiempo_limitado':
-        return bolsas.filter(b => b.es_tiempo_limitado || b.tipo !== 'cupon');
+        // Mismo criterio que el badge (tipoPublicacion.ts), no la bandera de
+        // menú `es_tiempo_limitado` — esa puede divergir del `tipo` real y
+        // hacer que el tab muestre una publicación con el badge equivocado.
+        return bolsas.filter(b => esTiempoLimitado(b.tipo));
       case 'promociones':
-        return bolsas.filter(b => b.es_promocion || b.tipo === 'cupon');
+        return bolsas.filter(b => esPromocion(b.tipo));
       case 'mas_vendidos':
         return bolsas
           .filter(b => b.es_mas_vendido || (b.veces_pedido || 0) > 0)

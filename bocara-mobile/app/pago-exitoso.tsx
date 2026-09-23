@@ -10,14 +10,33 @@ import { pagosAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import { volver } from '@/src/utils/backNavigation';
 
-type ResultType = 'success' | 'rejected' | 'cancelled' | 'verifying';
+export type ResultType = 'success' | 'rejected' | 'cancelled' | 'verifying';
+export type EstadoBackendPago = 'verificando' | 'confirmado' | 'fallido' | 'cancelado' | 'pendiente' | 'error';
 
-function detectarResultado(status?: string, transactionState?: string): ResultType {
+export function detectarResultado(status?: string, transactionState?: string): ResultType {
   if (status === 'SUCCEEDED' || transactionState === '4') return 'success';
   if (status === 'REJECTED' || status === 'FAILED')       return 'rejected';
   if (status === 'CANCELLED')                             return 'cancelled';
   return 'verifying';
 }
+
+// La URL solo puede AFIRMAR 'success'; la vista real que se muestra siempre
+// pasa por esta función, que exige que el backend lo haya confirmado. Para
+// cualquier otro resultado reclamado por la URL (rejected/cancelled/verifying)
+// se muestra tal cual — esos no aseguran un pago exitoso falso.
+export function vistaEfectivaDesde(resultado: ResultType, estadoBackend: EstadoBackendPago): ResultType | 'pendiente' {
+  if (resultado !== 'success') return resultado;
+  switch (estadoBackend) {
+    case 'confirmado': return 'success';
+    case 'fallido':
+    case 'error':      return 'rejected';
+    case 'cancelado':  return 'cancelled';
+    case 'pendiente':  return 'pendiente';
+    default:           return 'verifying';
+  }
+}
+
+const MAX_INTENTOS = 20;
 
 export default function PagoExitosoScreen() {
   const router = useRouter();
@@ -32,18 +51,28 @@ export default function PagoExitosoScreen() {
 
 
   const { pedidoId, status, transactionState, auth_number, card_last_four } = params;
+  // `resultado` es lo que la URL de retorno de Cubo AFIRMA. Nunca es fuente de
+  // verdad por sí solo: `vista` (abajo) es lo que realmente se muestra, y para
+  // el caso "success" exige que el backend lo confirme primero.
   const resultado = detectarResultado(status, transactionState);
 
   const pollingRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const limpiadoRef   = useRef(false);
   const [confirmado, setConfirmado] = useState(false);
+  // Solo se usa cuando `resultado === 'success'`: hasta que el backend confirme,
+  // la vista real se degrada a 'verifying'/'rejected'/'cancelled'/'pendiente'
+  // según lo que diga pagosAPI.estado — nunca a "pago exitoso" por el query param.
+  const [estadoBackend, setEstadoBackend] = useState<'verificando' | 'confirmado' | 'fallido' | 'cancelado' | 'pendiente' | 'error'>('verificando');
 
-  // Para SUCCEEDED: poll hasta que el webhook confirme en DB, luego ir a qr-recogida
+  // Para SUCCEEDED: poll hasta que el webhook confirme en DB, luego ir a qr-recogida.
+  // Mientras no haya confirmación del backend, NUNCA se marca como pagado.
   useEffect(() => {
-    if (resultado !== 'success' || !pedidoId) return;
+    if (resultado !== 'success') return;
+    if (!pedidoId) { setEstadoBackend('error'); return; }
 
     let intentos = 0;
-    pollingRef.current = setInterval(async () => {
+    let activo = true;
+    const verificar = async () => {
       intentos++;
       try {
         const res = await pagosAPI.estado(pedidoId);
@@ -51,19 +80,36 @@ export default function PagoExitosoScreen() {
 
         if (estado_pago === 'pagado' && estado === 'confirmado') {
           clearInterval(pollingRef.current!);
+          if (!activo) return;
           if (!limpiadoRef.current) { limpiadoRef.current = true; limpiar(); }
+          setEstadoBackend('confirmado');
           setConfirmado(true);
           router.replace({
             pathname: '/qr-recogida',
             params: { codigo: codigo_recogida, pedidoId, tipo: tipo_entrega || 'recogida' },
           } as any);
+          return;
         }
-      } catch { /* el webhook puede confirmar en segundos */ }
+        if (estado_pago === 'fallido' || estado === 'cancelado') {
+          clearInterval(pollingRef.current!);
+          if (activo) setEstadoBackend(estado === 'cancelado' ? 'cancelado' : 'fallido');
+          return;
+        }
+      } catch {
+        // El webhook puede tardar unos segundos en confirmar — un error de red
+        // puntual no debe tumbar el polling, solo se refleja tras agotar intentos.
+      }
 
-      if (intentos >= 20) clearInterval(pollingRef.current!);
-    }, 3000);
+      if (intentos >= MAX_INTENTOS) {
+        clearInterval(pollingRef.current!);
+        if (activo) setEstadoBackend('pendiente');
+      }
+    };
 
-    return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
+    void verificar();
+    pollingRef.current = setInterval(verificar, 3000);
+
+    return () => { activo = false; if (pollingRef.current) clearInterval(pollingRef.current); };
   }, [resultado, pedidoId, limpiar, router]);
 
   function irAPedidos()  { stopPolling(); router.replace('/(tabs)/pedidos' as any); }
@@ -72,8 +118,37 @@ export default function PagoExitosoScreen() {
   function irAPago()     { stopPolling(); volver(router, '/pago');                   }
   function stopPolling() { if (pollingRef.current) clearInterval(pollingRef.current); }
 
-  // ── ÉXITO ──────────────────────────────────────────────────────────────────
-  if (resultado === 'success') {
+  // La URL dijo "success", pero el backend todavía no lo confirmó (o nunca lo
+  // hizo): degradar a rechazado/cancelado/pendiente en vez de mostrar éxito.
+  const vistaEfectiva = vistaEfectivaDesde(resultado, estadoBackend);
+
+  // ── PENDIENTE (URL decía éxito, backend aún no confirma tras agotar reintentos) ──
+  if (vistaEfectiva === 'pendiente') {
+    return (
+      <SafeAreaView style={s.root}>
+        <View style={s.card}>
+          <View style={[s.iconCircle, { backgroundColor: '#FFF7ED' }]}>
+            <Ionicons name="time-outline" size={64} color={Colors.orange} />
+          </View>
+          <Text style={s.title}>Confirmación pendiente</Text>
+          <Text style={s.sub}>
+            Cubo todavía no nos confirma este pago.{'\n'}Tu pedido no se marcará como pagado hasta que el backend lo confirme.
+          </Text>
+        </View>
+
+        <TouchableOpacity style={s.btnPrimary} onPress={irAPedidos}>
+          <Ionicons name="receipt-outline" size={18} color={Colors.white} />
+          <Text style={s.btnPrimaryText}>Ver mis pedidos</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.btnSecondary} onPress={irAlInicio}>
+          <Text style={s.btnSecondaryText}>Volver al inicio</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
+  // ── ÉXITO (solo alcanzable una vez el backend confirmó estado_pago=pagado) ──
+  if (vistaEfectiva === 'success') {
     return (
       <SafeAreaView style={s.root}>
         <View style={s.card}>
@@ -112,7 +187,7 @@ export default function PagoExitosoScreen() {
   }
 
   // ── RECHAZADO / FALLIDO ────────────────────────────────────────────────────
-  if (resultado === 'rejected') {
+  if (vistaEfectiva === 'rejected') {
     return (
       <SafeAreaView style={s.root}>
         <View style={s.card}>
@@ -137,7 +212,7 @@ export default function PagoExitosoScreen() {
   }
 
   // ── CANCELADO ──────────────────────────────────────────────────────────────
-  if (resultado === 'cancelled') {
+  if (vistaEfectiva === 'cancelled') {
     return (
       <SafeAreaView style={s.root}>
         <View style={s.card}>

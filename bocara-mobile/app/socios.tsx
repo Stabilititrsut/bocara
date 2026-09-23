@@ -13,6 +13,13 @@ const SURFACE = '#F4F7F7';
 const WHITE = '#FFFFFF';
 const SUBTLE = '#5A7070';
 
+// El 25%/75% de esta pantalla es copy de marketing, no un cálculo: esta es una
+// página pública (prospectos sin sesión) y GET /api/admin/config —de donde sale
+// `comision_porcentaje`, ver backend/services/configuracion.js DEFAULTS— es
+// adminOnly, así que no hay endpoint accesible aquí para leerlo en vivo. Hoy
+// coincide con el DEFAULT real del backend (25). Si un admin cambia esa
+// configuración, este texto queda desactualizado hasta que se edite a mano —
+// no existe hoy una fuente pública de ese dato para evitarlo.
 const PASOS = [
   {
     num: '01',

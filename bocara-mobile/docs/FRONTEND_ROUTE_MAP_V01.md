@@ -2,7 +2,9 @@
 
 Inventario auditado de `app/` (55 pantallas navegables; `_layout` son contenedores). Estados: OK, PARCIAL, BLOQUEADO. `API` nombra únicamente servicios observados en `src/services/api.ts`.
 
-Ver `MATRIZ_PANTALLAS_V01.md` → "Día 1 — correcciones y evidencia" para el detalle de las correcciones de OAuth, vencimientos por timezone y botones de volver aplicadas en esta sesión (afectan `/auth/callback`, `/tienda/[id]`, `/negocio/[id]`, `/(tabs)/buscar`, `/(tabs)/favoritos`, `/(tabs)/promociones`, `/producto/[id]`, `/pago`, y las pantallas con botón de volver personalizado).
+Ver `MATRIZ_PANTALLAS_V01.md` → "Día 1 — correcciones y evidencia" para el detalle de las correcciones de OAuth, vencimientos por timezone y botones de volver aplicadas en esa sesión (afectan `/auth/callback`, `/tienda/[id]`, `/negocio/[id]`, `/(tabs)/buscar`, `/(tabs)/favoritos`, `/(tabs)/promociones`, `/producto/[id]`, `/pago`, y las pantallas con botón de volver personalizado).
+
+Ver `MATRIZ_PANTALLAS_V01.md` → "Día 2 — guards, retorno de pago y errores visibles" para el detalle de la sesión que cerró la meta del martes: el fix crítico de `/pago-exitoso` (mostraba "¡Pago exitoso!" solo por el query param `status=SUCCEEDED`, antes de que el backend confirmara), la verificación de backend agregada en `/qr-recogida`, y los errores visibles agregados en `/tienda/[id]` y `/(tabs)/pedidos`.
 
 |Ruta|Pantalla|Rol|Auth|API|Loading/Vacío/Error|Entrada → salida|Stock|Pago|Push|Estado|
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -21,16 +23,16 @@ Ver `MATRIZ_PANTALLAS_V01.md` → "Día 1 — correcciones y evidencia" para el 
 |/(tabs)/favoritos|Favoritos|cliente|Sí|favoritos/bolsas|loading/vacío/error|tabs → producto|bloquea vencido|—|—|OK|
 |/(tabs)/promociones|Promociones|cliente|Sí|bolsas|loading/vacío/error|tabs → producto|bloquea vencido|—|—|OK|
 |/(tabs)/carrito|Carrito|cliente|Sí|local|hydration/vacío/error|tabs → pago|30 casos validados|revalida en pago|—|OK|
-|/(tabs)/pedidos|Pedidos|cliente|Sí|pedidos|loading/vacío/error|tabs → QR|—|estado backend|polling|OK|
+|/(tabs)/pedidos|Pedidos|cliente|Sí|pedidos|loading/vacío/error (error de red ≠ "sin pedidos")|tabs → QR|—|estado backend|polling|OK|
 |/(tabs)/notificaciones|Notificaciones|cliente|Sí|notificaciones|loading/vacío/error|tabs → detalle|—|—|polling|OK|
 |/(tabs)/perfil|Perfil|cliente|Sí|auth/usuarios|loading/error|tabs → editar/config|—|—|—|OK|
 |/tienda/[id]|Tienda|cliente|Sí|negocios/bolsas|loading/vacío/error|lista → producto/carrito|bloquea vencido/0|—|—|OK|
 |/negocio/[id]|Negocio|cliente|Sí|negocios/bolsas|loading/vacío/error|inicio → producto|filtra vencido|—|—|OK|
 |/producto/[id]|Detalle producto|cliente|Sí|bolsas|loading/error|lista → carrito|0/inválido/vencido bloqueado|—|—|OK|
 |/pago|Checkout|cliente|Sí|pagos/cupones|loading/error|carrito → retorno|revalida backend|genera link|—|OK|
-|/pago-retorno|Retorno Cubo|cliente|Sí|pagos.estado|loading/timeout/HTTP error|browser → éxito/pedidos|—|backend autoridad; reintento|—|OK|
-|/pago-exitoso|Resultado pago|cliente|Sí|pagos.estado|loading/error|retorno → QR/pedidos|—|poll backend|—|OK|
-|/qr-recogida|QR retiro|cliente|Sí|pedidos|loading/error|pedido → tabs|—|confirmado backend|—|OK|
+|/pago-retorno|Retorno Cubo|cliente|Sí|pagos.estado|loading/timeout/HTTP error (400/401/403/404/409/500/502/503/504 con mensaje propio)|browser → éxito/pedidos|—|backend autoridad; reintento; URL nunca es fuente de verdad|—|OK|
+|/pago-exitoso|Resultado pago|cliente|Sí|pagos.estado|loading/pendiente/error|retorno → QR/pedidos|—|poll backend; `vistaEfectiva` exige `estado_pago=pagado` y `estado=confirmado` del backend antes de mostrar éxito, sin importar el `status` de la URL|—|OK|
+|/qr-recogida|QR retiro|cliente|Sí|pedidos.detalle|cargando/error/cancelado/no_confirmado|pedido → tabs|—|verifica `estado` del pedido contra el backend antes de mostrar el QR (rechaza `cancelado` y estados no confirmados)|—|OK|
 |/editar-perfil|Editar perfil|cliente|Sí|usuarios|loading/error|perfil → perfil|—|—|—|OK|
 |/configuracion|Configuración|cliente|Sí|local|—|perfil → perfil|—|—|preferencias BLOCKED-BACKEND|PARCIAL|
 |/cupones|Cupones|cliente|Sí|cupones|loading/vacío/error|perfil → pago|—|aplicación en pago|—|OK|
@@ -41,7 +43,7 @@ Ver `MATRIZ_PANTALLAS_V01.md` → "Día 1 — correcciones y evidencia" para el 
 |/restaurante|Layout/inicio restaurante|restaurante|Sí|negocios/pedidos|loading/vacío/error|guard → tabs restaurante|—|—|notificaciones/polling|OK|
 |/restaurante/bolsas|Bolsas restaurante|restaurante|Sí|bolsas|loading/vacío/error|tabs → editar|publicación defensiva|—|—|OK|
 |/restaurante/cupones|Cupones restaurante|restaurante|Sí|cupones|loading/vacío/error|tabs → editar|—|—|—|OK|
-|/restaurante/pedidos|Pedidos restaurante|restaurante|Sí|pedidos|loading/vacío/error|tabs → estado|—|estado backend|polling|OK|
+|/restaurante/pedidos|Pedidos restaurante|restaurante|Sí|pedidos|loading/vacío/error (recarga automática tras 409)|tabs → estado|—|estado backend|polling|OK|
 |/restaurante/historial|Historial restaurante|restaurante|Sí|pedidos|loading/vacío/error|tabs → detalle|—|—|—|OK|
 |/restaurante/ganancias|Ganancias|restaurante|Sí|finanzas|loading/vacío/error|tabs → atrás|—|—|—|OK|
 |/restaurante/notificaciones|Notificaciones restaurante|restaurante|Sí|notificaciones|loading/vacío/error|tabs → pedido|—|—|provider/polling|OK|

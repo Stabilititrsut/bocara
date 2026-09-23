@@ -8,7 +8,7 @@ import { Colors } from '@/constants/Colors';
 const MAX_INTENTOS = 10;
 const POLL_MS = 3000;
 type Vista = 'verificando' | 'timeout' | 'error';
-const mensajeHttp = (status?: number) => ({ 400: 'La respuesta de pago no es válida. Regresa al carrito.', 404: 'No encontramos este pedido.', 409: 'El estado del pedido cambió. Actualiza tus pedidos.', 500: 'El servidor no pudo confirmar el pago.', 503: 'El servicio no está disponible todavía.' }[status || 0] || 'No pudimos verificar el pago.');
+export const mensajeHttp = (status?: number) => ({ 400: 'La respuesta de pago no es válida. Regresa al carrito.', 401: 'Tu sesión expiró. Inicia sesión de nuevo para ver el estado de tu pago.', 403: 'Este pedido no pertenece a tu cuenta.', 404: 'No encontramos este pedido.', 409: 'El estado del pedido cambió. Actualiza tus pedidos.', 500: 'El servidor no pudo confirmar el pago.', 502: 'El servidor no está disponible en este momento.', 503: 'El servicio no está disponible todavía.', 504: 'El servidor tardó demasiado en responder.' }[status || 0] || 'No pudimos verificar el pago.');
 
 export default function PagoRetorno() {
   const { pedidoId } = useLocalSearchParams<{ pedidoId?: string }>();
@@ -25,7 +25,7 @@ export default function PagoRetorno() {
       if (data.estado_pago === 'pagado' && data.estado === 'confirmado') { navegando.current = true; detener(); limpiar(); router.replace({ pathname: '/pago-exitoso', params: { pedidoId: id, status: 'SUCCEEDED', codigo_recogida: data.codigo_recogida, tipo_entrega: data.tipo_entrega } } as any); return; }
       if (data.estado_pago === 'fallido' || data.estado === 'cancelado') { navegando.current = true; detener(); router.replace({ pathname: '/pago-exitoso', params: { pedidoId: id, status: 'FAILED' } } as any); return; }
       timer.current = setTimeout(() => { timer.current = null; void verificar(id); }, POLL_MS);
-    } catch (error: any) { detener(); setVista('error'); setMensaje(mensajeHttp(error?.response?.status)); }
+    } catch (error: any) { detener(); setVista('error'); setMensaje(mensajeHttp(error?.status)); }
   }, [detener, limpiar]);
   useEffect(() => { if (!pedidoId) { setVista('error'); setMensaje('Falta el identificador del pedido.'); return; } void verificar(pedidoId); return detener; }, [pedidoId, verificar, detener]);
   const reintentar = () => { if (!pedidoId) return; detener(); intentos.current = 0; setVista('verificando'); setMensaje('Confirmando tu pago con Bocara...'); void verificar(pedidoId); };

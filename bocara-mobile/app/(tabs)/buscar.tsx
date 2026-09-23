@@ -10,6 +10,7 @@ import { useRouter } from 'expo-router';
 import { bolsasAPI } from '@/src/services/api';
 import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
+import { etiquetaTipoProductoCorta } from '@/src/utils/tipoPublicacion';
 
 const SUGERENCIAS = ['Sushi', 'Pizza', 'Panadería', 'Cafetería', 'Zona 10', 'Zona 4', 'Mixco', 'Comida Típica', 'Villa Nueva'];
 
@@ -115,7 +116,8 @@ export default function BuscarScreen() {
                     <Text style={st.resultNegocio} numberOfLines={1}>{b.negocios?.nombre}</Text>
                     <Text style={st.resultNombre} numberOfLines={1}>{b.nombre}</Text>
                     <View style={st.resultMeta}>
-                      {b.negocios?.zona && <Text style={st.resultZona}>{b.negocios.zona}</Text>}
+                      <Text style={st.resultTipo}>{etiquetaTipoProductoCorta(b.tipo)}</Text>
+                      {b.negocios?.zona && <Text style={st.resultZona}>· {b.negocios.zona}</Text>}
                     </View>
                   </View>
                   <View style={st.resultRight}>
@@ -161,6 +163,7 @@ const st = StyleSheet.create({
   resultNegocio: { fontSize: 10, color: Colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
   resultNombre: { fontSize: 14, fontWeight: '800', color: Colors.textPrimary, marginBottom: 4 },
   resultMeta: { flexDirection: 'row', gap: 6 },
+  resultTipo: { fontSize: 10, color: Colors.accent, fontWeight: '700' },
   resultZona: { fontSize: 11, color: Colors.textLight },
   resultRight: { paddingRight: 14, alignItems: 'flex-end', gap: 4 },
   discBadge: { backgroundColor: Colors.primary, borderRadius: 50, paddingHorizontal: 8, paddingVertical: 3 },

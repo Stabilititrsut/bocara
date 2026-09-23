@@ -8,6 +8,8 @@ import { LocationProvider } from '@/src/context/LocationContext';
 import { Colors } from '@/constants/Colors';
 import { notificacionesAPI } from '@/src/services/api';
 import { OnboardingProvider, useOnboarding } from '@/src/context/OnboardingContext';
+import { RealtimeProvider } from '@/src/context/RealtimeContext';
+import { resolverRutaNotificacion } from '@/src/utils/resolverRutaNotificacion';
 import * as SplashScreen from 'expo-splash-screen';
 
 // Mantener el splash nativo visible hasta que la app esté lista
@@ -121,6 +123,12 @@ const AUTH_SECTIONS = ['login', 'auth', 'registro-cliente', 'registro-restaurant
 const SHARED_SECTIONS = ['producto', 'pago', 'pago-exitoso', 'qr-recogida', 'configuracion', 'soporte', 'onboarding', 'registro-restaurante', 'registro-cliente', 'socios', 'tienda', 'negocio', 'cupones', 'referidos'];
 const NEW_SECTIONS = ['pago-retorno', 'editar-perfil'];
 
+// Delegado al resolver único y compartido (push, realtime, deep link) — ver
+// src/utils/resolverRutaNotificacion.ts para la lógica y su razón de ser.
+// Se conserva el nombre/export local para no romper los call-sites de abajo
+// ni scripts/test-pago-estado.cjs, que lo importa como `mod.rutaParaNotificacion`.
+export const rutaParaNotificacion = resolverRutaNotificacion;
+
 function AuthGuard() {
   const { usuario, loading } = useAuth();
   const router = useRouter();
@@ -129,6 +137,11 @@ function AuthGuard() {
   const { onboardingChecked, onboardingDone } = useOnboarding();
   const [splashDone, setSplashDone]               = useState(false);
   const handleSplashDone = useCallback(() => setSplashDone(true), []);
+  // Notificación tocada (foreground, background o app recién abierta) antes de
+  // que la sesión terminara de cargar — se procesa en cuanto `usuario` exista.
+  const pendingNotifRef = useRef<any>(null);
+  const usuarioRef = useRef(usuario);
+  useEffect(() => { usuarioRef.current = usuario; }, [usuario]);
 
   // Ocultar splash nativo cuando la app esté lista; luego el JS splash toma el relevo
   useEffect(() => {
@@ -142,8 +155,63 @@ function AuthGuard() {
       pushRegistered.current = true;
       registrarPushToken().catch(() => { });
     }
-    if (!usuario) pushRegistered.current = false;
+    // Logout o cambio de cuenta: no arrastrar una notificación pendiente del
+    // usuario anterior a la sesión nueva.
+    if (!usuario) { pushRegistered.current = false; pendingNotifRef.current = null; }
   }, [usuario]);
+
+  // Listeners de notificaciones — solo nativo, se registran una única vez por
+  // vida de la app (deps vacías) para no duplicarlos en cada render/relogin.
+  useEffect(() => {
+    if (!Notifications) return;
+
+    // El listener y getLastNotificationResponseAsync() pueden reportar la misma
+    // interacción de cold start — deduplicar por el id de la notificación evita
+    // navegar dos veces (o dejar una entrada duplicada en el stack).
+    const procesadas = new Set<string>();
+    const procesarTap = (id: string | undefined, data: any) => {
+      if (id) { if (procesadas.has(id)) return; procesadas.add(id); }
+      const rolActual = usuarioRef.current?.rol;
+      if (!rolActual) { pendingNotifRef.current = data; return; }
+      const ruta = rutaParaNotificacion(data, rolActual);
+      if (ruta) router.push(ruta as any);
+    };
+
+    // Foreground: la app ya está abierta cuando llega — no navega sola (evita
+    // sacar al usuario de lo que está haciendo), pero queda el punto de
+    // extensión si más adelante se necesita refrescar una lista en pantalla.
+    const subRecibida = Notifications.addNotificationReceivedListener(() => {});
+
+    // Tap: el usuario abrió la notificación (app en background o recién lanzada).
+    const subRespuesta = Notifications.addNotificationResponseReceivedListener((response: any) => {
+      procesarTap(response?.notification?.request?.identifier, response?.notification?.request?.content?.data);
+    });
+
+    // Cold start: la app estaba cerrada y se abrió tocando la notificación.
+    Notifications.getLastNotificationResponseAsync?.()
+      .then((response: any) => {
+        if (response?.notification?.request?.content?.data) {
+          procesarTap(response.notification.request.identifier, response.notification.request.content.data);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      subRecibida.remove();
+      subRespuesta.remove();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Reintenta la navegación pendiente en cuanto la sesión termina de cargar
+  // (cubre el tap en cold start, que llega antes de que `usuario` exista).
+  useEffect(() => {
+    if (loading || !usuario || !pendingNotifRef.current) return;
+    const data = pendingNotifRef.current;
+    pendingNotifRef.current = null;
+    const ruta = rutaParaNotificacion(data, usuario.rol);
+    if (ruta) router.replace(ruta as any);
+  }, [loading, usuario, router]);
 
   useEffect(() => {
     if (loading || !onboardingChecked) return;
@@ -243,13 +311,15 @@ function AuthGuard() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <OnboardingProvider>
-        <LocationProvider>
-          <CartProviderWithUser>
-            <AuthGuard />
-          </CartProviderWithUser>
-        </LocationProvider>
-      </OnboardingProvider>
+      <RealtimeProvider>
+        <OnboardingProvider>
+          <LocationProvider>
+            <CartProviderWithUser>
+              <AuthGuard />
+            </CartProviderWithUser>
+          </LocationProvider>
+        </OnboardingProvider>
+      </RealtimeProvider>
     </AuthProvider>
   );
 }

@@ -28,6 +28,7 @@ function load(file, mocks = {}, globals = {}, extraSource = '') {
 }
 const horarioReal = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } });
 const stockReal = load('src/utils/stock.ts', {});
+const tipoPublicacionReal = load('src/utils/tipoPublicacion.ts', {});
 const relojMock = { useRelojPublicaciones: () => new Date(), usePublicacionesVigentes: items => horarioReal.publicacionesVigentes(items) };
 const { createCartStore, createCartPersistence } = load('src/context/cartStore.ts', { '../utils/horarioRecogida': horarioReal, '../utils/stock': stockReal });
 const tick = async () => { for (let i = 0; i < 5; i++) await new Promise(setImmediate); };
@@ -188,6 +189,7 @@ function ui(file, cart, forcedStates = [], extraMocks = {}, extraSource = '') {
     '@/src/context/CartContext': { useCart: () => cart }, '@/src/utils/cartFeedback': feedback,
     '@/src/utils/horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }),
     '@/src/utils/stock': stockReal,
+    '@/src/utils/tipoPublicacion': tipoPublicacionReal,
     '@/src/context/AuthContext': { useAuth: () => ({ usuario: { rol: 'cliente' } }) },
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) },
     '@/constants/Colors': { Colors: {} }, '@/src/services/api': {},
