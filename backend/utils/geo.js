@@ -12,6 +12,49 @@ function haversine(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function coordenadasValidas(lat, lng) {
+  return Number.isFinite(lat) && Number.isFinite(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+}
+
+// Convierte un valor de entrada (query string, body JSON) a número solo si es
+// inequívocamente numérico. A propósito NO usa `Number(x)` directo sobre el
+// valor crudo: `Number(true)` es 1, `Number(null)` es 0 y `Number([])` es 0 —
+// los tres pasarían coordenadasValidas() como si fueran una coordenada real.
+// Antes de convertir, solo se aceptan `number` y `string`; cualquier otro tipo
+// (incluido null/undefined) devuelve NaN y coordenadasValidas lo rechaza.
+function aNumeroCoordenada(valor) {
+  if (typeof valor === 'number') return valor;
+  if (typeof valor === 'string' && valor.trim() !== '') return Number(valor);
+  return NaN;
+}
+
+// Punto único de validación para cualquier endpoint que reciba lat/lng del
+// cliente (query o body): PATCH /api/auth/ubicacion y GET /api/bolsas usan
+// esta misma función para no divergir en qué cuenta como "válido".
+function validarCoordenadasEntrada(latCruda, lngCruda) {
+  const lat = aNumeroCoordenada(latCruda);
+  const lng = aNumeroCoordenada(lngCruda);
+  return { lat, lng, ok: coordenadasValidas(lat, lng) };
+}
+
+// Resuelve qué coordenadas usar para el filtro geográfico de un request:
+//   1. Las del query explícito, si el cliente mandó cualquiera de las dos
+//      (ganan siempre, aunque luego resulten inválidas — eso ya lo decide el
+//      caller con validarCoordenadasEntrada antes de responder 422).
+//   2. Si no mandó ninguna, la última ubicación que el usuario autenticado
+//      persistió via PATCH /api/auth/ubicacion — solo si es una coordenada
+//      válida (una fila vieja corrupta no debe colarse como si fuera buena).
+//   3. Si no hay ninguna de las dos, `null`: no se inventa ubicación.
+function resolverCoordenadasCliente({ queryLat, queryLng, usuarioLat, usuarioLng }) {
+  if (queryLat !== undefined || queryLng !== undefined) {
+    return { lat: queryLat ?? null, lng: queryLng ?? null, origen: 'request' };
+  }
+  if (coordenadasValidas(usuarioLat, usuarioLng)) {
+    return { lat: usuarioLat, lng: usuarioLng, origen: 'perfil' };
+  }
+  return { lat: null, lng: null, origen: 'ninguna' };
+}
+
 // Geocode a street address in Guatemala using Nominatim (OpenStreetMap, free, no key)
 // Returns { lat, lng } or null if not found / on error
 async function geocodeAddress(direccion, zona = '', ciudad = 'Guatemala', nombre = '') {
@@ -52,4 +95,7 @@ async function _nominatim(q) {
   }
 }
 
-module.exports = { haversine, geocodeAddress };
+module.exports = {
+  haversine, geocodeAddress, coordenadasValidas,
+  aNumeroCoordenada, validarCoordenadasEntrada, resolverCoordenadasCliente,
+};

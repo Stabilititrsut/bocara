@@ -13,76 +13,236 @@ const {
   estadosCancelables,
   requiereDevolucionDeStock,
 } = require('./orderStateMachine');
+const { enqueueEventBestEffort } = require('./eventosDominio');
+
+// ── Log estructurado ────────────────────────────────────────────────────────
+//
+// Una línea JSON por decisión, con el mismo juego de campos siempre — mismo
+// formato que services/cuboWebhook.js. El checkout y el webhook son las dos
+// mitades de la misma historia (se reservó / se cobró) y en los logs de Render
+// se leen juntos filtrando por `pedido_id`.
+function registrar(nivel, evento, datos = {}) {
+  const linea = JSON.stringify({
+    ts: new Date().toISOString(),
+    origen: 'stock',
+    evento,
+    ...datos,
+  });
+  if (nivel === 'error') console.error(linea);
+  else if (nivel === 'warn') console.warn(linea);
+  else console.log(linea);
+}
+
+// ── Reservas con expiración ─────────────────────────────────────────────────
+//
+// Un pedido en 'pendiente' (link de pago abierto, sin cobrar) es una RESERVA
+// implícita: no descuenta `bolsas.cantidad_disponible` —eso solo lo hace
+// confirmar_pago_cubo— pero sí se resta al calcular la disponibilidad real.
+//
+// Hasta la migración 202609121200 esa resta no caducaba nunca: quien abría el
+// link de Cubo y cerraba la pestaña dejaba la unidad bloqueada indefinidamente.
+// A partir de aquí una reserva vive RESERVA_TTL_MINUTOS y después deja de
+// contar. La expiración es de LECTURA: el stock vuelve a estar disponible en el
+// mismo instante en que se cumple el plazo, sin depender de ningún cron. El
+// barrido (RPC expirar_reservas_vencidas) solo pone al día la columna `estado`
+// para que el panel no muestre reservas zombis.
+const RESERVA_TTL_MINUTOS = 15;
+const RESERVA_TTL_MS = RESERVA_TTL_MINUTOS * 60 * 1000;
 
 /**
- * Returns units of bolsaId reserved by pending (unpaid) orders.
- * - Primary source: pedido_items (new multi-bolsa cart orders)
- * - Fallback source: pedidos.bolsa_id for legacy orders that have no pedido_items
- * Double-counting is avoided: legacy pedidos already covered by pedido_items are excluded.
+ * Instante en que nació la reserva.
+ *
+ * `reservado_at` lo escribe reservar_stock_pedido al pasar a 'pendiente'.
+ * `created_at` es el respaldo para pedidos anteriores a la migración y para el
+ * flujo POST /pagos/cubopago heredado, que insertaba directamente en
+ * 'pendiente' (ahí ambos instantes coinciden).
  */
-async function getReservadoPendiente(bolsaId) {
-  const { data: piRows } = await supabasePorDefecto()
+function instanteReserva(pedido) {
+  return pedido?.reservado_at || pedido?.created_at || null;
+}
+
+/**
+ * ¿Esta reserva sigue bloqueando stock?
+ *
+ * Sin marca temporal utilizable se responde que SÍ. Es la decisión fail-closed:
+ * ante un dato incompleto se prefiere no vender de más. Un pedido con fecha
+ * ilegible bloquea una unidad hasta que alguien lo cancele — molesto, pero
+ * infinitamente más barato que cobrar una bolsa que no existe.
+ */
+function reservaVigente(pedido, ahora = Date.now(), ttlMs = RESERVA_TTL_MS) {
+  const marca = instanteReserva(pedido);
+  if (!marca) return true;
+  const ms = Date.parse(marca);
+  if (Number.isNaN(ms)) return true;
+  // Estrictamente menor: a los 15:00 exactos la reserva ya expiró.
+  return (ahora - ms) < ttlMs;
+}
+
+/**
+ * ¿Esta reserva todavía habilita un COBRO?
+ *
+ * Misma ventana que reservaVigente y la decisión contraria ante un dato
+ * ilegible, porque el riesgo también es el contrario:
+ *
+ *   · reservaVigente  → ¿libero stock?  Sin fecha utilizable: NO (sigue viva).
+ *   · reservaPagable  → ¿confirmo pago? Sin fecha utilizable: NO (se da por vencida).
+ *
+ * Las dos son la misma decisión fail-closed vista desde sus dos lados: ante un
+ * dato incompleto, nunca vender de más. Confirmar un pago cuya vigencia no se
+ * puede demostrar es exactamente lo que produce la sobreventa que AC-03
+ * prohíbe; el cliente recupera su dinero, pero la bolsa no se duplica.
+ *
+ * Su gemela en SQL es la puerta del paso 6 de confirmar_pago_cubo (migración
+ * 202609141200), que aplica la misma regla con la fila bloqueada.
+ */
+function reservaPagable(pedido, ahora = Date.now(), ttlMs = RESERVA_TTL_MS) {
+  const marca = instanteReserva(pedido);
+  if (!marca) return false;
+  const ms = Date.parse(marca);
+  if (Number.isNaN(ms)) return false;
+  return (ahora - ms) < ttlMs;
+}
+
+/**
+ * LA fórmula de disponibilidad real. Único sitio donde se resta.
+ *
+ * Catálogo (GET /bolsas, GET /bolsas/:id) y checkout (POST /pagos/cubopago,
+ * /preparar, /generar-link) la comparten: antes cada uno repetía
+ * `Math.max(0, cantidad_disponible - reservado)` por su cuenta y ya habían
+ * empezado a divergir en el casteo y en los mensajes de error.
+ *
+ * Su gemela en SQL es disponibilidad_real_bolsa() — misma regla, para que el
+ * chequeo de Node y el de la RPC no puedan contradecirse.
+ */
+function disponibilidadReal(cantidadDisponible, reservado) {
+  const disp = Number(cantidadDisponible);
+  const res = Number(reservado);
+  return Math.max(
+    0,
+    (Number.isFinite(disp) ? disp : 0) - (Number.isFinite(res) ? res : 0),
+  );
+}
+
+/**
+ * SELECT tolerante a que `reservado_at` no exista todavía.
+ *
+ * La columna llega en la migración 202609121200 y este código puede desplegarse
+ * antes de que se aplique. PostgREST devuelve error 42703 al pedir una columna
+ * inexistente, así que se reintenta sin ella y el cálculo cae a `created_at`.
+ * Mismo criterio que la cancelación con columnas de auditoría, más abajo.
+ */
+async function pedidosConMarcaDeReserva(construir, campos) {
+  const { data, error } = await construir(`${campos}, reservado_at`);
+  if (!error) return data || [];
+  console.warn('[STOCK] reservado_at no disponible, se usa created_at:', error.message);
+  const { data: sinColumna } = await construir(campos);
+  return sinColumna || [];
+}
+
+/**
+ * Unidades de `bolsaId` bloqueadas por reservas VIGENTES.
+ *
+ * Modelo híbrido:
+ *   · fuente primaria : pedido_items (carritos multi-bolsa)
+ *   · fuente heredada : pedidos.bolsa_id, solo si el pedido no tiene items
+ *     (así un mismo pedido nunca se cuenta dos veces)
+ *
+ * @param {string} bolsaId
+ * @param {object} [opciones]
+ *   @param {object} [opciones.cliente]         cliente Supabase (inyectable en pruebas)
+ *   @param {number} [opciones.ahora]           epoch ms, para pruebas deterministas
+ *   @param {number} [opciones.ttlMs]           ventana de vigencia
+ *   @param {string} [opciones.excluirPedidoId] no contar este pedido (el propio)
+ */
+async function getReservadoPendiente(bolsaId, opciones = {}) {
+  const cliente = opciones.cliente || supabasePorDefecto();
+  const ahora = opciones.ahora ?? Date.now();
+  const ttlMs = opciones.ttlMs ?? RESERVA_TTL_MS;
+  const excluir = opciones.excluirPedidoId || null;
+
+  const { data: piRows } = await cliente
     .from('pedido_items')
     .select('pedido_id, cantidad')
     .eq('bolsa_id', bolsaId);
 
-  const pedidoIdsFromItems = (piRows || []).map(r => r.pedido_id);
+  const pedidoIdsFromItems = [...new Set((piRows || []).map(r => r.pedido_id))];
   let fromItems = 0;
 
   if (pedidoIdsFromItems.length > 0) {
-    const { data: pedsPend } = await supabasePorDefecto()
-      .from('pedidos')
-      .select('id')
-      .in('id', pedidoIdsFromItems)
-      .eq('estado', 'pendiente')
-      .eq('estado_pago', 'pendiente');
-    const pendSet = new Set((pedsPend || []).map(p => p.id));
+    const pedsPend = await pedidosConMarcaDeReserva(
+      (campos) => cliente
+        .from('pedidos')
+        .select(campos)
+        .in('id', pedidoIdsFromItems)
+        .eq('estado', 'pendiente')
+        .eq('estado_pago', 'pendiente'),
+      'id, created_at',
+    );
+    const vigentes = new Set(
+      pedsPend
+        .filter(p => p.id !== excluir && reservaVigente(p, ahora, ttlMs))
+        .map(p => p.id),
+    );
     fromItems = (piRows || [])
-      .filter(r => pendSet.has(r.pedido_id))
-      .reduce((sum, r) => sum + r.cantidad, 0);
+      .filter(r => vigentes.has(r.pedido_id))
+      .reduce((sum, r) => sum + (r.cantidad || 0), 0);
   }
 
-  // Legacy pedidos: bolsa_id direct, no pedido_items row
-  let q = supabasePorDefecto()
-    .from('pedidos')
-    .select('id, cantidad')
-    .eq('bolsa_id', bolsaId)
-    .eq('estado', 'pendiente')
-    .eq('estado_pago', 'pendiente');
-  if (pedidoIdsFromItems.length > 0) {
-    q = q.not('id', 'in', `(${pedidoIdsFromItems.join(',')})`);
-  }
-  const { data: leg } = await q;
-  const fromLegacy = (leg || []).reduce((sum, p) => sum + (p.cantidad || 1), 0);
+  // Pedidos heredados: bolsa_id directo, sin fila en pedido_items
+  const leg = await pedidosConMarcaDeReserva(
+    (campos) => {
+      let q = cliente
+        .from('pedidos')
+        .select(campos)
+        .eq('bolsa_id', bolsaId)
+        .eq('estado', 'pendiente')
+        .eq('estado_pago', 'pendiente');
+      if (pedidoIdsFromItems.length > 0) {
+        q = q.not('id', 'in', `(${pedidoIdsFromItems.join(',')})`);
+      }
+      return q;
+    },
+    'id, cantidad, created_at',
+  );
+  const fromLegacy = leg
+    .filter(p => p.id !== excluir && reservaVigente(p, ahora, ttlMs))
+    .reduce((sum, p) => sum + (p.cantidad || 1), 0);
 
   return fromItems + fromLegacy;
 }
 
 /**
- * Returns { bolsaId → reservado } for ALL pending pedidos in two queries.
- * Used by the bolsas list endpoint to compute cantidad_disponible_real efficiently.
+ * { bolsaId → reservado vigente } para TODAS las bolsas, en dos consultas.
+ * Lo usa el feed de bolsas, que no puede permitirse una consulta por fila.
+ * Misma regla de vigencia que getReservadoPendiente.
  */
-async function getReservasMap() {
-  const { data: pedsPend } = await supabasePorDefecto()
-    .from('pedidos')
-    .select('id, bolsa_id, cantidad')
-    .eq('estado', 'pendiente')
-    .eq('estado_pago', 'pendiente');
+async function getReservasMap(opciones = {}) {
+  const cliente = opciones.cliente || supabasePorDefecto();
+  const ahora = opciones.ahora ?? Date.now();
+  const ttlMs = opciones.ttlMs ?? RESERVA_TTL_MS;
 
-  if (!pedsPend || pedsPend.length === 0) return {};
+  const todos = await pedidosConMarcaDeReserva(
+    (campos) => cliente
+      .from('pedidos')
+      .select(campos)
+      .eq('estado', 'pendiente')
+      .eq('estado_pago', 'pendiente'),
+    'id, bolsa_id, cantidad, created_at',
+  );
 
-  const pedidoIdsPend = pedsPend.map(p => p.id);
+  const pedsPend = todos.filter(p => reservaVigente(p, ahora, ttlMs));
+  if (pedsPend.length === 0) return {};
 
-  const { data: piRows } = await supabasePorDefecto()
+  const { data: piRows } = await cliente
     .from('pedido_items')
     .select('pedido_id, bolsa_id, cantidad')
-    .in('pedido_id', pedidoIdsPend);
+    .in('pedido_id', pedsPend.map(p => p.id));
 
   const pedidoIdsConItems = new Set((piRows || []).map(r => r.pedido_id));
   const reservaMap = {};
 
   for (const r of piRows || []) {
-    reservaMap[r.bolsa_id] = (reservaMap[r.bolsa_id] || 0) + r.cantidad;
+    reservaMap[r.bolsa_id] = (reservaMap[r.bolsa_id] || 0) + (r.cantidad || 0);
   }
 
   for (const p of pedsPend) {
@@ -92,6 +252,139 @@ async function getReservasMap() {
   }
 
   return reservaMap;
+}
+
+/**
+ * Disponibilidad real de UNA bolsa ya leída de la BD.
+ * Punto de entrada único para catálogo y checkout.
+ *
+ * @param {{id: string, cantidad_disponible: number}} bolsa
+ * @returns {Promise<{ disponible: number, reservado: number, enBaseDeDatos: number }>}
+ */
+async function getDisponibilidadRealBolsa(bolsa, opciones = {}) {
+  const reservado = await getReservadoPendiente(bolsa.id, opciones);
+  return {
+    disponible: disponibilidadReal(bolsa.cantidad_disponible, reservado),
+    reservado,
+    enBaseDeDatos: Number(bolsa.cantidad_disponible) || 0,
+  };
+}
+
+/**
+ * Convierte un borrador en reserva ('borrador' → 'pendiente') de forma atómica.
+ *
+ * Delega en la RPC reservar_stock_pedido, que bloquea las bolsas con FOR UPDATE
+ * antes de contar. Es lo que hace que 10 checkouts simultáneos sobre 3 unidades
+ * terminen en 3 reservas y 7 conflictos (AC-03) en vez de en 10 reservas y una
+ * sobreventa que solo se descubre al cobrar.
+ *
+ * Comprobar la disponibilidad desde Node NO sustituye a esta llamada: entre el
+ * SELECT y el UPDATE no hay nada que impida que otro cliente se cuele.
+ *
+ * FAIL-CLOSED ESTRICTO: si la RPC no existe, falla o devuelve algo que no
+ * entendemos, esto responde 503 y punto. No hay camino alternativo. Ver
+ * fallaDeReserva.
+ *
+ * @returns {Promise<{ ok: boolean, tipo: string, status: number, ... }>}
+ *   tipo: 'reservado' | 'ya_reservado' | 'stock_insuficiente' | 'estado_invalido'
+ *       | 'pedido_no_encontrado' | 'items_ausentes' | 'bolsa_no_encontrada'
+ *       | 'carrera' | 'error_bd'
+ */
+async function reservarStockPedido(pedidoId, opciones = {}) {
+  const cliente = opciones.cliente || supabasePorDefecto();
+  const ttlMinutos = opciones.ttlMinutos ?? RESERVA_TTL_MINUTOS;
+
+  let data;
+  let error;
+  try {
+    ({ data, error } = await cliente.rpc('reservar_stock_pedido', {
+      p_pedido_id: pedidoId,
+      p_ttl_minutos: ttlMinutos,
+    }));
+  } catch (err) {
+    return fallaDeReserva(pedidoId, { detalle: err.message, codigo: err.code ?? null });
+  }
+
+  if (error) {
+    return fallaDeReserva(pedidoId, {
+      detalle: error.message,
+      codigo: error.code ?? null,
+      migracionPendiente: rpcNoDesplegada(error),
+    });
+  }
+
+  const resultado = data?.resultado;
+
+  switch (resultado) {
+    case 'reservado':
+    case 'ya_reservado':
+      return { ok: true, tipo: resultado, status: 200, pedidoId, detalle: data };
+
+    case 'stock_insuficiente':
+      return {
+        ok: false,
+        tipo: 'stock_insuficiente',
+        status: 409,
+        pedidoId,
+        bolsaId: data.bolsa_id,
+        disponible: data.disponible,
+        solicitado: data.solicitado,
+        detalle: data,
+      };
+
+    case 'estado_invalido':
+    case 'carrera':
+      return { ok: false, tipo: resultado, status: 409, pedidoId, detalle: data };
+
+    case 'pedido_no_encontrado':
+      return { ok: false, tipo: resultado, status: 404, pedidoId, detalle: data };
+
+    case 'items_ausentes':
+    case 'bolsa_no_encontrada':
+    case 'parametro_invalido':
+      return { ok: false, tipo: resultado, status: 422, pedidoId, detalle: data };
+
+    default:
+      // Un resultado que este código no sabe interpretar tampoco se degrada:
+      // no reservar es la única respuesta segura.
+      return fallaDeReserva(pedidoId, {
+        detalle: `resultado inesperado de reservar_stock_pedido: ${JSON.stringify(data)}`,
+      });
+  }
+}
+
+/** ¿El error dice que reservar_stock_pedido no está desplegada? */
+function rpcNoDesplegada(error) {
+  return error.code === 'PGRST202'
+    || error.code === '42883'
+    || /reservar_stock_pedido/i.test(error.message || '');
+}
+
+/**
+ * Único final para toda falla de la reserva atómica: 503, sin alternativa.
+ *
+ * Hasta AC-03 este camino distinguía `rpc_ausente` (migración sin aplicar) para
+ * que las rutas cayeran a "comprobar en Node y hacer el UPDATE a mano". Ese
+ * fallback ERA exactamente el TOCTOU que reservar_stock_pedido vino a cerrar:
+ * sin FOR UPDATE, la lectura de disponibilidad y la escritura del pedido
+ * vuelven a ser dos operaciones separadas y 10 checkouts simultáneos reservan
+ * 10 unidades sobre 3. Que la migración falte no es una excusa para reabrirlo:
+ * sin reserva atómica no se vende.
+ *
+ * El diagnóstico (¿falta la migración? ¿se cayó la BD?) va al log estructurado,
+ * no a un `tipo` que alguna ruta pueda usar para degradar el checkout.
+ */
+function fallaDeReserva(pedidoId, { detalle, codigo = null, migracionPendiente = false }) {
+  registrar('error', 'reserva_atomica_no_disponible', {
+    pedido_id: pedidoId,
+    codigo,
+    detalle,
+    migracion_pendiente: migracionPendiente,
+    accion: migracionPendiente
+      ? 'aplicar migración 202609121200 (crea reservar_stock_pedido)'
+      : 'revisar disponibilidad de la base de datos',
+  });
+  return { ok: false, tipo: 'error_bd', status: 503, detalle, pedidoId, migracionPendiente };
 }
 
 /**
@@ -262,6 +555,15 @@ async function liberarInventarioPedido(pedidoId, opciones = {}) {
     return { ok: true, tipo: 'ya_cancelado', status: 200, pedidoId, stockDevuelto: false };
   }
 
+  // Único choke point de cancelación (usuario, restaurante, admin y webhook de
+  // rechazo pasan todos por aquí) — el evento de catálogo se emite una sola vez,
+  // justo cuando el CAS de arriba gana de verdad la transición.
+  enqueueEventBestEffort({
+    eventType: 'pedido.cancelado', aggregateType: 'pedido', aggregateId: pedidoId,
+    discriminator: canceladoPor, payload: { cancelado_por: canceladoPor, motivo: motivo || null },
+    cliente,
+  });
+
   if (!requiereDevolucionDeStock(pedido.estado)) {
     return {
       ok: true,
@@ -307,8 +609,17 @@ async function liberarInventarioPedido(pedidoId, opciones = {}) {
 }
 
 module.exports = {
+  registrar,
+  RESERVA_TTL_MINUTOS,
+  RESERVA_TTL_MS,
+  instanteReserva,
+  reservaVigente,
+  reservaPagable,
+  disponibilidadReal,
   getReservadoPendiente,
   getReservasMap,
+  getDisponibilidadRealBolsa,
+  reservarStockPedido,
   unidadesDePedido,
   liberarInventarioPedido,
 };

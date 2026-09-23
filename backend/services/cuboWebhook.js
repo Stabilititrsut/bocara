@@ -28,8 +28,24 @@
 // FAIL-CLOSED: cualquier dato de verificación ausente o inválido detiene el
 // procesamiento. Nunca se toca stock, puntos, QR ni notificaciones si la
 // validación falla.
+//
+// ── Pagos tardíos (AC-03) ───────────────────────────────────────────────────
+//
+// Verificar que el dinero se movió no basta: hay que verificar que la RESERVA
+// seguía viva cuando se movió. Un pedido 'pendiente' bloquea stock durante
+// RESERVA_TTL_MINUTOS y después la unidad vuelve al catálogo, así que un
+// SUCCEEDED que llega pasado ese plazo puede estar cobrando una bolsa que otro
+// cliente ya compró. Confirmarlo es sobreventa con el dinero encima.
+//
+// Por eso un pago con la reserva vencida se rechaza (409, sin tocar stock ni
+// estado) y se registra con `accion: 'reembolso_manual'`. No es un caso que
+// deba ocurrir a menudo: el link de Cubo se emite con el mismo TTL
+// (services/visaLink.js) y el barrido cierra el pedido al cumplirse el plazo
+// (server.js); esta comprobación es la red de seguridad de las otras dos.
 
 const { validarConfirmacionPago } = require('./orderStateMachine');
+const { reservaPagable, instanteReserva, RESERVA_TTL_MINUTOS } = require('./stock');
+const { enqueueEventBestEffort } = require('./eventosDominio');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -91,6 +107,9 @@ function resolverDependencias(deps = {}) {
     monedaEsperada: deps.monedaEsperada !== undefined
       ? deps.monedaEsperada
       : process.env.CUBO_CURRENCY,
+    // Reloj inyectable: las pruebas de vigencia de reserva no pueden depender
+    // de esperar 15 minutos reales.
+    ahora: deps.ahora ?? Date.now(),
   };
 }
 
@@ -114,12 +133,27 @@ async function buscarPedido(orderId, supabase) {
     return { ...data, _cuboColumnsMissing: true };
   }
 
-  return { ...data, ...cuboData };
+  // Marca temporal de la reserva, en un SELECT aparte por el mismo motivo que
+  // las columnas cubo_*: si la migración 202609121200 no corrió, `reservado_at`
+  // no existe y pedirla en el SELECT principal haría que el pedido saliera como
+  // "no encontrado" (200, sin rastro) con el dinero ya cobrado. Así el fallo es
+  // explícito: _reservaColumnasFaltan → 503 y Cubo reintenta.
+  const { data: reservaData, error: reservaErr } = await supabase
+    .from('pedidos')
+    .select('reservado_at, created_at')
+    .eq('id', data.id)
+    .single();
+
+  if (reservaErr) {
+    return { ...data, ...cuboData, _reservaColumnasFaltan: true };
+  }
+
+  return { ...data, ...cuboData, ...reservaData };
 }
 
 // Valida el payload del webhook y el resultado de la consulta independiente a Cubo.
 // Función pura (sin efectos de red ni BD) — exportada para pruebas unitarias.
-function validarWebhookCubo({ body, pedido, consulta, monedaEsperada }) {
+function validarWebhookCubo({ body, pedido, consulta, monedaEsperada, ahora = Date.now() }) {
   // 1. Campos mínimos del payload
   if (!body.identifier) {
     return { ok: false, statusCode: 400, error: 'payload incompleto: falta identifier' };
@@ -218,8 +252,34 @@ function validarWebhookCubo({ body, pedido, consulta, monedaEsperada }) {
   }
 
   // 11. Idempotencia — ya fue procesado en una ejecución anterior
+  //     Va ANTES de mirar la reserva: el reintento de un pago que ya quedó
+  //     confirmado es un 200, aunque su reserva lleve horas vencida.
   if (pedido.estado_pago === 'pagado') {
     return { ok: true, statusCode: 200, tipo: 'duplicado' };
+  }
+
+  // 12. Columnas de reserva disponibles — fail-closed igual que el punto 7
+  if (pedido._reservaColumnasFaltan) {
+    return {
+      ok: false,
+      statusCode: 503,
+      error: 'Columna pedidos.reservado_at no existe en la BD — ejecutar migración 202609121200 antes de procesar pagos',
+    };
+  }
+
+  // 13. La reserva tiene que seguir viva EN ESTE INSTANTE.
+  //     Pasado el TTL la unidad ya volvió al catálogo y puede estar vendida a
+  //     otro cliente: confirmar aquí sería sobreventa con el cargo hecho. Se
+  //     rechaza en firme (409, Cubo no reintenta) y el pedido queda marcado
+  //     para reembolso manual.
+  if (!reservaPagable(pedido, ahora)) {
+    return {
+      ok: false,
+      statusCode: 409,
+      tipo: 'reserva_expirada',
+      error: `Reserva vencida (TTL ${RESERVA_TTL_MINUTOS} min) — el pago llegó tarde y no puede confirmarse`,
+      reservadoEn: instanteReserva(pedido),
+    };
   }
 
   return { ok: true, statusCode: 200, tipo: 'aprobado' };
@@ -267,7 +327,7 @@ function esReintentoDeUnPagoYaRegistrado(pedido, paymentIntentToken) {
 async function procesarWebhookCubo(body = {}, deps = {}) {
   const {
     supabase, consultarTransaccionCubo, procesarEventosPedido,
-    liberarInventarioPedido, monedaEsperada,
+    liberarInventarioPedido, monedaEsperada, ahora,
   } = resolverDependencias(deps);
 
   const { raw: rawStatus, estado: estadoNormalizado } = normalizarEstadoCubo(body.status);
@@ -341,7 +401,22 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
       return { statusCode: 503, error: 'CUBO_CURRENCY no configurada en el servidor — configurar como GTQ' };
     }
 
-    const validacion = validarWebhookCubo({ body, pedido, consulta, monedaEsperada });
+    const validacion = validarWebhookCubo({ body, pedido, consulta, monedaEsperada, ahora });
+
+    // El pago llegó después del TTL de la reserva. Se distingue del resto de
+    // fallos de verificación porque aquí SÍ hubo cargo: esta línea de log es la
+    // que dispara el reembolso.
+    if (!validacion.ok && validacion.tipo === 'reserva_expirada') {
+      registrar('error', 'pago_tardio_reserva_expirada', {
+        pedido_id: orderId,
+        identifier: paymentIntentToken,
+        estado: pedido?.estado ?? null,
+        reservado_en: validacion.reservadoEn ?? null,
+        ttl_minutos: RESERVA_TTL_MINUTOS,
+        accion: 'reembolso_manual',
+      });
+      return validacion;
+    }
 
     if (!validacion.ok) {
       registrar('error', 'verificacion_fallida', {
@@ -428,6 +503,25 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
         });
         return { statusCode: 409, error: 'Stock insuficiente — pago recibido, intervención manual requerida', detalle: rpcResult };
 
+      // La misma puerta que el punto 13, pero con la fila bloqueada: entre la
+      // validación de arriba y esta llamada el barrido pudo cerrar la reserva.
+      // Es la única comprobación de vigencia sin carrera posible.
+      case 'reserva_expirada':
+      case 'estado_no_pagable':
+        registrar('error', 'pago_tardio_reserva_expirada', {
+          pedido_id: pedido.id,
+          via: 'rpc',
+          resultado,
+          identifier: paymentIntentToken,
+          detalle: rpcResult,
+          accion: 'reembolso_manual',
+        });
+        return {
+          statusCode: 409,
+          error: 'Reserva vencida — el pago llegó después del plazo y no se confirmó. Requiere reembolso manual.',
+          detalle: rpcResult,
+        };
+
       case 'token_incorrecto':
         registrar('error', 'rpc_token_incorrecto', { pedido_id: pedido.id });
         return { statusCode: 409, error: 'Token de pago no coincide (verificación RPC)' };
@@ -464,6 +558,15 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
 
         procesarEventosPedido(pedido.id).catch(err =>
           registrar('warn', 'eventos_post_pago_fallo', { pedido_id: pedido.id, detalle: err.message }));
+
+        // Clave determinista por transacción (no por reintento): dos webhooks
+        // SUCCEEDED con el mismo `identifier` son el mismo cobro y colapsan al
+        // mismo registro; ver catálogo en docs/EVENTOS_NOTIFICACIONES.md.
+        enqueueEventBestEffort({
+          eventType: 'pedido.pago_confirmado', aggregateType: 'pedido', aggregateId: pedido.id,
+          discriminator: paymentIntentToken, payload: { codigo_recogida: codigoRecogida },
+          cliente: supabase,
+        });
 
         registrar('info', 'pago_confirmado', { pedido_id: pedido.id, codigo_recogida: codigoRecogida });
         return { statusCode: 200, tipo: 'procesado' };
@@ -534,6 +637,12 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     supabase.rpc('liberar_reserva_cupon', { p_pedido_id: pedido.id })
       .then(({ error }) => { if (error) registrar('error', 'liberar_cupon_fallo', { pedido_id: pedido.id, detalle: error.message }); })
       .catch(err => registrar('error', 'liberar_cupon_excepcion', { pedido_id: pedido.id, detalle: err.message }));
+
+    enqueueEventBestEffort({
+      eventType: 'pedido.pago_rechazado', aggregateType: 'pedido', aggregateId: pedido.id,
+      discriminator: paymentIntentToken, payload: { status: rawStatus },
+      cliente: supabase,
+    });
 
     registrar('info', 'pago_rechazado_registrado', {
       pedido_id: pedido.id,

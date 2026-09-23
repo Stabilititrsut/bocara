@@ -4,8 +4,9 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { enviarEmail, templateOlvidoContrasena, templateBienvenidaRestaurante, templateVerificacionOTP } = require('../services/email');
+const { enviarEmail, enmascararEmail, templateOlvidoContrasena, templateBienvenidaRestaurante, templateVerificacionOTP } = require('../services/email');
 const { geocodeAddress } = require('../utils/geo');
+const { actualizarUbicacionUsuario } = require('../services/ubicacionUsuario');
 const {
   registroLimiter, loginLimiter, otpSendLimiter,
   otpVerifyLimiter, setupLimiter, checkEmailLimiter,
@@ -324,7 +325,7 @@ router.post('/enviar-otp-email', otpSendLimiter, asyncHandler(async (req, res) =
   const codigo = String(Math.floor(100000 + Math.random() * 900000));
   const expiresAt = Date.now() + 30 * 60 * 1000;
   emailOtpStore.set(emailNorm, { codigo, expiresAt });
-  console.log(`[otp-email] Código generado para ${emailNorm} — válido 30 min`);
+  console.log(`[otp-email] Código generado para ${enmascararEmail(emailNorm)} — válido 30 min`);
 
   const sent = await enviarEmail({
     to: emailNorm,
@@ -341,7 +342,7 @@ router.post('/enviar-otp-email', otpSendLimiter, asyncHandler(async (req, res) =
   if (!sent.ok) {
     const status = sent.motivo === 'sin_api_key' ? 500 : 502;
     console.error(
-      `[otp-email] ✗ No se envió el código a ${emailNorm} | motivo: ${sent.motivo || 'desconocido'}` +
+      `[otp-email] ✗ No se envió el código a ${enmascararEmail(emailNorm)} | motivo: ${sent.motivo || 'desconocido'}` +
       ` | status proveedor: ${sent.status ?? 'sin respuesta'} | detalle: ${sent.detalle || 'sin detalle'}` +
       ` | respondiendo ${status}`
     );
@@ -353,7 +354,7 @@ router.post('/enviar-otp-email', otpSendLimiter, asyncHandler(async (req, res) =
     });
   }
 
-  console.log(`[otp-email] ✓ Código enviado correctamente a ${emailNorm}`);
+  console.log(`[otp-email] ✓ Código enviado correctamente a ${enmascararEmail(emailNorm)}`);
   res.json({ ok: true });
 }));
 
@@ -691,6 +692,31 @@ router.put('/perfil', authMiddleware, asyncHandler(async (req, res) => {
     .single();
   if (error) return res.status(400).json({ error: error.message });
   res.json(data);
+}));
+
+// PATCH /api/auth/ubicacion — persiste la última ubicación del cliente autenticado.
+//
+// La lógica vive en services/ubicacionUsuario.js (ver test/ubicacionUsuario.test.js):
+// nunca acepta un id de usuario del body, solo `req.usuario.id` del JWT
+// verificado por authMiddleware — no hay ningún campo del payload que pueda
+// apuntar la escritura a otra cuenta.
+router.patch('/ubicacion', authMiddleware, asyncHandler(async (req, res) => {
+  const { latitud, longitud } = req.body || {};
+  const resultado = await actualizarUbicacionUsuario({
+    usuarioId: req.usuario.id, latitud, longitud, cliente: supabase,
+  });
+
+  if (!resultado.ok) {
+    if (resultado.status === 503) {
+      console.error('[UBICACION] no se pudo guardar — ejecutar migración 202609171200:', resultado.error);
+    }
+    return res.status(resultado.status).json({ error: resultado.error, code: resultado.code });
+  }
+
+  res.json({
+    latitud: resultado.data.latitud, longitud: resultado.data.longitud,
+    actualizado_at: resultado.data.ubicacion_actualizada_at,
+  });
 }));
 
 // POST /api/auth/setup-demo — crea o resetea un usuario demo (rol: cliente)

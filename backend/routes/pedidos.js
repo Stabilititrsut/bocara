@@ -3,8 +3,10 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
 const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
-const { validarTransicion, esEstadoValido } = require('../services/orderStateMachine');
+const { validarTransicion, esEstadoValido, ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { liberarInventarioPedido } = require('../services/stock');
+const { impactoDePedidos } = require('../services/impactoAmbiental');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // Ruta heredada retirada: ningún cliente puede crear un pedido pagado sin una
@@ -129,67 +131,36 @@ router.get('/previos/:negocioId', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/pedidos/resumen-cliente — estadísticas del cliente autenticado
+// GET /api/pedidos/resumen-cliente — impacto del cliente autenticado
+//
+// "Rescatado" = recogido. Antes esta consulta contaba también los pedidos
+// 'confirmado', 'en_preparacion' y 'listo': comida pagada que todavía estaba en
+// el mostrador y que aún podía cancelarse. El número subía al pagar y no volvía
+// a bajar si el pedido se caía después.
+//
+// El modelo híbrido (pedido_items para carritos multi-bolsa, pedidos.bolsa_id
+// para los heredados) y el cálculo de kg/CO₂/ahorro viven ahora en
+// services/impactoAmbiental.js — el mismo código que alimenta el panel del
+// restaurante, para que las dos pantallas no puedan contar distinto.
 router.get('/resumen-cliente', authMiddleware, async (req, res) => {
   try {
-    const usuario_id = req.usuario.id;
-
-    // Incluir todos los estados de pago confirmado: confirmado, en_preparacion, listo, recogido
-    // y el estado legacy "completado". Excluir borrador/pendiente/cancelado.
-    const { data: pedidos } = await supabase
+    const { data: pedidos, error } = await supabase
       .from('pedidos')
-      .select('id, bolsa_id, precio_bolsa')
-      .eq('usuario_id', usuario_id)
+      .select('id, bolsa_id, cantidad, precio_bolsa')
+      .eq('usuario_id', req.usuario.id)
       .eq('estado_pago', 'pagado')
-      .not('estado', 'in', '(borrador,pendiente,cancelado)');
+      .in('estado', ESTADOS_ENTREGADOS);
 
-    if (!pedidos || pedidos.length === 0) {
-      return res.json({ bolsas_rescatadas: 0, total_ahorrado: 0 });
-    }
+    if (error) return res.status(500).json({ error: error.message });
 
-    const pedidoIds = pedidos.map(p => p.id);
-
-    // Flujo nuevo (Cubo): items en pedido_items con FK a bolsas
-    const { data: items } = await supabase
-      .from('pedido_items')
-      .select('pedido_id, cantidad, precio_unitario, bolsas(precio_original)')
-      .in('pedido_id', pedidoIds);
-
-    const pedidosConItems = new Set((items || []).map(i => i.pedido_id));
-
-    // Flujo legacy: pedidos sin pedido_items — usar bolsa_id del pedido directamente
-    const pedidosSinItems = pedidos.filter(p => !pedidosConItems.has(p.id));
-    let bolsasLegacy = [];
-    if (pedidosSinItems.length > 0) {
-      const bolsaIds = [...new Set(pedidosSinItems.map(p => p.bolsa_id).filter(Boolean))];
-      const { data: bData } = await supabase
-        .from('bolsas').select('id, precio_original').in('id', bolsaIds);
-      bolsasLegacy = bData || [];
-    }
-    const precioOriginalMap = {};
-    for (const b of bolsasLegacy) precioOriginalMap[b.id] = parseFloat(b.precio_original || 0);
-
-    let bolsas_rescatadas = 0;
-    let total_ahorrado = 0;
-
-    for (const item of (items || [])) {
-      const cant = item.cantidad || 0;
-      const precioOriginal = parseFloat(item.bolsas?.precio_original || 0);
-      const precioPagado   = parseFloat(item.precio_unitario || 0);
-      bolsas_rescatadas += cant;
-      total_ahorrado    += (precioOriginal - precioPagado) * cant;
-    }
-
-    for (const pedido of pedidosSinItems) {
-      bolsas_rescatadas += 1;
-      const precioOriginal = precioOriginalMap[pedido.bolsa_id] || 0;
-      const precioPagado   = parseFloat(pedido.precio_bolsa || 0);
-      total_ahorrado += Math.max(0, precioOriginal - precioPagado);
-    }
+    const impacto = await impactoDePedidos(pedidos || []);
 
     res.json({
-      bolsas_rescatadas,
-      total_ahorrado: parseFloat(Math.max(0, total_ahorrado).toFixed(2)),
+      bolsas_rescatadas: impacto.unidades_rescatadas,
+      total_ahorrado: impacto.dinero_ahorrado,
+      kg_rescatados: impacto.kg_rescatados,
+      co2_evitado_kg: impacto.co2_evitado_kg,
+      pedidos_completados: impacto.pedidos_completados,
     });
   } catch (err) {
     console.error('[PEDIDOS] resumen-cliente error:', err.message);
@@ -307,6 +278,22 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   }
 
   const tokenCliente = pedido.usuarios?.expo_push_token;
+
+  // El CAS de arriba ya garantiza que solo la llamada ganadora llega aquí, así
+  // que la clave por defecto (pedido:id:evento) no necesita discriminador: cada
+  // transición del catálogo ocurre como máximo una vez en la vida del pedido.
+  const eventoPorEstado = {
+    en_preparacion: 'pedido.en_preparacion',
+    listo: 'pedido.listo',
+    completado: 'pedido.completado',
+    recogido: 'pedido.completado',
+  };
+  if (eventoPorEstado[estado]) {
+    enqueueEventBestEffort({
+      eventType: eventoPorEstado[estado], aggregateType: 'pedido', aggregateId: req.params.id,
+      payload: { negocio_id: pedido.negocio_id, actor_id: req.usuario.id, estado_anterior: pedido.estado },
+    });
+  }
 
   if (estado === 'en_preparacion') {
     await enviarNotificacionPush(tokenCliente, '👨‍🍳 Preparando tu pedido',

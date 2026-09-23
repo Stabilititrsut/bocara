@@ -6,6 +6,9 @@ const { enviarNotificacionPush, guardarNotificacion } = require('../services/not
 const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateLiquidacionPagada } = require('../services/email');
 const { obtenerConfig, obtenerComisionFraccion, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
+const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
+const { impactoDePedidos } = require('../services/impactoAmbiental');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // 2026-08-09: ya no confía en req.usuario.rol (el rol tal como venía en el
@@ -32,7 +35,9 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const [usersRes, negociosRes, pedidosRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
     supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
-    supabase.from('pedidos').select('total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon'),
+    // id y bolsa_id se piden para el impacto ambiental de más abajo: son la
+    // llave hacia pedido_items (y hacia la bolsa, en los pedidos heredados).
+    supabase.from('pedidos').select('id,bolsa_id,total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon'),
   ]);
   const pedidos = pedidosRes.data || [];
   // 'cancelado' excluido explícitamente: /pedidos/:id/cancelar (admin, con reembolso)
@@ -78,6 +83,18 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const negocios_pendientes = negocios.filter(n =>
     n.estado_verificacion === 'pendiente' || (!n.verificado && n.activo === false && n.estado_verificacion !== 'rechazado')
   ).length;
+
+  // Impacto ambiental de toda la plataforma. Se calcula SOLO sobre los pedidos
+  // entregados: el dinero se cuenta cuando entra (`pagados`), pero la comida
+  // solo se rescata cuando el cliente se la lleva. Que falle no puede tumbar el
+  // dashboard financiero, que es lo que de verdad se viene a ver aquí.
+  const entregados = pagados.filter(p => ESTADOS_ENTREGADOS.includes(p.estado));
+  let impacto = null;
+  try {
+    impacto = await impactoDePedidos(entregados);
+  } catch (err) {
+    console.error('[ADMIN STATS] impacto ambiental no disponible:', err.message);
+  }
   res.json({
     total_usuarios: usersRes.count || 0,
     total_negocios: negocios.length,
@@ -94,6 +111,12 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
     propinas_totales: propinasTotales,
     pago_restaurantes: pagoRestaurantes,
     descuentos_cupon: descuentosCupon,
+    impacto_ambiental: impacto && {
+      unidades_rescatadas: impacto.unidades_rescatadas,
+      kg_rescatados: impacto.kg_rescatados,
+      co2_evitado_kg: impacto.co2_evitado_kg,
+      pedidos_entregados: entregados.length,
+    },
   });
 });
 
@@ -152,7 +175,8 @@ router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res
   // Enviar email de notificación
   if (u.email && motivo) {
     const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
-    console.log(`[suspender-usuario] Enviando email a ${u.email} — motivo: "${motivo}"`);
+    // enviarEmail ya registra el intento (con el destinatario enmascarado);
+    // duplicarlo aquí solo repetía el mismo email completo en los logs.
     enviarEmail({
       to: u.email,
       subject: 'Cuenta suspendida — Bocara Food',
@@ -191,7 +215,6 @@ router.put('/usuarios/:id/rehabilitar', authMiddleware, adminOnly, async (req, r
 
   if (u?.email) {
     const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
-    console.log(`[rehabilitar-usuario] Enviando email a ${u.email}`);
     enviarEmail({
       to: u.email,
       subject: '✅ Tu cuenta en Bocara Food ha sido reactivada',
@@ -271,7 +294,7 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
     // Enviar email si hay dirección
     if (u?.email) {
       const nombreProp = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Propietario';
-      console.log(`[notificar] Intentando email tipo="${tipo}" → ${u.email}`);
+      console.log(`[notificar] Intentando email tipo="${tipo}" para propietario_id=${propietarioId}`);
       if (tipo === 'negocio_aprobado') {
         await enviarEmail({
           to: u.email,
@@ -935,6 +958,11 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
     }
   } catch { /* tabla favoritos puede no existir aún — fallo silencioso */ }
 
+  enqueueEventBestEffort({
+    eventType: 'publicacion.aprobada', aggregateType: 'bolsa', aggregateId: bolsa.id,
+    payload: { negocio_id: bolsa.negocio_id, actor_admin_id: req.usuario.id },
+  });
+
   res.json(data);
 });
 
@@ -989,6 +1017,11 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
       { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
     );
   }
+
+  enqueueEventBestEffort({
+    eventType: 'publicacion.rechazada', aggregateType: 'bolsa', aggregateId: bolsa.id,
+    payload: { negocio_id: bolsa.negocio_id, motivo: motivo || null, actor_admin_id: req.usuario.id },
+  });
 
   res.json(data);
 });

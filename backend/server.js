@@ -47,6 +47,9 @@ const supabase = require('./config/supabase');
 const { corsMiddleware } = require('./middleware/cors');
 const { enviarNotificacionPush, guardarNotificacion } = require('./services/notificaciones');
 const { procesarEventosFallidos } = require('./services/pagoEventos');
+const { RESERVA_TTL_MINUTOS } = require('./services/stock');
+const { enqueueEventBestEffort } = require('./services/eventosDominio');
+const { resolverRequestId } = require('./utils/requestId');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,7 +59,22 @@ app.use(helmet());
 // Orígenes permitidos y reglas de preflight: middleware/cors.js
 app.use(corsMiddleware());
 
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+// Se expone en el header de respuesta y se agrega a los logs y al error 500
+// genérico de abajo — nunca a las respuestas 2xx/4xx explícitas de cada ruta,
+// para no tocar un contrato que el frontend ya consume. Validación en
+// utils/requestId.js (ver test/requestId.test.js).
+app.use((req, res, next) => {
+  req.requestId = resolverRequestId(req.headers['x-request-id']);
+  res.setHeader('X-Request-Id', req.requestId);
+  next();
+});
+
+morgan.token('request_id', (req) => req.requestId);
+app.use(morgan(
+  process.env.NODE_ENV === 'production'
+    ? ':remote-addr - [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] request_id=:request_id'
+    : ':method :url :status :response-time ms request_id=:request_id',
+));
 
 // PayU webhook envía application/x-www-form-urlencoded
 app.use('/api/pagos/webhook', express.urlencoded({ extended: false }));
@@ -81,8 +99,16 @@ app.get('/', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.message);
-  res.status(err.status || 500).json({ error: err.message || 'Error interno del servidor' });
+  console.error('❌ Error:', err.message, '| request_id:', req.requestId, '| ruta:', req.method, req.originalUrl);
+  // Aditivo: agrega code/request_id sin quitar `error`, que es lo único que
+  // las rutas explícitas garantizan hoy. Este handler solo corre para
+  // excepciones no capturadas por una ruta — nunca para un res.status(...)
+  // ya enviado desde dentro de un router.
+  res.status(err.status || 500).json({
+    error: err.message || 'Error interno del servidor',
+    code: err.code || 'ERROR_INTERNO',
+    request_id: req.requestId,
+  });
 });
 
 // ── Recordatorios de recogida (corre cada minuto) ────────────────────────────
@@ -193,6 +219,68 @@ app.listen(PORT, () => {
     }
   }, 60 * 60 * 1000);
   console.log('⏰ Cron de limpieza de borradores activo (cada hora)');
+
+  // Reservas zombis: pedidos que se quedaron en 'pendiente' porque el cliente
+  // abrió el link de Cubo y nunca volvió.
+  //
+  // El stock YA está liberado sin necesidad de este barrido: la disponibilidad
+  // real ignora toda reserva de más de RESERVA_TTL_MINUTOS (services/stock.js),
+  // así que la unidad vuelve al feed en el minuto 15 aunque el cron no corra.
+  // Lo que este barrido cierra es el ESTADO del pedido.
+  //
+  // ── Por qué el margen ya no es de 2 horas (AC-03) ──────────────────────────
+  //
+  // Antes se esperaban 120 minutos para no romper al cliente que pagaba tarde:
+  // con la fila en 'cancelado' su webhook devolvía 409 con el dinero cobrado.
+  // El efecto secundario era peor que el problema que evitaba — el pedido
+  // quedaba pagable durante dos horas sobre un stock que ya se había devuelto
+  // al catálogo a los 15 minutos, así que pagarlo tarde era exactamente la
+  // sobreventa que AC-03 prohíbe.
+  //
+  // Ahora el plazo es el mismo TTL de la reserva, y el pago tardío se ataja
+  // antes de cobrarse: el link de Cubo caduca a los 15 minutos
+  // (services/visaLink.js) y, si aun así llega un SUCCEEDED tarde, el webhook
+  // lo rechaza sin confirmar nada y lo registra para reembolso manual
+  // (services/cuboWebhook.js + confirmar_pago_cubo v6). Cerrar la fila al
+  // vencer deja de ser un riesgo y pasa a ser parte de la garantía: ningún
+  // pedido se queda en un limbo pagable.
+  //
+  // Cada 5 minutos en vez de cada 30: el cierre tiene que ir pegado al TTL para
+  // que la ventana de limbo sea de minutos, no de media hora.
+  const cerrarReservasVencidas = async () => {
+    try {
+      const { data, error } = await supabase.rpc('expirar_reservas_vencidas', {
+        p_ttl_minutos: RESERVA_TTL_MINUTOS,
+        p_limite: 500,
+      });
+      if (error) {
+        console.error('[CLEANUP] expirar_reservas_vencidas — ejecutar migración 202609121200:', error.message);
+        return;
+      }
+      if (!data?.expirados) return;
+      console.log('[CLEANUP] reservas vencidas cerradas:', data.expirados, `(TTL ${RESERVA_TTL_MINUTOS} min)`);
+
+      // Un pedido cancelado no debe seguir reteniendo la reserva de su cupón.
+      // try/catch por iteración: .rpc(...) lanza de forma síncrona si algo va
+      // mal y un fallo no puede abortar el resto del lote.
+      for (const id of (data.pedido_ids || [])) {
+        try {
+          await supabase.rpc('liberar_reserva_cupon', { p_pedido_id: id });
+        } catch (err) {
+          console.error('[CLEANUP] liberar_reserva_cupon error:', err.message);
+        }
+        enqueueEventBestEffort({
+          eventType: 'reserva.expirada', aggregateType: 'pedido', aggregateId: id,
+          payload: { ttl_minutos: RESERVA_TTL_MINUTOS },
+        });
+      }
+    } catch (err) {
+      console.error('[CLEANUP] error cerrando reservas vencidas:', err.message);
+    }
+  };
+  setInterval(cerrarReservasVencidas, 5 * 60 * 1000);
+  setTimeout(cerrarReservasVencidas, 10 * 1000);
+  console.log(`⏰ Cron de cierre de reservas vencidas activo (cada 5 min, TTL ${RESERVA_TTL_MINUTOS} min)`);
 
   // Las publicaciones se conservan aunque estén ocultas o rechazadas. Nunca se
   // borran automáticamente: `activo=false` funciona como archivo recuperable.

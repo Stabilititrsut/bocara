@@ -4,11 +4,16 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
 const { generarLinkPago } = require('../services/visaLink');
-const { getReservadoPendiente } = require('../services/stock');
+const {
+  getDisponibilidadRealBolsa, reservarStockPedido, RESERVA_TTL_MINUTOS,
+  registrar: registrarStock,
+} = require('../services/stock');
 const { ESTADOS_SIN_COBRO, puedeTransicionar, validarTransicion } = require('../services/orderStateMachine');
 const { procesarWebhookCubo } = require('./webhooks');
-const { obtenerComisionFraccion, obtenerConfigNumerica, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
+const { obtenerComisionFraccion, obtenerComisionPromocionFraccion, obtenerConfigNumerica, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
+const { calcularSnapshotFinanciero, actualizarPropinaEnSnapshot } = require('../services/finanzasSnapshot');
 const { normalizeCartItems, validateCheckoutBags } = require('../services/checkoutValidation');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // Números de Guatemala tienen 8 dígitos locales. Algunos registros en `usuarios.telefono`
@@ -48,6 +53,16 @@ async function revertirPedidoSinPago(pedidoId, motivo) {
   }
 }
 
+// Un solo texto para "no hay unidades", en vez de tres variantes repetidas por
+// los tres puntos del checkout que validan stock. El cliente ve el mismo
+// mensaje llegue por donde llegue.
+function mensajeSinStock(nombre, disponible) {
+  const producto = nombre || 'Producto';
+  return disponible === 0
+    ? `"${producto}": Esta bolsa ya no tiene unidades disponibles.`
+    : `"${producto}": Solo quedan ${disponible} unidad(es) disponibles.`;
+}
+
 // Comisión y costo de envío se leen de `configuracion` (services/configuracion.js)
 // en vez de estar escritos a mano — así coinciden con lo que ve el admin en el
 // panel de Configuración y con el resto de endpoints que calculan liquidaciones.
@@ -80,7 +95,7 @@ router.post('/webhook', (_req, res) => res.status(410).json({ received: false, e
 // POST /api/pagos/cubopago — genera link de pago Cubo Pago (Guatemala) y lo devuelve al frontend
 router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
   try {
-    console.log('1. Endpoint /pagos/cubopago recibido', req.body);
+    console.log('[PAGO] checkout recibido', { usuario_id: req.usuario.id, items: Array.isArray(req.body.items) ? req.body.items.length : 1 });
     const { items: itemsReq, bolsa_id, tipo_entrega, direccion_envio, cantidad: cantidadReq, propina: propinaReq } = req.body;
     const propina = Math.max(0, Math.round((parseFloat(propinaReq) || 0) * 100) / 100);
 
@@ -132,23 +147,22 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       .select('id');
     console.log('[PAGO] pedidos pendientes anteriores cancelados:', viejos?.length ?? 0);
 
-    // Validar stock de cada item considerando reservas pendientes de otros usuarios
+    // Primera criba de stock, solo para fallar pronto y con un mensaje claro:
+    // las reservas caducadas (> RESERVA_TTL_MINUTOS) ya no cuentan aquí. La
+    // garantía de verdad NO está en este bucle sino en reservar_stock_pedido,
+    // más abajo: entre este SELECT y el INSERT del pedido no hay nada que
+    // impida que otro cliente se lleve la última unidad.
     for (let i = 0; i < cartItems.length; i++) {
       const bolsa = bolsas[i];
       const cantidadSolicitada = cartItems[i].cantidad;
-      const reservado = await getReservadoPendiente(bolsa.id);
-      const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+      const { disponible: disponibleReal, reservado } = await getDisponibilidadRealBolsa(bolsa);
       console.log('[STOCK] bolsa:', bolsa.id);
       console.log('[STOCK] cantidad_disponible DB:', bolsa.cantidad_disponible);
-      console.log('[STOCK] reservado pendiente:', reservado);
+      console.log('[STOCK] reservado vigente:', reservado, `(TTL ${RESERVA_TTL_MINUTOS} min)`);
       console.log('[STOCK] disponible real:', disponibleReal);
       console.log('[STOCK] solicitado:', cantidadSolicitada);
       if (cantidadSolicitada > disponibleReal) {
-        return res.status(400).json({
-          error: disponibleReal === 0
-            ? `"${bolsa.nombre}": Esta bolsa ya no tiene unidades disponibles.`
-            : `"${bolsa.nombre}": Solo quedan ${disponibleReal} unidad(es) disponibles.`,
-        });
+        return res.status(400).json({ error: mensajeSinStock(bolsa.nombre, disponibleReal) });
       }
     }
 
@@ -174,11 +188,15 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     //   · El restaurante recibe 75% del producto + el 100% de la propina + el 100% del
     //     costo de envío (no existe un tercer actor — repartidor — en el sistema; si se
     //     agrega uno más adelante, este es el punto a ajustar).
-    const comisionFraccion     = await obtenerComisionFraccion();
-    const comisionBocara       = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
-    const comisionPasarela     = Math.round(baseTransaccion * COMISION_PLATAFORMA_FRACCION * 100) / 100;
-    const total                = Math.round((baseTransaccion + comisionPasarela) * 100) / 100;
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara + propina + costoEnvio) * 100) / 100;
+    const snapshotFinanciero = calcularSnapshotFinanciero({
+      items: cartItems, bolsas, costoEnvio, propina,
+      comisionMerma: await obtenerComisionFraccion(),
+      comisionPromocion: await obtenerComisionPromocionFraccion(),
+    });
+    const comisionBocara = snapshotFinanciero.comision_bocara;
+    const comisionPasarela = snapshotFinanciero.comision_pasarela;
+    const total = snapshotFinanciero.total_cliente;
+    const montoNetoRestaurante = snapshotFinanciero.monto_neto_restaurante;
 
     console.log('[PAGO] items recibidos:', JSON.stringify(cartItems));
     console.log('[PAGO] subtotalProductos:', subtotalProductos);
@@ -207,8 +225,15 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       comision_bocara:        comisionBocara,
       comision_pasarela:      comisionPasarela,
       monto_neto_restaurante: montoNetoRestaurante,
+      snapshot_financiero:    snapshotFinanciero,
+      tipo_financiero:        snapshotFinanciero.tipo_financiero,
+      porcentaje_comision_aplicado: snapshotFinanciero.porcentaje_comision_aplicado,
       total,
-      estado:                 'pendiente',
+      // Nace como borrador y solo pasa a 'pendiente' (= reserva viva) dentro de
+      // reservar_stock_pedido, con las bolsas bloqueadas. Insertarlo ya en
+      // 'pendiente' era el TOCTOU: 10 carritos simultáneos sobre 3 unidades
+      // pasaban los 10 el chequeo de arriba y reservaban los 10.
+      estado:                 'borrador',
       estado_pago:            'pendiente',
       codigo_recogida:        codigoRecogida,
       payu_reference_code:    referenceCode,
@@ -230,6 +255,11 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
     }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
 
+    enqueueEventBestEffort({
+      eventType: 'pedido.creado', aggregateType: 'pedido', aggregateId: pedido.id,
+      payload: { usuario_id: pedido.usuario_id, negocio_id: pedido.negocio_id, tipo_financiero: snapshotFinanciero.tipo_financiero },
+    });
+
     // Guardar todos los items del carrito en pedido_items
     const pedidoItemsData = cartItems.map((item, i) => ({
       pedido_id:       pedido.id,
@@ -243,6 +273,42 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       await revertirPedidoSinPago(pedido.id, 'items del pedido no se pudieron insertar');
       console.error('[PAGO] Error insertando pedido_items — pedido cancelado. Ejecutar migración SQL si la tabla o columnas no existen:', itemsInsertErr.message);
       return res.status(500).json({ error: 'Error al registrar los items del pedido. Intenta de nuevo.' });
+    }
+
+    // ── La reserva, ahora sí, atómica ───────────────────────────────────────
+    // Con los items ya escritos, la RPC bloquea cada bolsa (FOR UPDATE), vuelve
+    // a contar las reservas vigentes y solo entonces pasa el pedido a
+    // 'pendiente'. Dos checkouts simultáneos por la última unidad se serializan
+    // aquí: el segundo re-lee la reserva del primero y sale con 409.
+    const reserva = await reservarStockPedido(pedido.id);
+    if (!reserva.ok) {
+      await revertirPedidoSinPago(pedido.id, `reserva rechazada (${reserva.tipo})`);
+
+      if (reserva.tipo === 'stock_insuficiente') {
+        const bolsaSinStock = bolsas.find(b => b.id === reserva.bolsaId);
+        registrarStock('warn', 'checkout_sin_stock', {
+          pedido_id: pedido.id, bolsa_id: reserva.bolsaId ?? null,
+          disponible: reserva.disponible ?? null, solicitado: reserva.solicitado ?? null,
+        });
+        return res.status(409).json({ error: mensajeSinStock(bolsaSinStock?.nombre, reserva.disponible) });
+      }
+
+      // FAIL-CLOSED: si la reserva atómica no se puede hacer (RPC caída, sin
+      // desplegar, error de BD) el checkout se corta aquí con 503. NO existe un
+      // camino degradado: comprobar el stock en Node y marcar 'pendiente' a
+      // mano es justo el TOCTOU que reservar_stock_pedido cierra, y con él
+      // vuelve la sobreventa. Antes que vender una bolsa que no existe, el
+      // cliente ve "intenta de nuevo".
+      const status = reserva.status || 503;
+      registrarStock('error', 'checkout_sin_reserva', {
+        pedido_id: pedido.id, tipo: reserva.tipo, status,
+        detalle: typeof reserva.detalle === 'string' ? reserva.detalle : JSON.stringify(reserva.detalle ?? null),
+      });
+      return res.status(status).json({
+        error: status === 503
+          ? 'No se pudo reservar el producto. Vuelve a intentarlo en unos minutos.'
+          : 'No se pudo reservar el producto. Vuelve a iniciar el checkout.',
+      });
     }
 
     const { data: usuario } = await supabase
@@ -295,7 +361,7 @@ router.post('/cubopago', authMiddleware, soloCliente, async (req, res) => {
       console.error('[PAGO] Error guardando token Cubo — pedido cancelado. Columnas Cubo pueden no existir (ejecutar migración SQL):', tokenUpdateErr.message);
       return res.status(500).json({ error: 'Error al guardar el token de pago. Ejecuta la migración SQL (cubo-pago-schema.sql) e intenta de nuevo.' });
     }
-    console.log('[PAGO] token guardado en pedido:', paymentIntentToken, '| monto_esperado_centavos:', montoCentavos);
+    console.log('[PAGO] intención de pago guardada', { pedido_id: pedido.id, monto_esperado_centavos: montoCentavos });
 
     res.json({
       pedidoId: pedido.id,
@@ -443,17 +509,14 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
       }
     }
 
+    // El carrito se guarda como borrador: aquí solo se avisa pronto si ya no hay
+    // stock. La reserva firme la hace /generar-link vía reservar_stock_pedido.
     for (let i = 0; i < cartItems.length; i++) {
       const bolsa = bolsas[i];
       const cantidadSolicitada = cartItems[i].cantidad;
-      const reservado = await getReservadoPendiente(bolsa.id);
-      const disponibleReal = Math.max(0, bolsa.cantidad_disponible - reservado);
+      const { disponible: disponibleReal } = await getDisponibilidadRealBolsa(bolsa);
       if (cantidadSolicitada > disponibleReal) {
-        return res.status(400).json({
-          error: disponibleReal === 0
-            ? `"${bolsa.nombre}": Esta bolsa ya no tiene unidades disponibles.`
-            : `"${bolsa.nombre}": Solo quedan ${disponibleReal} unidad(es) disponibles.`,
-        });
+        return res.status(400).json({ error: mensajeSinStock(bolsa.nombre, disponibleReal) });
       }
     }
 
@@ -465,18 +528,22 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
     // Base de la transacción para el cargo de plataforma: producto + envío + propina
     // (el 3.5% incluye la propina en su base, nunca solo el producto).
     const baseTransaccion = subtotalProductos + costoEnvio + propina;
-    const comisionFraccion = await obtenerComisionFraccion();
-    const comisionBocara = Math.round(subtotalProductos * comisionFraccion * 100) / 100;
-    const comisionPasarela = Math.round(baseTransaccion * COMISION_PLATAFORMA_FRACCION * 100) / 100;
+    const snapshotFinanciero = calcularSnapshotFinanciero({
+      items: cartItems, bolsas, costoEnvio, propina,
+      comisionMerma: await obtenerComisionFraccion(),
+      comisionPromocion: await obtenerComisionPromocionFraccion(),
+    });
+    const comisionBocara = snapshotFinanciero.comision_bocara;
+    const comisionPasarela = snapshotFinanciero.comision_pasarela;
     // Total sin descuento — se actualiza después de la reserva atómica del cupón
-    let total = Math.round((baseTransaccion + comisionPasarela) * 100) / 100;
+    let total = snapshotFinanciero.total_cliente;
     // No restar comisionPasarela: es 100% ingreso de Bocara y el cliente ya la paga
     // aparte (incluida en `total`) — restarla aquí también sería cobrarla dos veces.
     // El descuento de cupón (si se aplica después) tampoco se resta aquí: lo absorbe
     // Bocara de su propia comisión, nunca el restaurante — ver aplicar_cupon_borrador.
     // + costoEnvio: 100% al restaurante, igual que la propina (no hay repartidor en
     // el sistema; ajustar este punto si se agrega un tercer actor de reparto).
-    const montoNetoRestaurante = Math.round((subtotalProductos - comisionBocara + propina + costoEnvio) * 100) / 100;
+    const montoNetoRestaurante = snapshotFinanciero.monto_neto_restaurante;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     const codigoRecogida = 'BOC-' + Array.from({ length: 6 }, () =>
@@ -498,6 +565,9 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
       comision_bocara: comisionBocara,
       comision_pasarela: comisionPasarela,
       monto_neto_restaurante: montoNetoRestaurante,
+      snapshot_financiero: snapshotFinanciero,
+      tipo_financiero: snapshotFinanciero.tipo_financiero,
+      porcentaje_comision_aplicado: snapshotFinanciero.porcentaje_comision_aplicado,
       total,
       estado: 'borrador',
       estado_pago: 'pendiente',
@@ -519,6 +589,11 @@ router.post('/preparar', authMiddleware, soloCliente, async (req, res) => {
       pedido = r3.data; pedidoErr = r3.error;
     }
     if (pedidoErr) return res.status(400).json({ error: pedidoErr.message });
+
+    enqueueEventBestEffort({
+      eventType: 'pedido.creado', aggregateType: 'pedido', aggregateId: pedido.id,
+      payload: { usuario_id: pedido.usuario_id, negocio_id: pedido.negocio_id, tipo_financiero: snapshotFinanciero.tipo_financiero },
+    });
 
     const pedidoItemsData = cartItems.map((item, i) => ({
       pedido_id: pedido.id,
@@ -623,18 +698,17 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
     );
     if (checkoutError) return res.status(400).json({ error: checkoutError });
 
-    // Volver a validar reservas justo antes de abrir Cubo. El borrador propio aún
-    // no cuenta como reserva, así que `reservado` representa únicamente pedidos
-    // de otros clientes que ya llegaron a la pasarela.
+    // Volver a validar reservas justo antes de abrir Cubo, para no gastar una
+    // llamada a la pasarela por un carrito que ya no cabe. El borrador propio se
+    // excluye del conteo: todavía no reserva nada. La comprobación vinculante es
+    // la de reservar_stock_pedido, más abajo, con las bolsas bloqueadas.
     for (const item of items) {
-      const reservado = await getReservadoPendiente(item.bolsa_id);
-      const disponible = Math.max(0, Number(item.bolsas.cantidad_disponible) - reservado);
+      const { disponible } = await getDisponibilidadRealBolsa(
+        { id: item.bolsa_id, cantidad_disponible: item.bolsas.cantidad_disponible },
+        { excluirPedidoId: pedido.id },
+      );
       if (Number(item.cantidad) > disponible) {
-        return res.status(409).json({
-          error: disponible === 0
-            ? `"${item.bolsas.nombre}": ya no tiene unidades disponibles.`
-            : `"${item.bolsas.nombre}": solo quedan ${disponible} unidad(es) disponibles.`,
-        });
+        return res.status(409).json({ error: mensajeSinStock(item.bolsas.nombre, disponible) });
       }
     }
 
@@ -712,9 +786,12 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
       });
     }
 
+    // El token se guarda con el pedido TODAVÍA en borrador, antes de reservar:
+    // si la reserva se cae, queda un borrador con token que el barrido cancela.
+    // Al revés (reservar primero) el fallo dejaría una reserva viva sin
+    // referencia de pago, bloqueando stock que nadie puede llegar a comprar.
     const montoCentavos = Math.round(pedido.total * 100);
     const { data: persistido, error: tokenPersistErr } = await supabase.from('pedidos').update({
-      estado: 'pendiente',
       cubo_payment_intent_token: paymentIntentToken || null,
       monto_esperado_centavos: montoCentavos,
     }).eq('id', pedido.id).eq('estado', 'borrador').select('id').maybeSingle();
@@ -731,6 +808,38 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
         ok: false,
         error: 'CONFLICTO_DE_ESTADO',
         detalle: 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
+      });
+    }
+
+    // 'borrador' → 'pendiente' con las bolsas bloqueadas. Este es el instante en
+    // que nace la reserva y se sella `reservado_at`: a partir de aquí el cliente
+    // tiene RESERVA_TTL_MINUTOS para pagar antes de que el stock vuelva al feed.
+    const reserva = await reservarStockPedido(pedido.id);
+    if (!reserva.ok) {
+      if (reserva.tipo === 'stock_insuficiente') {
+        const itemSinStock = items.find(i => i.bolsa_id === reserva.bolsaId);
+        registrarStock('warn', 'generar_link_sin_stock', {
+          pedido_id: pedido.id, bolsa_id: reserva.bolsaId ?? null,
+          disponible: reserva.disponible ?? null, solicitado: reserva.solicitado ?? null,
+        });
+        return res.status(409).json({ error: mensajeSinStock(itemSinStock?.bolsas?.nombre, reserva.disponible) });
+      }
+
+      // FAIL-CLOSED, igual que en /cubopago: sin reserva atómica no se entrega
+      // el link. El pedido se queda en 'borrador' (el barrido lo cancela) y el
+      // link creado en Cubo nunca llega al cliente. Pasar el pedido a
+      // 'pendiente' con un UPDATE a mano reabriría el TOCTOU.
+      const status = reserva.status || 409;
+      registrarStock('error', 'generar_link_sin_reserva', {
+        pedido_id: pedido.id, tipo: reserva.tipo, status,
+        detalle: typeof reserva.detalle === 'string' ? reserva.detalle : JSON.stringify(reserva.detalle ?? null),
+      });
+      return res.status(status).json({
+        ok: false,
+        error: status === 503 ? 'RESERVA_NO_DISPONIBLE' : 'CONFLICTO_DE_ESTADO',
+        detalle: status === 503
+          ? 'No se pudo reservar el producto. Vuelve a intentarlo en unos minutos.'
+          : 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
       });
     }
 
@@ -824,8 +933,17 @@ router.patch('/borrador/:id', authMiddleware, async (req, res) => {
     // igual que la propina.
     const montoNetoRestaurante = Math.round((subtotalProductos - pedido.comision_bocara + propina + pedido.costo_envio) * 100) / 100;
 
+    // El snapshot ya persistido fija para siempre `porcentaje_comision_aplicado`,
+    // `tipo_financiero`, `comision_bocara` y las líneas por bolsa — nada de eso
+    // depende de la propina y no se toca. Solo se recalculan los componentes
+    // derivados de ella (comisión de pasarela, total al cliente, neto del
+    // restaurante), y solo porque el pedido sigue en 'borrador': la guarda de
+    // arriba ya impide llegar aquí con un pedido pagado/confirmado/completado.
+    const snapshotActualizado = actualizarPropinaEnSnapshot(pedido.snapshot_financiero, propina);
+
     const { error: updateErr } = await supabase.from('pedidos').update({
       propina, total, comision_pasarela: comisionPasarela, monto_neto_restaurante: montoNetoRestaurante,
+      ...(snapshotActualizado ? { snapshot_financiero: snapshotActualizado } : {}),
     }).eq('id', req.params.id);
 
     if (updateErr) return res.status(400).json({ error: updateErr.message });
