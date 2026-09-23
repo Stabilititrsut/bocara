@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { cuponesAPI } from '@/src/services/api';
+import { volver } from '@/src/utils/backNavigation';
 
 const TEAL = '#1A5C5C';
 const GOLD = '#E6A817';
@@ -55,7 +56,7 @@ export default function ReferidosScreen() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+        <TouchableOpacity onPress={() => volver(router, '/(tabs)/perfil')} style={s.backBtn}>
           <Ionicons name="arrow-back" size={22} color={TEAL} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Referidos</Text>

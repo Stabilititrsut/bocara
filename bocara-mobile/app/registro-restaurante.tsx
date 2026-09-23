@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/src/context/AuthContext';
 import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 import { ZONAS_GT } from '@/constants/zonas';
 import { Image } from 'expo-image';
 
@@ -440,7 +441,7 @@ export default function RegistroRestauranteScreen() {
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       {/* ── Header ── */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => step > 1 ? setStep(n => (n - 1) as Step) : router.back()} style={s.back}>
+        <TouchableOpacity onPress={() => step > 1 ? setStep(n => (n - 1) as Step) : volver(router, '/socios')} style={s.back}>
           <Text style={s.backText}>←</Text>
         </TouchableOpacity>
         <View style={{ flex: 1 }}>

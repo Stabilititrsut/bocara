@@ -1,3 +1,4 @@
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -67,7 +68,8 @@ function PromoCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
 }
 
 export default function PromocionesScreen() {
-  const [bolsas, setBolsas] = useState<any[]>([]);
+  const [bolsasGuardadas, setBolsas] = useState<any[]>([]);
+  const bolsas = usePublicacionesVigentes(bolsasGuardadas);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [catSelected, setCatSelected] = useState('Todos');
