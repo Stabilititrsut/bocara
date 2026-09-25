@@ -491,6 +491,7 @@ test('Publicar desde ambos formularios bloquea horario vencido antes de API y pe
         '@/src/services/api': { bolsasAPI: { crear: async p => { calls.push(p); return { data: {} }; }, listar: async () => ({ data: [] }) },
           negociosAPI: { miNegocio: async () => ({ data: { id: 'n' } }) } },
         '@/src/utils/pickImage': {},
+        '@/src/utils/hora': load('src/utils/hora.ts'),
       });
       const button = walk(result.tree).find(n => n.type === 'Button' && n.props.onPress?.name === 'guardar');
       assert.ok(button, file); await button.props.onPress();

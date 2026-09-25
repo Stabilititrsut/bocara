@@ -93,6 +93,7 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
     'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: () => {} },
     '@/src/utils/horarioRecogida': horarioReal,
     '@/src/utils/pickImage': {},
+    '@/src/utils/hora': load('src/utils/hora.ts'),
     '@/constants/Colors': { Colors: {} },
     ...extraMocks,
   };
