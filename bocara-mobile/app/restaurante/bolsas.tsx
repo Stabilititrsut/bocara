@@ -1,3 +1,4 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
@@ -7,9 +8,21 @@ import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
+import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 
-const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
+// Bolsa tal como la devuelve GET /bolsas?mi_negocio=true — además de los campos
+// públicos, incluye el estado de revisión del admin (backend/routes/bolsas.js /
+// admin.js), que no aplica al resto de la app (cliente nunca lo ve).
+interface BolsaRestaurante extends Bolsa {
+  estado_aprobacion?: 'pendiente' | 'aprobado' | 'rechazado' | null;
+  motivo_rechazo?: string | null;
+}
+
+// `categoria` (tipo de descuento) no tiene enum en backend (validarDatosBolsa
+// no lo restringe) — es una lista fija solo para esta UI, no un contrato de
+// backend (ver BolsaForm.categoria más abajo, tipado como string por eso).
+const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'] as const;
 
 const CATEGORIAS_ALIMENTO = [
   { value: 'cereales',          label: 'Cereales y panadería', emoji: '🌾' },
@@ -27,7 +40,12 @@ const CATEGORIAS_ALIMENTO = [
   { value: 'otro',              label: 'Otro',                 emoji: '🍽️' },
 ];
 
-const MENU_CLASIFS = [
+// Banderas de clasificación de menú (en qué sección/filtro de la tienda
+// aparece) — independientes de `tipo_form`, que es el único campo contractual
+// de backend para el tipo real de la publicación (ver TipoPublicacion).
+type MenuClasifKey = 'es_tiempo_limitado' | 'es_promocion' | 'es_descuento' | 'es_destacado' | 'es_mas_vendido' | 'es_precio_bajo';
+
+const MENU_CLASIFS: { key: MenuClasifKey; label: string; emoji: string }[] = [
   { key: 'es_tiempo_limitado', label: 'Tiempo Limitado', emoji: '⏱️' },
   { key: 'es_promocion',       label: 'Promoción',       emoji: '🏷️' },
   { key: 'es_descuento',       label: 'Descuento',       emoji: '💸' },
@@ -36,8 +54,39 @@ const MENU_CLASIFS = [
   { key: 'es_precio_bajo',     label: 'Precio bajo',     emoji: '💰' },
 ];
 
-const FORM_INIT = {
-  tipo_form: 'bolsa' as 'bolsa' | 'cupon',
+// Estado del formulario del modal — todos los campos numéricos/de fecha viajan
+// como string mientras se editan (TextInput); `guardar()` los convierte al
+// tipo real que espera CrearBolsaPayload/ActualizarBolsaPayload antes de enviarlos.
+interface BolsaForm {
+  tipo_form: TipoPublicacion;
+  nombre: string;
+  descripcion: string;
+  contenido: string;
+  precio_original: string;
+  precio_descuento: string;
+  cantidad_disponible: string;
+  hora_recogida_inicio: string;
+  hora_recogida_fin: string;
+  peso_estimado_kg: string;
+  imagen_url: string;
+  activo: boolean;
+  // string, no TipoDescuentoUI: backend no valida `categoria` contra un enum
+  // (ver validarDatosBolsa), así que un registro existente puede traer un
+  // valor fuera de TIPOS_DESCUENTO — la UI solo lo usa para resaltar el chip.
+  categoria: string;
+  fecha_caducidad: string;
+  categoria_alimento: string;
+  categoria_menu: string;
+  es_tiempo_limitado: boolean;
+  es_promocion: boolean;
+  es_descuento: boolean;
+  es_destacado: boolean;
+  es_mas_vendido: boolean;
+  es_precio_bajo: boolean;
+}
+
+const FORM_INIT: BolsaForm = {
+  tipo_form: 'bolsa',
   nombre: '', descripcion: '', contenido: '',
   precio_original: '', precio_descuento: '',
   cantidad_disponible: '5',
@@ -57,11 +106,11 @@ const FORM_INIT = {
 };
 
 export default function BolsasRestauranteScreen() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<BolsaRestaurante[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState<any>(FORM_INIT);
+  const [form, setForm] = useState<BolsaForm>(FORM_INIT);
   const [editId, setEditId] = useState<string | null>(null);
   const [negocioId, setNegocioId] = useState('');
   const [uploadingFoto, setUploadingFoto] = useState(false);
@@ -69,7 +118,7 @@ export default function BolsasRestauranteScreen() {
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<any>(null);
-  const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  const set = <K extends keyof BolsaForm>(k: K) => (v: BolsaForm[K]) => setForm(f => ({ ...f, [k]: v }));
 
   function handleWebFileChange(e: any) {
     const file = e.target?.files?.[0];
@@ -83,7 +132,7 @@ export default function BolsasRestauranteScreen() {
         const ext = file.type.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(base64, path, file.type || 'image/jpeg');
-        if (data?.publicUrl) setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+        if (data?.publicUrl) setForm((f) => ({ ...f, imagen_url: data.publicUrl }));
       } catch (err: any) {
         setUploadFotoError(err.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -103,7 +152,7 @@ export default function BolsasRestauranteScreen() {
         const ext = picked.mimeType.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
-        if (data?.publicUrl) setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+        if (data?.publicUrl) setForm((f) => ({ ...f, imagen_url: data.publicUrl }));
       } catch (e: any) {
         setUploadFotoError(e.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -115,7 +164,7 @@ export default function BolsasRestauranteScreen() {
       const [negRes, bolRes] = await Promise.all([negociosAPI.miNegocio(), bolsasAPI.listar({ mi_negocio: true })]);
       setNegocioId(negRes.data?.id || '');
       // Deduplicar por id en caso de datos duplicados en BD
-      const raw: any[] = bolRes.data || [];
+      const raw: BolsaRestaurante[] = bolRes.data || [];
       const dedup = Array.from(new Map(raw.map(b => [String(b.id), b])).values());
       setItems(dedup);
     } catch { } finally { setLoading(false); setRefreshing(false); }
@@ -133,7 +182,7 @@ export default function BolsasRestauranteScreen() {
   // una edición en curso (mismo criterio que restaurante/perfil.tsx).
   useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
-  function abrir(b?: any) {
+  function abrir(b?: BolsaRestaurante) {
     setUploadFotoError('');
     setSaving(false);
     if (b) {
@@ -182,7 +231,7 @@ export default function BolsasRestauranteScreen() {
     else Alert.alert('Listo', msg);
   }
 
-  function mensajeGuardado(data: any, esEdicion: boolean) {
+  function mensajeGuardado(data: BolsaRestaurante | undefined, esEdicion: boolean) {
     if (data?.estado_aprobacion === 'pendiente') {
       return esEdicion
         ? 'Cambios guardados. Tu publicación fue enviada a revisión y no será visible hasta que el administrador la apruebe.'
@@ -193,6 +242,7 @@ export default function BolsasRestauranteScreen() {
 
   async function guardar() {
     if (saving) return;
+    if (publicacionVencida(form)) return alertar('El horario de recogida ya venció. Corrígelo antes de publicar.');
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
       return alertar('Nombre, precio original y precio Bocara son requeridos');
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
@@ -223,9 +273,12 @@ export default function BolsasRestauranteScreen() {
     setSaving(true);
     const precOrig = parseFloat(form.precio_original) || 0;
     const precDesc = parseFloat(form.precio_descuento) || 0;
+    const esEdicion = !!editId;
 
-    const payload: any = {
-      negocio_id: negocioId,
+    // Campos comunes a crear/editar. negocio_id se agrega solo al crear más
+    // abajo: PUT /bolsas/:id lo ignora (no está en su allowlist de campos
+    // editables), así que mandarlo en una edición no cambiaría nada.
+    const payload: CrearBolsaPayload = {
       tipo: form.tipo_form,
       nombre: form.nombre.trim(),
       descripcion: form.descripcion.trim(),
@@ -244,9 +297,9 @@ export default function BolsasRestauranteScreen() {
       es_destacado: form.es_destacado,
       es_mas_vendido: form.es_mas_vendido,
       es_precio_bajo: form.es_precio_bajo,
+      // categoria_alimento aplica a todos los tipos de publicación
+      categoria_alimento: form.categoria_alimento || null,
     };
-    // categoria_alimento aplica a todos los tipos de publicación
-    payload.categoria_alimento = form.categoria_alimento || null;
     // peso y fecha de caducidad solo para bolsas
     if (form.tipo_form === 'bolsa') {
       payload.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
@@ -255,11 +308,10 @@ export default function BolsasRestauranteScreen() {
     }
     if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
 
-    const esEdicion = !!editId;
     try {
       const res = esEdicion
         ? await bolsasAPI.actualizar(editId, payload)
-        : await bolsasAPI.crear(payload);
+        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
       setModal(false);
       cargar();
       avisar(mensajeGuardado(res.data, esEdicion));
@@ -282,7 +334,7 @@ export default function BolsasRestauranteScreen() {
     ]);
   }
 
-  const desc = (b: any) => b.precio_original > 0 ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
+  const desc = (b: BolsaRestaurante) => b.precio_original > 0 ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
 
   const filtrados = tabVista === 'todos' ? items
     : items.filter(b => tabVista === 'cupon' ? b.tipo === 'cupon' : b.tipo !== 'cupon');
@@ -400,7 +452,10 @@ export default function BolsasRestauranteScreen() {
               <Switch
                 value={!!b.activo}
                 disabled={enRevision}
-                onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'))}
+                onValueChange={() => {
+                  if (!b.activo && publicacionVencida(b)) return alertar('El horario de recogida ya venció. Edita la publicación antes de activarla.');
+                  bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'));
+                }}
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
@@ -459,7 +514,7 @@ export default function BolsasRestauranteScreen() {
                 <View style={s.tipoSelector}>
                   <TouchableOpacity
                     style={[s.tipoBtn, form.tipo_form === 'bolsa' && s.tipoBtnActive]}
-                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'bolsa', es_tiempo_limitado: true, es_promocion: false }))}
+                    onPress={() => setForm((f) => ({ ...f, tipo_form: 'bolsa', es_tiempo_limitado: true, es_promocion: false }))}
                   >
                     <Text style={[s.tipoBtnEmoji]}>⏱️</Text>
                     <Text style={[s.tipoBtnLabel, form.tipo_form === 'bolsa' && s.tipoBtnLabelActive]}>Disponible por{'\n'}Tiempo Limitado</Text>
@@ -467,7 +522,7 @@ export default function BolsasRestauranteScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[s.tipoBtn, form.tipo_form === 'cupon' && s.tipoBtnActive]}
-                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'cupon', es_promocion: true, es_tiempo_limitado: false }))}
+                    onPress={() => setForm((f) => ({ ...f, tipo_form: 'cupon', es_promocion: true, es_tiempo_limitado: false }))}
                   >
                     <Text style={[s.tipoBtnEmoji]}>🏷️</Text>
                     <Text style={[s.tipoBtnLabel, form.tipo_form === 'cupon' && s.tipoBtnLabelActive]}>Promoción</Text>
@@ -525,7 +580,7 @@ export default function BolsasRestauranteScreen() {
                     <TouchableOpacity
                       key={t}
                       style={[s.discChip, form.categoria === t && s.discChipActive]}
-                      onPress={() => setForm((f: any) => ({ ...f, categoria: t }))}
+                      onPress={() => setForm((f) => ({ ...f, categoria: t }))}
                     >
                       <Text style={[s.discChipText, form.categoria === t && s.discChipTextActive]}>{t}</Text>
                     </TouchableOpacity>
@@ -617,12 +672,12 @@ export default function BolsasRestauranteScreen() {
               {MENU_CLASIFS.map(({ key, label, emoji }) => (
                 <TouchableOpacity
                   key={key}
-                  style={[s.clasifChip, (form as any)[key] && s.clasifChipActive]}
-                  onPress={() => set(key)(!(form as any)[key])}
+                  style={[s.clasifChip, form[key] && s.clasifChipActive]}
+                  onPress={() => set(key)(!form[key])}
                   activeOpacity={0.8}
                 >
                   <Text style={s.clasifChipEmoji}>{emoji}</Text>
-                  <Text style={[s.clasifChipText, (form as any)[key] && s.clasifChipTextActive]}>{label}</Text>
+                  <Text style={[s.clasifChipText, form[key] && s.clasifChipTextActive]}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>

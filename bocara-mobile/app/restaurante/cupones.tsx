@@ -1,16 +1,32 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, TextInput, Alert, RefreshControl, ActivityIndicator, Modal,
+  SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import type { Bolsa, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 
+// `categoria` no tiene enum en backend (validarDatosBolsa no lo restringe) —
+// es una lista fija solo para esta UI, no un contrato de backend.
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
 
-const FORM_INIT = {
+interface CuponForm {
+  nombre: string;
+  contenido: string;
+  categoria: string;
+  descripcion: string;
+  precio_original: string;
+  precio_descuento: string;
+  cantidad_disponible: string;
+  hora_recogida_inicio: string;
+  hora_recogida_fin: string;
+}
+
+const FORM_INIT: CuponForm = {
   nombre: '',
   contenido: '',
   categoria: 'Porcentaje',
@@ -32,14 +48,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default function CuponesRestauranteScreen() {
-  const [cupones, setCupones] = useState<any[]>([]);
+  const [cupones, setCupones] = useState<Bolsa[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modal, setModal] = useState(false);
-  const [editando, setEditando] = useState<any>(null);
+  const [editando, setEditando] = useState<Bolsa | null>(null);
   const [saving, setSaving] = useState(false);
   const [negocioId, setNegocioId] = useState<string>('');
-  const [form, setForm] = useState({ ...FORM_INIT });
+  const [form, setForm] = useState<CuponForm>({ ...FORM_INIT });
 
   const cargar = useCallback(async () => {
     try {
@@ -48,7 +64,7 @@ export default function CuponesRestauranteScreen() {
       setNegocioId(nid || '');
       if (!nid) return;
       const res = await bolsasAPI.listar({ negocio_id: nid, mi_negocio: 'true' });
-      setCupones((res.data || []).filter((b: any) => b.tipo === 'cupon'));
+      setCupones((res.data || []).filter((b: Bolsa) => b.tipo === 'cupon'));
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
@@ -66,7 +82,7 @@ export default function CuponesRestauranteScreen() {
     setModal(true);
   }
 
-  function abrirEditar(c: any) {
+  function abrirEditar(c: Bolsa) {
     setEditando(c);
     setForm({
       nombre: c.nombre || '',
@@ -83,6 +99,13 @@ export default function CuponesRestauranteScreen() {
   }
 
   async function guardar() {
+    if (saving) return;
+    if (publicacionVencida(form)) {
+      const mensaje = 'El horario de recogida ya venció. Corrígelo antes de publicar.';
+      if (Platform.OS === 'web' && typeof window !== 'undefined') window.alert(mensaje);
+      else Alert.alert('Publicación vencida', mensaje);
+      return;
+    }
     if (!form.nombre.trim() || !form.contenido.trim()) {
       return Alert.alert('Campos requeridos', 'Nombre y código del cupón son obligatorios');
     }
@@ -94,25 +117,27 @@ export default function CuponesRestauranteScreen() {
     const horaFin = normalizarHora(form.hora_recogida_fin);
     if (!horaFin) return Alert.alert('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     setSaving(true);
+    // negocio_id solo se manda al crear: PUT /bolsas/:id lo ignora (no está en
+    // su allowlist de campos editables), así que mandarlo al editar no
+    // cambiaría nada — ver ActualizarBolsaPayload en src/types/index.ts.
+    const payload: CrearBolsaPayload = {
+      nombre: form.nombre.trim(),
+      contenido: form.contenido.trim().toUpperCase(),
+      categoria: form.categoria,
+      descripcion: form.descripcion.trim(),
+      precio_original: parseFloat(form.precio_original) || 0,
+      precio_descuento: parseFloat(form.precio_descuento),
+      cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
+      hora_recogida_inicio: horaInicio,
+      hora_recogida_fin: horaFin,
+      tipo: 'cupon',
+    };
     try {
-      const payload = {
-        nombre: form.nombre.trim(),
-        contenido: form.contenido.trim().toUpperCase(),
-        categoria: form.categoria,
-        descripcion: form.descripcion.trim(),
-        precio_original: parseFloat(form.precio_original) || 0,
-        precio_descuento: parseFloat(form.precio_descuento),
-        cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-        hora_recogida_inicio: horaInicio,
-        hora_recogida_fin: horaFin,
-        tipo: 'cupon',
-        negocio_id: negocioId,
-      };
       if (editando) {
         await bolsasAPI.actualizar(editando.id, payload);
         Alert.alert('Listo', 'Cupón actualizado');
       } else {
-        await bolsasAPI.crear(payload);
+        await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
         Alert.alert('Listo', 'Cupón publicado');
       }
       setModal(false);
@@ -163,7 +188,7 @@ export default function CuponesRestauranteScreen() {
           </View>
         )}
 
-        {cupones.map((c: any) => {
+        {cupones.map((c: Bolsa) => {
           const descuento = c.precio_original > 0
             ? Math.round((1 - c.precio_descuento / c.precio_original) * 100)
             : 0;

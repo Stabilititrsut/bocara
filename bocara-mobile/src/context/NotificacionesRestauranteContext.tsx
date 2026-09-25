@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { notificacionesAPI } from '../services/api';
+import { useRealtime } from './RealtimeContext';
 
 // Tipos que el panel de restaurante sabe mostrar. Debe reflejar la misma
 // lista que el backend usa para filtrar (backend/routes/notificaciones.js
@@ -47,6 +48,11 @@ export function NotificacionesRestauranteProvider({ children }: { children: Reac
     pollingRef.current = setInterval(refrescar, 30000);
     return () => clearInterval(pollingRef.current);
   }, [refrescar]);
+
+  // Realtime: refresca el badge en cuanto llega un pedido nuevo/cambia uno
+  // propio, sin esperar hasta 30s de polling (que se conserva como respaldo).
+  const { onPedidoCambiado } = useRealtime();
+  useEffect(() => onPedidoCambiado(() => { refrescar(); }), [onPedidoCambiado, refrescar]);
 
   const marcarLeida = useCallback(async (id: string) => {
     setNotifs(prev => prev.map(n => n.id === id ? { ...n, leida: true } : n));

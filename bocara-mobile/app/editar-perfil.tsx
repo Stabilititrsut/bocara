@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
 import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 
 // Mismo criterio que registro-cliente.tsx: número guatemalteco, 8 dígitos,
 // inicia con 2-7. Se mantiene idéntico a propósito para que un perfil nunca
@@ -68,7 +69,7 @@ export default function EditarPerfilScreen() {
       };
       const { data } = await authAPI.actualizarPerfil(payload);
       actualizarUsuario(data);
-      router.back();
+      volver(router, '/configuracion');
     } catch (e: any) {
       Alert.alert('Error', e.message || 'No se pudo guardar. Intenta de nuevo.');
     } finally {
@@ -79,7 +80,7 @@ export default function EditarPerfilScreen() {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity onPress={() => router.back()} style={s.back}>
+        <TouchableOpacity onPress={() => volver(router, '/configuracion')} style={s.back}>
           <Text style={s.backText}>← Volver</Text>
         </TouchableOpacity>
         <Text style={s.title}>Editar perfil</Text>

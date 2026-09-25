@@ -7,6 +7,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 
 const DARK  = '#1E293B';
 const DARK2 = '#0F172A';
@@ -114,7 +115,7 @@ export default function RestauranteDetalleScreen() {
 
   if (!negocio) return (
     <SafeAreaView style={s.root}>
-      <TouchableOpacity style={s.backBtn} onPress={() => router.back()}>
+      <TouchableOpacity style={s.backBtn} onPress={() => volver(router, '/admin/negocios')}>
         <Text style={s.backText}>← Volver</Text>
       </TouchableOpacity>
       <View style={s.loading}>
@@ -136,7 +137,7 @@ export default function RestauranteDetalleScreen() {
     <SafeAreaView style={s.root}>
       {/* Header */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+        <TouchableOpacity onPress={() => volver(router, '/admin/negocios')} style={s.backBtn}>
           <Text style={s.backText}>←  Negocios</Text>
         </TouchableOpacity>
         <View style={{ flex: 1 }}>

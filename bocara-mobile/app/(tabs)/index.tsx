@@ -71,8 +71,8 @@ export default function HomeScreen() {
   const [sinLeerCount, setSinLeerCount] = useState(0);
   const router = useRouter();
   const { usuario } = useAuth();
-  const { locationName, permissionStatus, requestPermission, loading: locLoading } = useLocation();
-  const { cantidad: cantidadCarrito } = useCart();
+  const { locationName, permissionStatus, requestPermission, actualizarUbicacion, loading: locLoading } = useLocation();
+  const { cantidad: cantidadCarrito, loaded: cartLoaded } = useCart();
 
   useEffect(() => {
     notificacionesAPI.listar().then((r) => {
@@ -142,14 +142,19 @@ export default function HomeScreen() {
           <View>
             <Text style={s.greeting}>Hola, {nombreCorto || 'Bocara'} 👋</Text>
             <TouchableOpacity
-              onPress={!tieneUbicacion && !locDenied ? requestPermission : undefined}
+              // Sin ubicación y no denegado: pedir permiso (primera vez).
+              // Ya con ubicación: el mismo tap ahora la refresca ("Actualizar
+              // ubicación") — un solo punto de entrada, sin agregar un botón
+              // nuevo. Denegado/bloqueado: inerte, no se insiste solo.
+              onPress={!tieneUbicacion && !locDenied ? requestPermission : tieneUbicacion ? actualizarUbicacion : undefined}
               style={s.locRow}
-              activeOpacity={tieneUbicacion ? 1 : 0.7}
+              activeOpacity={0.7}
             >
               <Ionicons name="location" size={11} color={Colors.accent} />
               <Text style={s.locText} numberOfLines={1}>
                 {locLoading ? 'Buscando...' : locationName || 'Guatemala'}
               </Text>
+              {tieneUbicacion && <Ionicons name="refresh" size={10} color={Colors.accent} style={{ marginLeft: 2 }} />}
             </TouchableOpacity>
           </View>
         </View>
@@ -160,7 +165,7 @@ export default function HomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={s.headerIconBtn} onPress={() => router.push('/(tabs)/carrito' as any)}>
             <Ionicons name="bag-outline" size={22} color={Colors.primary} />
-            {cantidadCarrito > 0 && (
+            {cartLoaded && cantidadCarrito > 0 && (
               <View style={s.cartBadge}>
                 <Text style={s.cartBadgeText}>{cantidadCarrito > 9 ? '9+' : cantidadCarrito}</Text>
               </View>

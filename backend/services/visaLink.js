@@ -143,14 +143,17 @@ async function generarLinkPago({ referencia, pedidoId, titulo, monto, urlRedirec
     '| campo de expiración enviado a Cubo:', process.env.CUBO_LINK_EXPIRACION_CAMPO || 'ninguno (solo metadata)');
 
   let data;
-  console.log('4. Llamando a CuboPago sandbox:', cuboApiUrl);
-  console.log('5. Body enviado:', JSON.stringify(body));
+  console.log('[CUBO] creando link de pago:', cuboApiUrl, '| pedido:', pedidoId, '| referencia:', referencia,
+    '| tiene email:', Boolean(body.clientEmail), '| tiene teléfono:', Boolean(body.clientPhone));
   try {
     ({ data } = await http().post(`${cuboApiUrl}/api/v1/links/one-use`, body, {
       headers: { 'X-API-KEY': cuboApiKey, 'Content-Type': 'application/json' },
       timeout: 10000,
     }));
-    console.log('6. Respuesta CuboPago:', data);
+    // Nunca se loguea `data` completo: trae paymentIntentToken, el token con
+    // el que cualquiera podría consultar o intentar operar la transacción.
+    console.log('[CUBO] link creado', '| pedido:', pedidoId, '| tiene redirectUri:', Boolean(data?.cuboRedirectUri),
+      '| tiene token:', Boolean(data?.paymentIntentToken));
   } catch (err) {
     manejarErrorAxios(err);
   }

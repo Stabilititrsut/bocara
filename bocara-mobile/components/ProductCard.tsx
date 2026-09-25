@@ -1,10 +1,16 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
 import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCart } from '@/src/context/CartContext';
+import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
+import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { favoritosAPI } from '@/src/services/api';
+import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
+import { etiquetaTipoProductoCorta } from '@/src/utils/tipoPublicacion';
+import { useLocation } from '@/src/context/LocationContext';
 import { Bolsa } from '@/src/types';
 
 const { width: SW } = Dimensions.get('window');
@@ -18,7 +24,7 @@ const RED   = '#E53935';
 
 export interface ProductCardProps {
   bolsa: Bolsa;
-  onAgregar: (bolsa: Bolsa) => void;
+  onAgregar: (bolsa: Bolsa) => ResultadoAgregar;
   width?: number;
   showFavorite?: boolean;
   isFavorited?: boolean;
@@ -26,7 +32,9 @@ export interface ProductCardProps {
 
 export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isFavorited }: ProductCardProps) {
   const router = useRouter();
-  const { items } = useCart();
+  const ahora = useRelojPublicaciones();
+  const { items, loaded } = useCart();
+  const { haversine, formatDistancia } = useLocation();
   const cartCount = items.find(i => i.bolsa.id === bolsa.id)?.cantidad || 0;
   const [isFav, setIsFav] = useState(!!isFavorited);
 
@@ -34,8 +42,19 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
 
   const pct = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
-  const agotado = bolsa.cantidad_disponible === 0;
+  const disponible = disponibilidadReal(bolsa);
+  const agotado = disponible <= 0;
   const w       = width ?? CARD_W;
+  // Aviso de stock bajo solo cuando aporta urgencia real — "Quedan 40
+  // unidades" en una tarjeta chica es ruido, no información. "Agotado" ya
+  // tiene su propio badge arriba, así que no se repite aquí.
+  const avisoStockBajo = !agotado && disponible <= 3 ? textoDisponibilidad(disponible) : null;
+  // Prioridad: distancia ya calculada por el backend (GET /bolsas con lat/lng)
+  // sobre el cálculo cliente — nunca al revés. El cliente solo es un fallback
+  // de presentación cuando el backend no la mandó en esta respuesta.
+  const nLat = bolsa.negocios?.latitud, nLng = bolsa.negocios?.longitud;
+  const distanciaKm = bolsa.distancia_km ?? (nLat != null && nLng != null ? haversine(nLat, nLng) : null);
+  const distanciaTexto = distanciaKm != null ? formatDistancia(distanciaKm) : null;
 
   async function toggleFav() {
     const prev = isFav;
@@ -48,6 +67,7 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
     }
   }
 
+  if (publicacionVencida(bolsa, ahora)) return null;
   return (
     <View style={[s.card, { width: w }, agotado && s.agotado]}>
       <TouchableOpacity
@@ -98,7 +118,12 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
       </TouchableOpacity>
 
       <View style={s.body}>
+        <View style={s.tipoRow}>
+          <Text style={s.tipoLabel}>{etiquetaTipoProductoCorta(bolsa.tipo)}</Text>
+          {distanciaTexto && <Text style={s.distancia} numberOfLines={1}>· {distanciaTexto}</Text>}
+        </View>
         <Text style={s.nombre} numberOfLines={2}>{bolsa.nombre}</Text>
+        {avisoStockBajo && <Text style={s.avisoStock} numberOfLines={1}>{avisoStockBajo}</Text>}
 
         <View style={s.bottomRow}>
           <View>
@@ -111,7 +136,8 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
           {!agotado && (
             <TouchableOpacity
               style={[s.addBtn, cartCount > 0 && s.addBtnActive]}
-              onPress={() => onAgregar(bolsa)}
+              onPress={() => { if (!publicacionVencida(bolsa)) mostrarErrorCarrito(onAgregar(bolsa)); }}
+              disabled={!loaded}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               activeOpacity={0.85}
             >
@@ -173,7 +199,11 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   body: { padding: 10 },
+  tipoRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 4 },
+  tipoLabel: { fontSize: 9, fontWeight: '800', color: GOLD, textTransform: 'uppercase', letterSpacing: 0.4 },
+  distancia: { fontSize: 9, fontWeight: '600', color: '#8A8A8A', flexShrink: 1 },
   nombre: { fontSize: 13, fontWeight: '700', color: DARK, lineHeight: 18, marginBottom: 8 },
+  avisoStock: { fontSize: 10, fontWeight: '700', color: '#D97706', marginTop: -5, marginBottom: 6 },
   bottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   precio: { fontSize: 16, fontWeight: '900', color: GOLD },
   orig: { fontSize: 10, color: '#C4C4C4', textDecorationLine: 'line-through', marginTop: 1 },

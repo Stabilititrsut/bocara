@@ -8,6 +8,7 @@ const { obtenerConfig, obtenerComisionFraccion, COMISION_PLATAFORMA_FRACCION } =
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // 2026-08-09: ya no confía en req.usuario.rol (el rol tal como venía en el
@@ -174,7 +175,8 @@ router.put('/usuarios/:id/suspender', authMiddleware, adminOnly, async (req, res
   // Enviar email de notificación
   if (u.email && motivo) {
     const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
-    console.log(`[suspender-usuario] Enviando email a ${u.email} — motivo: "${motivo}"`);
+    // enviarEmail ya registra el intento (con el destinatario enmascarado);
+    // duplicarlo aquí solo repetía el mismo email completo en los logs.
     enviarEmail({
       to: u.email,
       subject: 'Cuenta suspendida — Bocara Food',
@@ -213,7 +215,6 @@ router.put('/usuarios/:id/rehabilitar', authMiddleware, adminOnly, async (req, r
 
   if (u?.email) {
     const nombreDisplay = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Usuario';
-    console.log(`[rehabilitar-usuario] Enviando email a ${u.email}`);
     enviarEmail({
       to: u.email,
       subject: '✅ Tu cuenta en Bocara Food ha sido reactivada',
@@ -293,7 +294,7 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
     // Enviar email si hay dirección
     if (u?.email) {
       const nombreProp = [u.nombre, u.apellido].filter(Boolean).join(' ') || 'Propietario';
-      console.log(`[notificar] Intentando email tipo="${tipo}" → ${u.email}`);
+      console.log(`[notificar] Intentando email tipo="${tipo}" para propietario_id=${propietarioId}`);
       if (tipo === 'negocio_aprobado') {
         await enviarEmail({
           to: u.email,
@@ -957,6 +958,11 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
     }
   } catch { /* tabla favoritos puede no existir aún — fallo silencioso */ }
 
+  enqueueEventBestEffort({
+    eventType: 'publicacion.aprobada', aggregateType: 'bolsa', aggregateId: bolsa.id,
+    payload: { negocio_id: bolsa.negocio_id, actor_admin_id: req.usuario.id },
+  });
+
   res.json(data);
 });
 
@@ -1011,6 +1017,11 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
       { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
     );
   }
+
+  enqueueEventBestEffort({
+    eventType: 'publicacion.rechazada', aggregateType: 'bolsa', aggregateId: bolsa.id,
+    payload: { negocio_id: bolsa.negocio_id, motivo: motivo || null, actor_admin_id: req.usuario.id },
+  });
 
   res.json(data);
 });

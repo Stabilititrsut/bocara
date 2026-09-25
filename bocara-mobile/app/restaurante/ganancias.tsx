@@ -42,6 +42,14 @@ export default function GananciasScreen() {
   const resumen = data?.resumen || {};
   const liquidaciones = data?.liquidaciones || [];
   const banco = data?.negocio?.datos_bancarios;
+  // % real de comisión de ESTE período: derivado de los montos que ya devolvió
+  // el backend (snapshot financiero por pedido, nunca recalculado con el %
+  // configurado actual — ver negocios.js), no de un 25% fijo en el frontend.
+  // Puede no ser exactamente 25 si el período mezcla pedidos de antes/después
+  // de un cambio de configuración del admin.
+  const pctComision = resumen.ventas_brutas > 0
+    ? Math.round((resumen.comision_bocara / resumen.ventas_brutas) * 100)
+    : null;
 
   return (
     <SafeAreaView style={s.root}>
@@ -66,7 +74,7 @@ export default function GananciasScreen() {
           ))}
         </View>
 
-        {/* Card principal — 75% de la venta + propina íntegra, lo que realmente se paga */}
+        {/* Card principal — venta neta de comisión + propina íntegra, lo que realmente se paga */}
         <View style={s.mainCard}>
           <Text style={s.mainCardLabel}>Lo que recibirás</Text>
           <Text style={s.mainCardVal}>Q{(resumen.total_a_recibir || 0).toFixed(2)}</Text>
@@ -96,8 +104,8 @@ export default function GananciasScreen() {
           <Text style={s.desgloseTitle}>Desglose</Text>
           {[
             { label: 'Ventas brutas (producto)', val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
-            { label: 'Comisión Bocara (25%)',    val: -(resumen.comision_bocara || 0),  color: Colors.error, neg: true },
-            { label: 'Tu ganancia por ventas (75%)', val: resumen.neto_restaurante || 0, color: Colors.textPrimary },
+            { label: `Comisión Bocara${pctComision !== null ? ` (${pctComision}%)` : ''}`,    val: -(resumen.comision_bocara || 0),  color: Colors.error, neg: true },
+            { label: `Tu ganancia por ventas${pctComision !== null ? ` (${100 - pctComision}%)` : ''}`, val: resumen.neto_restaurante || 0, color: Colors.textPrimary },
             ...(resumen.total_envios > 0 ? [
               { label: 'Envíos recibidos (100%)', val: resumen.total_envios, color: '#22C55E' },
             ] : []),

@@ -78,6 +78,11 @@ export default function HistorialRestauranteScreen() {
   const totalComision = filtrados.reduce((s, p) => s + (p.comision_bocara || 0), 0);
   const totalPropinas = filtrados.reduce((s, p) => s + (p.propina || 0), 0);
   const totalNeto     = filtrados.reduce((s, p) => s + netoDe(p), 0);
+  // % real de comisión del período filtrado, derivado de los montos que ya
+  // trae cada pedido (snapshot financiero de backend, nunca recalculado con el
+  // % configurado actual). No asumir 25%: un período puede mezclar pedidos de
+  // antes/después de un cambio de configuración del admin.
+  const pctComision = totalBruto > 0 ? Math.round((totalComision / totalBruto) * 100) : null;
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
 
@@ -123,7 +128,7 @@ export default function HistorialRestauranteScreen() {
             <View style={s.resumenItem}>
               <Text style={s.resumenEmoji}>🤝</Text>
               <Text style={[s.resumenVal, { color: Colors.error }]}>-Q{totalComision.toFixed(2)}</Text>
-              <Text style={s.resumenLabel}>Comisión Bocara (25%)</Text>
+              <Text style={s.resumenLabel}>Comisión Bocara{pctComision !== null ? ` (${pctComision}%)` : ''}</Text>
             </View>
             {totalPropinas > 0 && (
               <View style={s.resumenItem}>
@@ -135,7 +140,7 @@ export default function HistorialRestauranteScreen() {
             <View style={[s.resumenItem, s.resumenItemNeto]}>
               <Text style={s.resumenEmoji}>✅</Text>
               <Text style={[s.resumenVal, { color: Colors.green, fontSize: 22 }]}>Q{totalNeto.toFixed(2)}</Text>
-              <Text style={s.resumenLabel}>Tu ganancia (75% + propina)</Text>
+              <Text style={s.resumenLabel}>{`Tu ganancia (${pctComision !== null ? `${100 - pctComision}% + ` : ''}propina)`}</Text>
             </View>
           </View>
         </View>
@@ -202,8 +207,9 @@ export default function HistorialRestauranteScreen() {
           <View style={s.notaCard}>
             <Text style={s.notaTitle}>ℹ️ Sobre la comisión Bocara</Text>
             <Text style={s.notaText}>
-              Bocara retiene el 25% de cada venta como comisión por el servicio de plataforma,
-              visibilidad y gestión de pagos. El 75% restante es tuyo.
+              {pctComision !== null
+                ? `Bocara retuvo el ${pctComision}% de las ventas de este período como comisión por el servicio de plataforma, visibilidad y gestión de pagos. El ${100 - pctComision}% restante es tuyo.`
+                : 'Bocara retiene una comisión de cada venta como pago por el servicio de plataforma, visibilidad y gestión de pagos. El resto es tuyo.'}
             </Text>
           </View>
         )}

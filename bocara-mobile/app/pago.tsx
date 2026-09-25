@@ -1,3 +1,6 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -8,7 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { pagosAPI, pedidosAPI, cuponesAPI } from '@/src/services/api';
+import { pagosAPI, pedidosAPI, cuponesAPI, bolsasAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
@@ -53,7 +56,37 @@ const TIPO_COLORS: Record<string, string> = {
 // ── Componente ────────────────────────────────────────────────────────────────
 
 export default function PagoScreen() {
-  const { items, total, limpiar } = useCart();
+  const { loaded, items } = useCart();
+  const ahora = useRelojPublicaciones();
+  const router = useRouter();
+  if (!loaded) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <ActivityIndicator color={Colors.primary} />
+      <Text style={s.errorMsg}>Cargando carrito...</Text>
+    </SafeAreaView>
+  );
+  if (items.length === 0) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={s.errorTitulo}>Tu carrito está vacío</Text>
+      <TouchableOpacity onPress={() => router.replace('/(tabs)/carrito')}>
+        <Text style={s.linkVolver}>Volver al carrito</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+  if (items.some(i => publicacionVencida(i.bolsa, ahora))) return (
+    <SafeAreaView style={[s.root, s.centerBox]}>
+      <Text style={s.errorTitulo}>Hay publicaciones no disponibles en tu carrito</Text>
+      <TouchableOpacity onPress={() => router.replace('/(tabs)/carrito')}>
+        <Text style={s.linkVolver}>Revisar carrito</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+  // El flujo existente solo monta cuando terminó la hidratación y hay productos.
+  return <PagoContent />;
+}
+
+function PagoContent() {
+  const { items, total, limpiar, sincronizarDisponibilidad } = useCart();
   const { usuario } = useAuth();
   const router = useRouter();
   const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
@@ -203,6 +236,25 @@ export default function PagoScreen() {
     if (tarjetaSelId === id) setTarjetaSelId(null);
   }
 
+  // Reconsulta la disponibilidad real de los items del carrito. Se usa cuando
+  // /preparar o /generar-link rechazan por stock insuficiente (400/409): el
+  // carrito refleja el stock actual aunque el usuario vuelva a él sin recargar.
+  const refrescarDisponibilidad = useCallback(async () => {
+    try {
+      const resultados = await Promise.allSettled(items.map(i => bolsasAPI.detalle(i.bolsa.id)));
+      const actualizaciones: Record<string, number> = {};
+      resultados.forEach((r, idx) => {
+        if (r.status === 'fulfilled' && r.value?.data) {
+          const data = r.value.data;
+          actualizaciones[items[idx].bolsa.id] = typeof data.cantidad_disponible_real === 'number'
+            ? data.cantidad_disponible_real
+            : data.cantidad_disponible;
+        }
+      });
+      if (Object.keys(actualizaciones).length > 0) sincronizarDisponibilidad(actualizaciones);
+    } catch { /* la disponibilidad se revisará de nuevo en el carrito */ }
+  }, [items, sincronizarDisponibilidad]);
+
   // ── Preparar pedido borrador ─────────────────────────────────────────────
   const prepararPedido = useCallback(async (cupon: CuponAplicado | null) => {
     setFase('preparando');
@@ -236,11 +288,14 @@ export default function PagoScreen() {
       }
       setFase('listo');
     } catch (e: any) {
+      // 400 aquí es la reserva atómica de /preparar rechazando por stock
+      // insuficiente (ver backend/routes/pagos.js) — jamás se muestra éxito.
+      if (e.status === 400 || e.status === 409) refrescarDisponibilidad();
       setErrorFase('preparar');
       setFase('error');
       setErrorMsg(e.message || 'Error al preparar el pedido.');
     }
-  }, [items, propina]);
+  }, [items, propina, refrescarDisponibilidad]);
 
   // Preparar una sola vez el pedido borrador cuando el carrito esté disponible.
   useEffect(() => {
@@ -263,6 +318,10 @@ export default function PagoScreen() {
         (window as any).location.href = visaLinkUrl;
       }
     } catch (e: any) {
+      // 409: la reserva atómica de /generar-link encontró stock insuficiente
+      // justo antes de abrir Cubo (ver backend/routes/pagos.js). Se refresca la
+      // disponibilidad del carrito y jamás se muestra éxito.
+      if (e.status === 409) refrescarDisponibilidad();
       setErrorFase('generar');
       setFase('error');
       setErrorMsg(e.message || 'Error al generar el link de pago.');
@@ -322,7 +381,7 @@ export default function PagoScreen() {
       <Text style={s.errorIcon}>🚫</Text>
       <Text style={s.errorTitulo}>Compra no disponible para esta cuenta</Text>
       <Text style={s.errorMsg}>Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente para comprar.</Text>
-      <TouchableOpacity onPress={() => router.back()}>
+      <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')}>
         <Text style={s.linkVolver}>Volver</Text>
       </TouchableOpacity>
     </SafeAreaView>
@@ -337,7 +396,7 @@ export default function PagoScreen() {
       <TouchableOpacity onPress={handleReintentar} style={s.btnReintentar}>
         <Text style={s.btnReintentarText}>Reintentar</Text>
       </TouchableOpacity>
-      <TouchableOpacity onPress={() => router.back()}>
+      <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')}>
         <Text style={s.linkVolver}>Volver al carrito</Text>
       </TouchableOpacity>
     </SafeAreaView>
@@ -348,7 +407,7 @@ export default function PagoScreen() {
     return (
       <SafeAreaView style={s.root}>
         <View style={s.header}>
-          <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+          <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')} style={s.backBtn}>
             <Ionicons name="arrow-back" size={22} color={Colors.primary} />
           </TouchableOpacity>
           <Text style={s.headerTitle}>Confirmar pedido</Text>
@@ -462,7 +521,7 @@ export default function PagoScreen() {
       </Modal>
 
       <View style={s.header}>
-        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+        <TouchableOpacity onPress={() => volver(router, '/(tabs)/carrito')} style={s.backBtn}>
           <Ionicons name="arrow-back" size={22} color={Colors.primary} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Confirmar pedido</Text>
