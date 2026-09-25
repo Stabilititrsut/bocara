@@ -8,6 +8,7 @@ import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import type { Bolsa, CrearBolsaPayload } from '@/src/types';
+import { normalizarHora } from '@/src/utils/hora';
 
 // `categoria` no tiene enum en backend (validarDatosBolsa no lo restringe) —
 // es una lista fija solo para esta UI, no un contrato de backend.
@@ -111,6 +112,10 @@ export default function CuponesRestauranteScreen() {
     if (form.precio_descuento == null || form.precio_descuento === '') {
       return Alert.alert('Campos requeridos', 'El precio con descuento es obligatorio');
     }
+    const horaInicio = normalizarHora(form.hora_recogida_inicio);
+    if (!horaInicio) return Alert.alert('Error', 'Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+    const horaFin = normalizarHora(form.hora_recogida_fin);
+    if (!horaFin) return Alert.alert('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     setSaving(true);
     // negocio_id solo se manda al crear: PUT /bolsas/:id lo ignora (no está en
     // su allowlist de campos editables), así que mandarlo al editar no
@@ -123,8 +128,8 @@ export default function CuponesRestauranteScreen() {
       precio_original: parseFloat(form.precio_original) || 0,
       precio_descuento: parseFloat(form.precio_descuento),
       cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-      hora_recogida_inicio: form.hora_recogida_inicio,
-      hora_recogida_fin: form.hora_recogida_fin,
+      hora_recogida_inicio: horaInicio,
+      hora_recogida_fin: horaFin,
       tipo: 'cupon',
     };
     try {
