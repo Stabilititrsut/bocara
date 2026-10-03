@@ -4,9 +4,10 @@ const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
-const { hoyGuatemala, filtrarVigentes } = require('../services/horarioGuatemala');
+const { hoyGuatemala } = require('../services/horarioGuatemala');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../services/impactoAmbiental');
+const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -27,13 +28,6 @@ const CAMPOS_BOLSA_PUBLICOS = 'id,negocio_id,nombre,descripcion,contenido,precio
   'peso_estimado_kg,co2_salvado_kg,fecha,fecha_disponible,fecha_caducidad,' +
   'activo,activa,estado_aprobacion,creado_en,created_at,' +
   'es_tiempo_limitado,es_promocion,es_descuento,es_destacado,es_mas_vendido,es_precio_bajo';
-
-// Un negocio solo debe ser visible/navegable para clientes si está activo y,
-// cuando el campo existe, aprobado (compat con despliegues sin estado_verificacion aún).
-function negocioDisponiblePublico(n) {
-  return !!n && n.activo !== false &&
-    (n.estado_verificacion === 'aprobado' || n.estado_verificacion == null);
-}
 
 // Fecha de hoy (YYYY-MM-DD) en Guatemala para comparar contra fecha_caducidad
 // (columna "date", sin hora). Igual que en routes/bolsas.js: calcularla en UTC
@@ -86,9 +80,10 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
 // GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
-  // hora_recogida_inicio/fin y fecha_caducidad se seleccionan aunque no se
-  // devuelvan: son los que deciden si la publicación ya venció en Guatemala.
-  const CAMPOS_FEED = 'negocio_id, precio_original, precio_descuento, ' +
+  // Estado, horario, unidades y vigencia se seleccionan aunque no se devuelvan:
+  // son los que decide filtrarVisiblesParaCliente (misma regla que /api/bolsas).
+  const CAMPOS_FEED = 'id, negocio_id, tipo, precio_original, precio_descuento, ' +
+    'activo, estado_aprobacion, cantidad_disponible, ' +
     'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, ' +
     'negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)';
   let { data: bolsas, error } = await supabase
@@ -108,9 +103,10 @@ router.get('/feed', async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Excluir las vencidas ANTES de agrupar: si no, un negocio cuyas publicaciones
-  // ya cerraron seguiría apareciendo en el feed con cantidad_bolsas > 0.
-  bolsas = filtrarVigentes(bolsas);
+  // Excluir lo que el cliente no ve ANTES de agrupar: si no, un negocio cuyas
+  // publicaciones ya cerraron (o cuyo fallback relajó filtros) seguiría
+  // apareciendo en el feed con cantidad_bolsas > 0.
+  bolsas = filtrarVisiblesParaCliente(bolsas);
 
   const map = new Map();
   for (const b of (bolsas || [])) {
@@ -153,10 +149,11 @@ router.get('/:id/detalle', async (req, res) => {
       .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0);
     data = r.data;
   }
-  // Fuera las que ya cerraron su ventana de recogida en Guatemala: se filtra antes
-  // de contar veces_pedido para que los contadores no incluyan publicaciones que
-  // el cliente ya no ve.
-  const bolsas = filtrarVigentes(data);
+  // Regla única del catálogo (aprobada, activa, con unidades, vigente en
+  // Guatemala) — también sobre el fallback, que no filtra estado_aprobacion.
+  // Se filtra antes de contar veces_pedido para que los contadores no incluyan
+  // publicaciones que el cliente no ve.
+  const bolsas = filtrarVisiblesParaCliente(data);
 
   // Contar cuántas veces fue pedida cada bolsa (pedidos recogidos)
   const vecesPedidoMap = {};
@@ -285,12 +282,11 @@ router.get('/:id', async (req, res) => {
       .gt('cantidad_disponible', 0);
     bolsas = r.data;
   }
-  // Este endpoint también devuelve bolsas (lo consume la vista de tienda) y era
-  // el único público que no pasaba por filtrarVigentes: el `.gte(fecha_caducidad)`
-  // de arriba solo compara la FECHA, así que dejaba pasar publicaciones cuya
-  // ventana de recogida ya había cerrado hoy. Misma regla que /feed, /:id/detalle
-  // y /:id/bolsas.
-  res.json({ ...negocio, bolsas: filtrarVigentes(bolsas) });
+  // Este endpoint también devuelve bolsas (lo consume la vista de tienda). El
+  // `.gte(fecha_caducidad)` de arriba solo compara la FECHA y el fallback no
+  // filtra estado_aprobacion: la regla completa (services/publicaciones.js) se
+  // aplica aquí, igual que en /feed, /:id/detalle y /:id/bolsas.
+  res.json({ ...negocio, bolsas: filtrarVisiblesParaCliente(bolsas) });
 });
 
 // POST /api/negocios — crear negocio con geocodificación
@@ -542,8 +538,8 @@ router.get('/:id/bolsas', async (req, res) => {
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
-  // Misma regla que el feed y el detalle: nada con la ventana de recogida vencida.
-  const bolsas = filtrarVigentes(data);
+  // Misma regla que el feed y el detalle (services/publicaciones.js).
+  const bolsas = filtrarVisiblesParaCliente(data);
   res.json({
     tiempo_limitado: bolsas.filter(b => b.tipo !== 'cupon'),
     promociones: bolsas.filter(b => b.tipo === 'cupon'),

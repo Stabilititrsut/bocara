@@ -10,6 +10,13 @@ import { Colors } from '@/constants/Colors';
 import type { Bolsa, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 
+// Promoción tal como la devuelve GET /bolsas?mi_negocio=true: incluye el estado
+// de revisión del admin, igual que BolsaRestaurante en restaurante/bolsas.tsx.
+interface CuponRestaurante extends Bolsa {
+  estado_aprobacion?: 'pendiente' | 'aprobado' | 'rechazado' | null;
+  motivo_rechazo?: string | null;
+}
+
 // `categoria` no tiene enum en backend (validarDatosBolsa no lo restringe) —
 // es una lista fija solo para esta UI, no un contrato de backend.
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
@@ -48,11 +55,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default function CuponesRestauranteScreen() {
-  const [cupones, setCupones] = useState<Bolsa[]>([]);
+  const [cupones, setCupones] = useState<CuponRestaurante[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modal, setModal] = useState(false);
-  const [editando, setEditando] = useState<Bolsa | null>(null);
+  const [editando, setEditando] = useState<CuponRestaurante | null>(null);
   const [saving, setSaving] = useState(false);
   const [negocioId, setNegocioId] = useState<string>('');
   const [form, setForm] = useState<CuponForm>({ ...FORM_INIT });
@@ -64,7 +71,7 @@ export default function CuponesRestauranteScreen() {
       setNegocioId(nid || '');
       if (!nid) return;
       const res = await bolsasAPI.listar({ negocio_id: nid, mi_negocio: 'true' });
-      setCupones((res.data || []).filter((b: Bolsa) => b.tipo === 'cupon'));
+      setCupones((res.data || []).filter((b: CuponRestaurante) => b.tipo === 'cupon'));
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
@@ -82,7 +89,7 @@ export default function CuponesRestauranteScreen() {
     setModal(true);
   }
 
-  function abrirEditar(c: Bolsa) {
+  function abrirEditar(c: CuponRestaurante) {
     setEditando(c);
     setForm({
       nombre: c.nombre || '',
@@ -133,19 +140,38 @@ export default function CuponesRestauranteScreen() {
       tipo: 'cupon',
     };
     try {
-      if (editando) {
-        await bolsasAPI.actualizar(editando.id, payload);
-        Alert.alert('Listo', 'Cupón actualizado');
-      } else {
-        await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
-        Alert.alert('Listo', 'Cupón publicado');
-      }
+      // Toda promoción nueva o corregida pasa por revisión del admin antes de
+      // verse: el mensaje lo dice según el estado que devuelve el backend.
+      const res = editando
+        ? await bolsasAPI.actualizar(editando.id, payload)
+        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
+      const enRevision = res.data?.estado_aprobacion === 'pendiente';
+      Alert.alert('Listo', enRevision
+        ? (editando
+          ? 'Cambios guardados. La promoción volvió a revisión y no será visible hasta que el administrador la apruebe.'
+          : 'Promoción creada y enviada a revisión del administrador.')
+        : (editando ? 'Promoción actualizada' : 'Promoción publicada'));
       setModal(false);
       cargar();
     } catch (e: any) {
       Alert.alert('Error', e.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // Volver a mostrar una promoción aprobada que el restaurante ocultó. Mismo
+  // endpoint que el switch de restaurante/bolsas.tsx: solo cambia `activo`, no
+  // la manda a revisión.
+  async function activar(c: CuponRestaurante) {
+    if (publicacionVencida(c)) {
+      return Alert.alert('Promoción vencida', 'El horario ya venció. Edítala para actualizarlo antes de activarla.');
+    }
+    try {
+      await bolsasAPI.actualizar(c.id, { activo: true });
+      cargar();
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudo activar la promoción');
     }
   }
 
@@ -188,10 +214,14 @@ export default function CuponesRestauranteScreen() {
           </View>
         )}
 
-        {cupones.map((c: Bolsa) => {
+        {cupones.map((c: CuponRestaurante) => {
           const descuento = c.precio_original > 0
             ? Math.round((1 - c.precio_descuento / c.precio_original) * 100)
             : 0;
+          const aprobada = c.estado_aprobacion === 'aprobado' || !c.estado_aprobacion;
+          const rechazada = c.estado_aprobacion === 'rechazado';
+          const enRevision = c.estado_aprobacion === 'pendiente';
+          const enRevisionInicial = enRevision && !c.motivo_rechazo;
           return (
             <View key={c.id} style={s.card}>
               <View style={s.cardTop}>
@@ -209,6 +239,19 @@ export default function CuponesRestauranteScreen() {
                     <Text style={s.codigoValor}>{c.contenido}</Text>
                   </View>
                   <Text style={s.tipo}>{c.categoria}</Text>
+                  <View style={s.estadoRow}>
+                    {enRevision && <Text style={[s.estado, s.estadoRevision]}>En revisión</Text>}
+                    {rechazada && <Text style={[s.estado, s.estadoRechazada]}>✕ Rechazada</Text>}
+                    {aprobada && c.activo && <Text style={[s.estado, s.estadoVisible]}>✓ Visible</Text>}
+                    {aprobada && !c.activo && <Text style={[s.estado, s.estadoOculta]}>Oculta</Text>}
+                  </View>
+                  {rechazada && (
+                    <Text style={s.ayuda}>Corrígela y guárdala para enviarla de nuevo a revisión.</Text>
+                  )}
+                  {enRevision && c.motivo_rechazo && (
+                    <Text style={s.ayuda}>El administrador pidió cambios — corrige y guarda para reenviar a revisión.</Text>
+                  )}
+                  {c.motivo_rechazo ? <Text style={s.motivo}>Motivo: {c.motivo_rechazo}</Text> : null}
                   {c.descripcion ? <Text style={s.descripcion}>{c.descripcion}</Text> : null}
                 </View>
                 <View style={s.precioCol}>
@@ -225,12 +268,22 @@ export default function CuponesRestauranteScreen() {
                 <Text style={s.footerText}>📦 {c.cantidad_disponible} disponibles</Text>
               </View>
               <View style={s.cardActions}>
-                <TouchableOpacity style={s.btnEditar} onPress={() => abrirEditar(c)}>
-                  <Text style={s.btnEditarText}>✏️ Editar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.btnEliminar} onPress={() => desactivar(c.id)}>
-                  <Text style={s.btnEliminarText}>Desactivar</Text>
-                </TouchableOpacity>
+                {/* En revisión inicial el backend responde 409 a cualquier edición. */}
+                {!enRevisionInicial && (
+                  <TouchableOpacity style={s.btnEditar} onPress={() => abrirEditar(c)}>
+                    <Text style={s.btnEditarText}>✏️ {rechazada ? 'Corregir' : 'Editar'}</Text>
+                  </TouchableOpacity>
+                )}
+                {c.activo && !rechazada && (
+                  <TouchableOpacity style={s.btnEliminar} onPress={() => desactivar(c.id)}>
+                    <Text style={s.btnEliminarText}>Desactivar</Text>
+                  </TouchableOpacity>
+                )}
+                {aprobada && !c.activo && (
+                  <TouchableOpacity style={s.btnActivar} onPress={() => activar(c)}>
+                    <Text style={s.btnActivarText}>Activar</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           );
@@ -352,6 +405,16 @@ const s = StyleSheet.create({
   btnEditarText: { color: Colors.brown, fontWeight: '700', fontSize: 13 },
   btnEliminar: { flex: 1, borderWidth: 1.5, borderColor: Colors.error, borderRadius: 10, padding: 9, alignItems: 'center' },
   btnEliminarText: { color: Colors.error, fontWeight: '700', fontSize: 13 },
+  btnActivar: { flex: 1, borderWidth: 1.5, borderColor: Colors.green, borderRadius: 10, padding: 9, alignItems: 'center' },
+  btnActivarText: { color: Colors.green, fontWeight: '700', fontSize: 13 },
+  estadoRow: { flexDirection: 'row', gap: 6, marginTop: 6 },
+  estado: { fontSize: 11, fontWeight: '800', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, overflow: 'hidden' },
+  estadoRevision: { backgroundColor: '#FEF3C7', color: '#92400E' },
+  estadoRechazada: { backgroundColor: '#FEE2E2', color: Colors.error },
+  estadoVisible: { backgroundColor: '#DCFCE7', color: '#166534' },
+  estadoOculta: { backgroundColor: Colors.border, color: Colors.textSecondary },
+  ayuda: { fontSize: 12, color: Colors.textSecondary, marginTop: 4 },
+  motivo: { fontSize: 12, color: Colors.error, marginTop: 4, fontWeight: '600' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: Colors.border, backgroundColor: Colors.white },
   cancelText: { fontSize: 16, color: Colors.textSecondary },
   modalTitle: { fontSize: 17, fontWeight: '800', color: Colors.brown },

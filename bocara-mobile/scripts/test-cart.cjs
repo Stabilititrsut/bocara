@@ -279,7 +279,9 @@ function textOf(node) {
 }
 function ui(file, cart, forcedStates = [], extraMocks = {}) {
   const h = hooks(); h.forcedStates.push(...forcedStates); const alerts = [], navigation = [];
-  let focusEffect;
+  // Todos los useFocusEffect del último render (como React), no solo el último:
+  // app/tienda/[id].tsx registra más de uno.
+  const focusEffects = [];
   const native = { View: 'View', Text: 'Text', ScrollView: 'ScrollView', TouchableOpacity: 'Button', SafeAreaView: 'Safe',
     ActivityIndicator: 'Spinner', Modal: 'Modal', TextInput: 'Input', Image: 'Image',
     StyleSheet: { create: x => x, absoluteFillObject: {} }, Dimensions: { get: () => ({ width: 400, height: 800 }) },
@@ -287,7 +289,7 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
   const feedback = load('src/utils/cartFeedback.ts', { 'react-native': native });
   const mocks = { react: h.react, 'react-native': native, 'expo-image': { Image: 'Image' }, '@expo/vector-icons': { Ionicons: 'Icon' },
     '@/components/ProductCard': { __esModule: true, default: 'ProductCard', CARD_W: 170 },
-    'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: effect => { focusEffect = effect; }, useLocalSearchParams: () => ({ id: 'bolsa-1' }) },
+    'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: effect => { focusEffects.push(effect); }, useLocalSearchParams: () => ({ id: 'bolsa-1' }) },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/context/CartContext': { useCart: () => cart }, '@/src/utils/cartFeedback': feedback,
@@ -303,8 +305,8 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
   };
   const Component = load(file, mocks).default;
   return { tree: Component(), alerts, navigation,
-    render() { h.reset(); return Component(); },
-    focus() { focusEffect?.(); },
+    render() { h.reset(); focusEffects.length = 0; return Component(); },
+    focus() { focusEffects.forEach(effect => effect()); },
   };
 }
 
@@ -328,7 +330,10 @@ test('A5 entrada directa a pago no monta flujo operativo hasta tener carrito hid
 
 test('Tienda Ver carrito navega una vez a carrito, nunca a pago, y permite volver tras recuperar foco', () => {
   const cart = { loaded: true, items: [{ bolsa: bolsa(), cantidad: 1 }], cantidad: 1, total: 20 };
-  const result = ui('app/tienda/[id].tsx', cart, [{ nombre: 'Tienda' }, [], 'todos', false]);
+  // bolsasAPI: al recuperar el foco la tienda re-pide sus publicaciones.
+  const result = ui('app/tienda/[id].tsx', cart, [{ nombre: 'Tienda' }, [], 'todos', false], {
+    '@/src/services/api': { bolsasAPI: { listar: async () => ({ data: [] }) } },
+  });
   const button = tree => walk(tree).find(n => n.type === 'Button' && textOf(n).includes('Ver carrito'));
   result.focus(); button(result.tree).props.onPress(); button(result.tree).props.onPress();
   assert.deepEqual(result.navigation, ['/(tabs)/carrito']);

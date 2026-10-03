@@ -10,6 +10,15 @@ import { Colors } from '@/constants/Colors';
 const DARK = '#1E293B';
 const DARK2 = '#0F172A';
 
+// motivos_no_visible de PUT /admin/bolsas/:id/aprobar (backend/services/publicaciones.js)
+const MOTIVO_NO_VISIBLE: Record<string, string> = {
+  inactiva: 'el restaurante la tiene oculta',
+  vencida: 'su horario o fecha ya venció',
+  sin_unidades: 'no tiene unidades',
+  negocio_no_disponible: 'el negocio no está activo',
+  no_aprobada: 'no quedó aprobada',
+};
+
 export default function AdminContenidoScreen() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,13 +55,21 @@ export default function AdminContenidoScreen() {
     setErroresItem(prev => ({ ...prev, [id]: '' }));
     try {
       const itemAprobado = items.find(i => i.id === id);
-      await adminAPI.aprobarBolsa(id);
+      const res = await adminAPI.aprobarBolsa(id);
       console.log('[contenido] aprobar OK:', id);
       await cargar();
+      // El backend dice si el cliente la verá de verdad (misma regla que los
+      // endpoints públicos). Si una versión anterior del backend no lo manda,
+      // se cae a la estimación por `activo` de antes.
+      const visible: boolean | undefined = res.data?.visible_cliente;
+      const motivos: string[] = res.data?.motivos_no_visible || [];
+      const noVisible = visible === undefined ? itemAprobado?.activo === false : !visible;
       showToast(
-        itemAprobado?.activo === false
-          ? `✅ "${nombre}" aprobado, pero seguirá OCULTO hasta que el restaurante lo active`
-          : `✅ "${nombre}" aprobado y activo en Bocara`
+        noVisible
+          ? `✅ "${nombre}" aprobado, pero NO es visible para clientes${motivos.length
+            ? `: ${motivos.map(m => MOTIVO_NO_VISIBLE[m] || m).join(', ')}`
+            : ' hasta que el restaurante lo active'}`
+          : `✅ "${nombre}" aprobado y visible para clientes`
       );
     } catch (e: any) {
       const mensaje = (e as any)?.response?.data?.error

@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { negociosAPI, notificacionesAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
@@ -100,7 +100,10 @@ export default function HomeScreen() {
     }
   }, []);
 
-  useEffect(() => { setLoading(true); cargar(); }, [cargar]);
+  // Al recuperar el foco (no solo al montar): las pestañas quedan montadas, así
+  // que sin esto una publicación aprobada por el admin no aparecía hasta un
+  // pull-to-refresh manual o reiniciar la app.
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   const filtrados = catSelected === 'Todos'
     ? negocios
