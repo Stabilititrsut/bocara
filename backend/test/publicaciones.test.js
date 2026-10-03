@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   motivosNoVisible, esVisibleParaCliente, filtrarVisiblesParaCliente, camposCambiados, decidirRevision,
+  estaEliminada, activarSinAprobacionEsInvalido,
 } = require('../services/publicaciones');
 
 // Mediodía en Guatemala: ventanas 08:00–22:00 de hoy están abiertas.
@@ -113,4 +114,45 @@ test('pendiente con "pedir cambios" + guardar → limpia motivo, sigue pendiente
   const r = decidirRevision({ ...BASE, estado_aprobacion: 'pendiente', motivo_rechazo: 'corrige' }, { descripcion: 'z' });
   assert.deepEqual(r.cambios, { motivo_rechazo: null });
   assert.equal(r.reenvio, true);
+});
+
+// ── Eliminación lógica ──────────────────────────────────────────────────────
+
+test('estaEliminada: solo cuando eliminado_en tiene valor', () => {
+  assert.equal(estaEliminada({ eliminado_en: '2026-10-03T12:00:00Z' }), true);
+  assert.equal(estaEliminada({ eliminado_en: null }), false);
+  assert.equal(estaEliminada({}), false, 'columna ausente (sin migrar) = no eliminada');
+  assert.equal(estaEliminada(null), false);
+});
+
+test('no visible: eliminada → "eliminada", antes que cualquier otro motivo', () => {
+  assert.deepEqual(motivosNoVisible({ ...BASE, eliminado_en: '2026-10-03T12:00:00Z' }, { ahora: AHORA }), ['eliminada']);
+  // Eliminada Y rechazada a la vez: ambos motivos, eliminada primero.
+  assert.deepEqual(
+    motivosNoVisible({ ...BASE, eliminado_en: '2026-10-03T12:00:00Z', estado_aprobacion: 'rechazado' }, { ahora: AHORA }),
+    ['eliminada', 'no_aprobada'],
+  );
+});
+
+// ── Invariante del switch "activo" (toggle de visibilidad) ─────────────────
+
+test('activarSinAprobacionEsInvalido: true solo cuando el switch solo activa una NO aprobada', () => {
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, { activo: true }), true);
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'pendiente' }, { activo: true }), true);
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, { activo: 'true' }), true, 'acepta el valor como string, igual que el resto de la ruta');
+});
+
+test('activarSinAprobacionEsInvalido: false al desactivar, al aprobar, o al corregir (varios campos a la vez)', () => {
+  // Desactivar (activo=false) nunca está prohibido, en ningún estado.
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, { activo: false }), false);
+  // Ya aprobada: el switch puede activarla con normalidad.
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'aprobado' }, { activo: true }), false);
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: null }, { activo: true }), false, 'legado (null) cuenta como aprobada');
+  // Corrección real (más campos que solo `activo`): es el camino de
+  // decidirRevision, que SÍ puede restaurar activo=true como parte de
+  // reenviar a revisión — nunca debe bloquearse aquí.
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, { activo: true, descripcion: 'x' }), false);
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, { descripcion: 'x' }), false);
+  // Sin updates, o updates vacío: nada que invalidar.
+  assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, {}), false);
 });

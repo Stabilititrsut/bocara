@@ -96,6 +96,9 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
     '@/src/utils/pickImage': {},
     '@/src/utils/hora': load('src/utils/hora.ts'),
     '@/constants/Colors': { Colors: {} },
+    '@/components/HoraPicker': { __esModule: true, default: function HoraPicker({ label, value, onChange }) {
+      return { type: 'Button', props: { onPress: () => onChange(value), accessibilityLabel: label, children: value } };
+    } },
     ...extraMocks,
   };
   const Component = load(file, mocks).default;

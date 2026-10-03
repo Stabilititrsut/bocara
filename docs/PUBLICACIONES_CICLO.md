@@ -18,14 +18,15 @@ crear ─────────────► pendiente ──aprobar──�
 |---|---|---|
 | Crear | restaurante | `estado_aprobacion = 'pendiente'`, `activo = true`. No visible. (Un admin crea directo en `aprobado`). |
 | Editar en revisión inicial (pendiente sin motivo) | restaurante | **409**: el admin puede estar revisándola. |
-| Aprobar | admin | `aprobado`, `motivo_rechazo = null`. **No toca `activo`** (es el switch del restaurante). Responde si quedó visible (ver §3). |
-| Rechazar | admin | `rechazado`, `activo = false`, `motivo_rechazo` **siempre presente** (si no se manda, uno por defecto). Nunca visible. |
-| Pedir cambios | admin | sigue `pendiente`, con `motivo_rechazo`. El restaurante puede editar. |
-| Guardar una **rechazada** | restaurante | Reenvío: `pendiente`, `motivo_rechazo = null` y **`activo = true`** (deshace la desactivación que impuso el rechazo), salvo que mande `activo: false` explícito. |
+| Aprobar | admin | `aprobado`, `motivo_rechazo = null`. **No toca `activo`** (es el switch del restaurante). Responde si quedó visible (ver §3). 410 si está eliminada. |
+| Rechazar | admin | `rechazado`, `activo = false`, `motivo_rechazo` **siempre presente** (si no se manda, uno por defecto). Nunca visible. 410 si está eliminada. |
+| Guardar una **rechazada** | restaurante | Reenvío: `pendiente`, `motivo_rechazo = null` y **`activo = true`** (deshace la desactivación que impuso el rechazo), salvo que mande `activo: false` explícito. **Sigue sin ser visible**: `pendiente` nunca es pública, sin importar `activo` (ver §8). |
+| Activar con el switch (`PUT` solo con `{ activo: true }`) | restaurante | **409** si la publicación no está `aprobado` (pendiente o rechazada) — ver §8. Funciona con normalidad sobre una aprobada. |
+| Eliminar (`DELETE /api/bolsas/:id`) | restaurante o admin | `eliminado_en`/`eliminado_por`, `activo = false`. **Permanente**: desaparece de todo flujo (feed, detalle, panel del restaurante, cola del admin) y ningún endpoint puede revertirlo — ver §8. |
 | Guardar una **aprobada** con cambio relevante | restaurante | Vuelve a `pendiente`; deja de verse hasta que el admin apruebe la versión nueva. |
 | Guardar una aprobada cambiando solo `cantidad_disponible` y/o `activo` | restaurante | Sigue `aprobado` (reponer unidades u ocultar no altera la oferta revisada). |
 | Guardar el formulario sin cambios reales | restaurante | Sin efecto en la revisión (`'120'` = `120`, `'08:00'` = `'08:00:00'`). |
-| Guardar respondiendo a "pedir cambios" | restaurante | Sigue `pendiente`, `motivo_rechazo = null`. |
+| Guardar respondiendo a "pedir cambios" (legado) | restaurante | Sigue `pendiente`, `motivo_rechazo = null`. El botón "Cambios" del admin que generaba este estado (`PUT /admin/bolsas/:id/pedir-cambios`) se retiró — ver §8; esta fila sigue aplicando solo a filas que ya estaban así antes del retiro. |
 
 **Campos relevantes** (vuelven a revisión): todo lo editable por `PUT /bolsas/:id`
 excepto `activo` y `cantidad_disponible` — nombre, descripción, código
@@ -36,6 +37,7 @@ categoría de alimento/menú, banderas de menú, peso, `permite_envio`.
 
 Una publicación aparece si y solo si **todas**:
 
+0. `eliminado_en IS NULL` (no eliminada — ver §8; se evalúa primero y es definitivo);
 1. `estado_aprobacion = 'aprobado'` (o `null`, filas anteriores a la columna);
 2. `activo = true`;
 3. `cantidad_disponible > 0` (y, en el feed, disponibilidad real descontando reservas vigentes);
@@ -68,11 +70,13 @@ Todos son **aditivos** salvo el 400 por tipo inválido.
 
 | Endpoint | Cambio |
 |---|---|
-| `PUT /api/admin/bolsas/:id/aprobar` | La respuesta (la fila) agrega `visible_cliente: boolean` y `motivos_no_visible: string[]` con valores `no_aprobada`, `inactiva`, `sin_unidades`, `vencida`, `negocio_no_disponible`. Aprobar algo ya aprobado es idempotente (no re-notifica ni re-audita). La notificación al restaurante dice si quedó visible o qué falta; a favoritos solo se notifica si es visible. |
-| `PUT /api/admin/bolsas/:id/rechazar` | `motivo_rechazo` siempre se escribe (motivo recibido, o uno por defecto). Antes, sin motivo quedaba el de una revisión anterior. |
-| `PUT /api/bolsas/:id` | Reenviar una rechazada la reactiva (`activo = true`). Cambiar solo `cantidad_disponible` en una aprobada ya no la manda a revisión. Guardar sin cambios reales tampoco. `tipo` fuera de `bolsa`/`cupon` → 400. |
-| `POST /api/bolsas` | `tipo` fuera de `bolsa`/`cupon` → 400. |
-| `GET` públicos | Sin cambio de forma. El fallback de `GET /api/bolsas` ahora respeta `?tipo=`. |
+| `PUT /api/admin/bolsas/:id/aprobar` | La respuesta (la fila) agrega `visible_cliente: boolean` y `motivos_no_visible: string[]` con valores `eliminada`, `no_aprobada`, `inactiva`, `sin_unidades`, `vencida`, `negocio_no_disponible`. Aprobar algo ya aprobado es idempotente (no re-notifica ni re-audita). 410 sobre una eliminada. La notificación al restaurante dice si quedó visible o qué falta; a favoritos solo se notifica si es visible. |
+| `PUT /api/admin/bolsas/:id/rechazar` | `motivo_rechazo` siempre se escribe (motivo recibido, o uno por defecto). Antes, sin motivo quedaba el de una revisión anterior. 410 sobre una eliminada. |
+| `PUT /api/admin/bolsas/:id/pedir-cambios` | **Retirado** (ver §8) — el botón "Cambios" del admin ya no existe. `pedirCambiosBolsa` tampoco en `adminAPI` (frontend). |
+| `PUT /api/bolsas/:id` | Reenviar una rechazada la reactiva (`activo = true`), pero sigue sin ser visible (pendiente). Cambiar solo `cantidad_disponible` en una aprobada ya no la manda a revisión. Guardar sin cambios reales tampoco. `tipo` fuera de `bolsa`/`cupon` → 400. **409** si el único cambio es `activo: true` sobre una no aprobada (§8). **410** sobre una eliminada (ninguna edición posible, de nadie). |
+| `DELETE /api/bolsas/:id` | Ahora es eliminación **lógica** (antes solo desactivaba) — ver §8. Responde `{ ok: true, tipo: 'eliminada' \| 'ya_eliminada' \| 'oculta_sin_migracion' }`. |
+| `POST /api/bolsas` | `tipo` fuera de `bolsa`/`cupon` → 400. **`hora_recogida_inicio`/`hora_recogida_fin` ahora son obligatorios** → 400 si falta alguno (antes se completaban con 18:00/20:00 por defecto). |
+| `GET` públicos | Sin cambio de forma. El fallback de `GET /api/bolsas` ahora respeta `?tipo=`. Una eliminada nunca aparece (§8). |
 
 Auditoría (`eventos_dominio`, ver `EVENTOS_NOTIFICACIONES.md`): nuevo evento
 `publicacion.reenviada_revision` con `motivo_anterior`, y `aprobada`/`rechazada`
@@ -165,9 +169,14 @@ panel (switch en Disponibles o el nuevo botón **Activar** en Promociones).
   usuario cambió**: el formulario completa valores derivados (p. ej.
   `es_descuento` a partir de los precios) que, enviados, el backend vería como
   cambios de contenido. El tipo se puede cambiar también al editar.
-- **Admin** (`admin/contenido.tsx`): el aviso al aprobar usa `visible_cliente`
-  y `motivos_no_visible`; el motivo de rechazo es **obligatorio** en la UI; la
-  cola se recarga al recuperar el foco.
+- **Admin** (`admin/contenido.tsx`): la tarjeta pendiente muestra exactamente
+  dos botones — **Rechazar** (fondo rojo, texto blanco) y **Aprobar** (fondo
+  verde, texto blanco). El botón "Cambios" se retiró por completo (§8). El
+  aviso al aprobar usa `visible_cliente` y `motivos_no_visible`; el motivo de
+  rechazo es **obligatorio** en la UI; la cola se recarga al recuperar el foco.
+- **Restaurante — selector de hora** (`components/HoraPicker.tsx`): Hora
+  inicio/fin en Crear/Editar (bolsa y cupón) usan un selector visual (hora +
+  minuto, sin intervalos inventados) en vez de texto libre — ver §8.
 - **Cliente**: Home, Tiendas, Promociones, tienda y ficha del negocio vuelven
   a pedir datos al recuperar el foco (sin realtime de publicaciones: no forma
   parte del contrato actual). El único filtro local es la vigencia horaria
@@ -184,15 +193,70 @@ panel (switch en Disponibles o el nuevo botón **Activar** en Promociones).
   corrección, Ola Azul exacto (por recreación y por edición), dos versiones,
   modificación de aprobada, matriz de estados, tipos, fallbacks y regresión
   (stock real, horario, unidades, negocio, filtros, CO₂).
-- `backend/test/publicaciones.test.js` — reglas puras del servicio.
+- `backend/test/publicaciones.test.js` — reglas puras del servicio, incluidas
+  `estaEliminada` y `activarSinAprobacionEsInvalido` (§8).
+- `backend/test/publicacionesGestion.test.js` — eliminación lógica
+  (DELETE-1..4: sin historial, con `pedido_items` histórico, idempotencia,
+  no-reactivación), el switch de visibilidad nunca activa una no aprobada
+  (VIS-1..5) y horas obligatorias al crear (TIME-1/2).
 - `bocara-mobile/scripts/test-ciclo-publicaciones.cjs` — pantallas reales:
   estados y acciones del restaurante (ver, Corregir, reenviar, solo unidades,
-  error y doble submit), admin (aviso de visibilidad, motivo obligatorio),
-  refetch al foco del cliente y tipos. Incluye **integración real**: las
-  pantallas del restaurante, admin y cliente hablan por HTTP con los routers
-  del backend (Ola Azul A/B, rechazada → corregida → aprobada → visible,
-  matriz de estados y tipos). Si las dependencias del backend no están
-  instaladas, esos tests salen SKIPPED (nunca PASS).
+  error y doble submit), admin (aviso de visibilidad, motivo obligatorio, solo
+  Rechazar/Aprobar — ADMIN-1/2/3), refetch al foco del cliente y tipos.
+  Incluye **integración real**: las pantallas del restaurante, admin y cliente
+  hablan por HTTP con los routers del backend (Ola Azul A/B, rechazada →
+  corregida → aprobada → visible, matriz de estados y tipos). Si las
+  dependencias del backend no están instaladas, esos tests salen SKIPPED
+  (nunca PASS).
+
+## 8. Eliminar, botón "Cambios" retirado, selector de hora y toggle bloqueado
+
+Cuatro ajustes post-prueba-manual, todos en `fix/publication-lifecycle`.
+
+**Eliminar (`DELETE /api/bolsas/:id`) — eliminación lógica, nunca física.**
+`pedido_items.bolsa_id` es `NOT NULL REFERENCES bolsas(id)` sin
+`ON DELETE CASCADE` (`sql/cubo-pago-schema.sql`): un `DELETE` físico sobre una
+bolsa con pedidos históricos falla por integridad referencial, y aunque no los
+tuviera, dejaría huérfanas las filas de `favoritos` (`referencia_id`, sin FK
+real). Por eso se usa siempre `eliminado_en`/`eliminado_por`
+(`supabase/migrations/20261003230000_bolsas_eliminacion_logica.sql`, aditiva):
+nunca se borra la fila, solo se marca. `estaEliminada()` es la primera
+comprobación de `motivosNoVisible` (precondición 0 de §1) y `PUT /bolsas/:id`
+responde **410** a cualquier intento de modificar una eliminada — admin
+incluido: no hay camino de API para deshacerlo. Repetir el `DELETE` es
+idempotente (`tipo: 'ya_eliminada'`).
+
+**Botón "Cambios" del admin, retirado.** `PUT /admin/bolsas/:id/pedir-cambios`
+y `adminAPI.pedirCambiosBolsa` se eliminaron del código (no quedó handler,
+modal ni estado muertos en `admin/contenido.tsx`) tras confirmar que ningún
+otro flujo los usaba. La tarjeta pendiente queda con **Rechazar** (rojo) y
+**Aprobar** (verde). Las filas que ya habían quedado `pendiente` con un
+`motivo_rechazo` de un "pedir cambios" anterior al retiro siguen
+mostrándose y siguen pudiendo corregirse con normalidad (ver fila "legado"
+de §1) — el retiro es solo hacia adelante.
+
+**Selector de hora (`components/HoraPicker.tsx`).** Hora inicio/fin en
+Crear/Editar ya no son texto libre: un botón abre un selector de hora y
+minuto (sin intervalos inventados — los 60 minutos están disponibles) que
+entrega directamente el formato canónico `HH:MM`. `POST /api/bolsas` ahora
+exige ambas horas explícitas (400 si falta alguna; antes se completaban con
+18:00/20:00). `horaParaFormulario` (`src/utils/estadoPublicacion.ts`, ya
+existente) sigue siendo lo que carga `'18:00:00'` de la BD como `'18:00'` al
+editar — el componente no necesitó cambiar esa parte.
+
+**El switch de visibilidad nunca activa una no aprobada — ni desde la UI ni
+desde la API.** `activarSinAprobacionEsInvalido()` (`services/publicaciones.js`)
+rechaza (**409**) una petición que solo manda `{ activo: true }` cuando la
+publicación no está `aprobado` (pendiente o rechazada). Es intencionalmente
+distinto del reenvío de una corrección (que sí restaura `activo = true` junto
+con otros campos, como parte de volver a pendiente — ver fila "Guardar una
+rechazada" de §1): ese camino cambia más que solo `activo`, así que no lo
+bloquea esta regla, y de todos modos `pendiente` nunca es visible
+(`esAprobada()` lo filtra en `motivosNoVisible`, independiente de `activo`).
+En el frontend, `toggleVisibilidadBloqueado()` (mismo criterio) deja el switch
+en **OFF y disabled** para pendiente y rechazada, con el texto "No visible"
+explícito en rechazada (no "En revisión": ya hubo una decisión, y fue
+negativa).
 
 ## 7. Guía de pruebas manuales
 

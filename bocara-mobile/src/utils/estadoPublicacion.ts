@@ -54,6 +54,17 @@ export function bloqueadaParaEditar(b: PublicacionConEstado): boolean {
   return b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
 }
 
+// El switch "Visible / No visible" del restaurante: una publicación que no
+// está aprobada (pendiente o rechazada) nunca puede activarse con el switch,
+// sin importar en qué paso de la revisión esté. Mismo criterio que el backend
+// (backend/services/publicaciones.js → activarSinAprobacionEsInvalido): "no
+// aprobada" nunca se hace públicamente visible por esta vía. El backend lo
+// exige igual aunque el frontend fallara en deshabilitarlo (defensa en
+// profundidad, no solo visual).
+export function toggleVisibilidadBloqueado(b: PublicacionConEstado): boolean {
+  return b.estado_aprobacion === 'pendiente' || b.estado_aprobacion === 'rechazado';
+}
+
 export function textoBotonEditar(b: PublicacionConEstado): string {
   return b.estado_aprobacion === 'rechazado' ? 'Corregir' : 'Editar';
 }

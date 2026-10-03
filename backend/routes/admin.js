@@ -10,7 +10,7 @@ const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const {
-  ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible,
+  ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
 const router = express.Router();
 
@@ -869,6 +869,12 @@ router.get('/contenido/pendiente', authMiddleware, adminOnly, async (req, res) =
     return res.json([]);
   }
 
+  // Eliminada nunca entra a la cola del admin, aunque haya quedado pendiente
+  // justo antes de eliminarse. Filtro en JS (no en la query SQL): así sigue
+  // funcionando igual si `eliminado_en` todavía no existe en este despliegue
+  // (estaEliminada trata una columna ausente como "no eliminada").
+  data = (data || []).filter(b => !estaEliminada(b));
+
   const bolsas = data || [];
 
   // Enriquecer con datos del propietario
@@ -916,6 +922,13 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
     .eq('id', req.params.id)
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
+
+  // Eliminada = permanente, no reactivable por ningún camino (ver DELETE
+  // /api/bolsas/:id) — ni siquiera "aprobarla" si el admin la tenía abierta
+  // en otra pestaña justo cuando el restaurante la eliminó.
+  if (estaEliminada(bolsa)) {
+    return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede aprobarse.' });
+  }
 
   // Repetir "aprobar" sobre algo ya aprobado es idempotente: no vuelve a
   // notificar ni a auditar una transición que no ocurrió.
@@ -1029,6 +1042,10 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
+  if (estaEliminada(bolsa)) {
+    return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede rechazarse.' });
+  }
+
   const yaRechazada = bolsa.estado_aprobacion === ESTADOS_APROBACION.RECHAZADO;
 
   // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
@@ -1089,39 +1106,6 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
   }
 
   res.json(data);
-});
-
-// PUT /api/admin/bolsas/:id/pedir-cambios — solicitar correcciones al restaurante
-router.put('/bolsas/:id/pedir-cambios', authMiddleware, adminOnly, async (req, res) => {
-  const { motivo } = req.body;
-
-  const { data: bolsa, error: fetchErr } = await supabase
-    .from('bolsas')
-    .select('*, negocios(id,nombre,propietario_id)')
-    .eq('id', req.params.id)
-    .single();
-  if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-
-  // Mantener en pendiente con el motivo guardado para que el restaurante sepa qué corregir
-  const { error: estadoErr } = await supabase.from('bolsas')
-    .update({ estado_aprobacion: 'pendiente', motivo_rechazo: motivo || null })
-    .eq('id', req.params.id);
-  if (estadoErr) return res.status(400).json({ error: estadoErr.message });
-
-  const propietarioId = bolsa.negocios?.propietario_id;
-  if (propietarioId) {
-    const motivoTexto = motivo ? `: ${motivo}` : '. Por favor revisa y reenvía la publicación.';
-    await notificarPropietario(
-      propietarioId,
-      bolsa.nombre,
-      'bolsa_cambios_solicitados',
-      '⚠️ Se solicitan cambios en tu publicación',
-      `El administrador te pide corregir "${bolsa.nombre}"${motivoTexto}`,
-      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
-    );
-  }
-
-  res.json({ ok: true });
 });
 
 // GET /api/admin/cambios-perfil — solicitudes de cambio de perfil de restaurantes

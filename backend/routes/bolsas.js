@@ -18,6 +18,7 @@ const {
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const {
   TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
+  estaEliminada, activarSinAprobacionEsInvalido,
 } = require('../services/publicaciones');
 const router = express.Router();
 
@@ -51,9 +52,13 @@ function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
       (!Number.isFinite(Number(datos.peso_estimado_kg)) || Number(datos.peso_estimado_kg) <= 0 || Number(datos.peso_estimado_kg) > 100))
     return 'El peso estimado debe ser mayor que 0 y menor o igual a 100 kg';
 
+  // `!== undefined` (no un simple truthy-check): el selector de hora del
+  // restaurante nunca manda '', pero una llamada directa a la API sí podría —
+  // y una hora vacía explícita debe rechazarse igual que una mal formada, no
+  // pasar de largo como si el campo no se hubiera tocado.
   const timeRe = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
-  if (datos.hora_recogida_inicio && !timeRe.test(datos.hora_recogida_inicio)) return 'Hora de inicio inválida';
-  if (datos.hora_recogida_fin && !timeRe.test(datos.hora_recogida_fin)) return 'Hora de finalización inválida';
+  if (datos.hora_recogida_inicio !== undefined && !timeRe.test(String(datos.hora_recogida_inicio || ''))) return 'Hora de inicio inválida';
+  if (datos.hora_recogida_fin !== undefined && !timeRe.test(String(datos.hora_recogida_fin || ''))) return 'Hora de finalización inválida';
   // hora_fin < hora_inicio NO es un error: es una ventana que cruza la medianoche
   // (p. ej. 22:00 → 02:00), soportada por services/horarioGuatemala.js, que la
   // hace terminar al día siguiente. Solo se rechaza la ventana de duración cero.
@@ -167,7 +172,12 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('bolsas')
     .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,activo,estado_verificacion)`)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    // Eliminada = fuera de TODO flujo, incluido el panel de gestión del
+    // restaurante (mi_negocio=true no filtra por nada más). Repetido más
+    // abajo en JS (estaEliminada) como red de seguridad si este filtro SQL
+    // falla (columna aún no migrada) y se cae al fallback sin él.
+    .is('eliminado_en', null);
 
   if (mi_negocio !== 'true') {
     // El feed público solo debe mostrar lo que un cliente puede comprar ahora mismo.
@@ -222,6 +232,11 @@ router.get('/', async (req, res) => {
       console.log('[BOLSAS] excluidas del feed público (no aprobadas, inactivas, vencidas o negocio no disponible):',
         antes - resultado.length);
     }
+  } else {
+    // mi_negocio=true no pasa por filtrarVisiblesParaCliente (el restaurante
+    // debe ver pendientes/rechazadas/ocultas/agotadas) — pero eliminada es la
+    // única excepción: nunca debe reaparecer ni en su propio panel de gestión.
+    resultado = resultado.filter(b => !estaEliminada(b));
   }
 
   // Inyectar cantidad_disponible_real con la MISMA fórmula que usa el checkout
@@ -377,11 +392,15 @@ router.post('/', authMiddleware, async (req, res) => {
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
-  // Los mismos defaults que se persisten más abajo, para validar exactamente lo
-  // que se va a guardar y no una versión sin horario.
+  // El restaurante elige la hora con un selector (nunca la escribe a mano) —
+  // el backend no debe depender solo de eso: una publicación sin horario de
+  // recogida/vigencia explícito no se crea, nunca se le inventa un default.
+  if (!hora_recogida_inicio || !hora_recogida_fin) {
+    return res.status(400).json({ error: 'hora_recogida_inicio y hora_recogida_fin son requeridos' });
+  }
+
   const horarioCreacion = {
-    hora_recogida_inicio: hora_recogida_inicio || '18:00',
-    hora_recogida_fin: hora_recogida_fin || '20:00',
+    hora_recogida_inicio, hora_recogida_fin,
     fecha_caducidad: fecha_caducidad || null,
   };
 
@@ -460,8 +479,8 @@ router.post('/', authMiddleware, async (req, res) => {
       precio_descuento: parseFloat(precio_descuento),
       cantidad_disponible: cantidad_disponible == null ? 1 : Number(cantidad_disponible),
       tipo: tipo || 'bolsa', categoria,
-      hora_recogida_inicio: hora_recogida_inicio || '18:00',
-      hora_recogida_fin: hora_recogida_fin || '20:00',
+      hora_recogida_inicio,
+      hora_recogida_fin,
       permite_envio: permite_envio || false,
       peso_estimado_kg: pesoKg,
       co2_salvado_kg: co2Unidad,
@@ -497,8 +516,8 @@ router.post('/', authMiddleware, async (req, res) => {
         precio_descuento: parseFloat(precio_descuento),
         cantidad_disponible: cantidad_disponible == null ? 1 : Number(cantidad_disponible),
         tipo: tipo || 'bolsa', categoria,
-        hora_recogida_inicio: hora_recogida_inicio || '18:00',
-        hora_recogida_fin: hora_recogida_fin || '20:00',
+        hora_recogida_inicio,
+        hora_recogida_fin,
         permite_envio: permite_envio || false,
         peso_estimado_kg: pesoKg,
         imagen_url: imagen_url || null,
@@ -569,6 +588,13 @@ router.put('/:id', authMiddleware, async (req, res) => {
     }
   }
 
+  // Eliminada = permanente. Ningún PUT puede modificarla, ni reactivarla —
+  // tampoco el admin: si de verdad hay que deshacerlo, es una operación
+  // directa en la base de datos, no un camino de la API (ver DELETE-4).
+  if (estaEliminada(bolsa)) {
+    return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede modificarse.' });
+  }
+
   // co2_salvado_kg NO está en esta lista a propósito: es un campo derivado. Lo
   // recalcula el backend desde peso y categoría (más abajo), nunca lo manda el
   // cliente — si el restaurante pudiera enviarlo, podría publicar el impacto
@@ -580,6 +606,18 @@ router.put('/:id', authMiddleware, async (req, res) => {
     'es_destacado','es_mas_vendido','es_precio_bajo','peso_estimado_kg'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
+
+  // Invariante de backend, independiente del frontend: el switch "activo" (o
+  // cualquier llamada que solo mande ese campo) nunca puede, por sí solo,
+  // activar una publicación que el admin no aprobó — ni pendiente ni
+  // rechazada. La corrección de una rechazada (que SÍ restaura activo=true
+  // como parte de reenviarla a revisión) no pasa por aquí: ese camino cambia
+  // más campos que solo `activo` (ver activarSinAprobacionEsInvalido).
+  if (activarSinAprobacionEsInvalido(bolsa, updates)) {
+    return res.status(409).json({
+      error: 'Esta publicación no está aprobada. No se puede activar hasta que un administrador la apruebe.',
+    });
+  }
 
   // Estado de revisión resultante (services/publicaciones.js). Los restaurantes
   // nunca fijan estado_aprobacion por su cuenta: `campos` no lo incluye, y aquí
@@ -688,23 +726,62 @@ router.put('/:id', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// DELETE /api/bolsas/:id — desactivar bolsa
+// DELETE /api/bolsas/:id — eliminación LÓGICA de la publicación.
+//
+// No es un hard delete: pedido_items.bolsa_id es NOT NULL REFERENCES
+// bolsas(id) sin ON DELETE CASCADE (sql/cubo-pago-schema.sql) — un DELETE
+// físico sobre una bolsa con pedidos históricos fallaría por integridad
+// referencial, y aunque no los tuviera, dejaría huérfanas las filas de
+// `favoritos` que la referencian por `referencia_id` (sin FK real). Se marca
+// `eliminado_en` (permanente, nunca se deshace) en vez de borrar la fila:
+// services/publicaciones.js la excluye de TODO — feed público, detalle,
+// panel del restaurante (mi_negocio=true) y cola del admin — y
+// PUT /api/bolsas/:id rechaza cualquier intento de modificarla después.
 router.delete('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa } = await supabase
     .from('bolsas')
-    .select('negocio_id, negocios(propietario_id)')
+    .select('negocio_id, eliminado_en, negocios(propietario_id)')
     .eq('id', req.params.id)
     .single();
   if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
   if (bolsa.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
-  // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
-  // de limpieza (server.js). Si la columna aún no existe, reintentar sin ella.
-  const { error } = await supabase.from('bolsas')
-    .update({ activo: false, inactivo_desde: new Date().toISOString() })
-    .eq('id', req.params.id);
-  if (error) await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
-  res.json({ ok: true });
+
+  // Idempotente: repetir el DELETE sobre algo ya eliminado no es un error ni
+  // vuelve a auditar un evento que no ocurrió.
+  if (estaEliminada(bolsa)) {
+    return res.json({ ok: true, tipo: 'ya_eliminada' });
+  }
+
+  const ahora = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('bolsas')
+    .update({ eliminado_en: ahora, eliminado_por: req.usuario.id, activo: false })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) {
+    // Columna eliminado_en/eliminado_por aún no existe (migración
+    // supabase/migrations/20261003230000_bolsas_eliminacion_logica.sql
+    // pendiente de aplicar) — degradar al comportamiento anterior (solo
+    // ocultar) en vez de fallar, nunca inventar la columna.
+    console.warn('[DELETE /bolsas/:id] eliminado_en no disponible aún — solo se oculta, no se elimina:', error.message);
+    const r2 = await supabase.from('bolsas')
+      .update({ activo: false, inactivo_desde: ahora })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (r2.error) await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
+    return res.json({ ok: true, tipo: 'oculta_sin_migracion', data: r2.data });
+  }
+
+  enqueueEventBestEffort({
+    eventType: 'publicacion.eliminada', aggregateType: 'bolsa', aggregateId: req.params.id,
+    payload: { negocio_id: bolsa.negocio_id, actor_usuario_id: req.usuario.id, actor_rol: req.usuario.rol },
+  });
+
+  res.json({ ok: true, tipo: 'eliminada', data });
 });
 
 async function notificarFavoritos(negocioId, bolsaNombre, bolsaId) {

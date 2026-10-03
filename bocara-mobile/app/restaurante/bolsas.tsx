@@ -8,11 +8,12 @@ import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
+import HoraPicker from '@/components/HoraPicker';
 import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 import {
   estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
-  horaParaFormulario,
+  horaParaFormulario, toggleVisibilidadBloqueado,
   type ClaveEstado,
 } from '@/src/utils/estadoPublicacion';
 
@@ -353,15 +354,33 @@ export default function BolsasRestauranteScreen() {
     }
   }
 
-  async function eliminar(id: string) {
+  // Eliminar es DISTINTO del switch "activo": no oculta, elimina de verdad.
+  // Deja de existir para el panel del restaurante, para el admin y para el
+  // cliente, y no se puede reactivar después (backend/routes/bolsas.js DELETE
+  // /api/bolsas/:id — eliminación lógica, nunca reversible desde la app).
+  async function eliminar(id: string, nombre: string) {
+    const mensaje = `Vas a eliminar "${nombre}" de forma permanente. Dejará de aparecer en tu panel, en el panel del administrador y para los clientes. Esta acción no se puede deshacer.`;
+
+    async function confirmarYEliminar() {
+      try {
+        await bolsasAPI.eliminar(id);
+        // Optimista: la tarjeta desaparece al instante, sin esperar la
+        // recarga de red (que igual corre después, para quedar consistente
+        // con el servidor si algo más cambió mientras tanto).
+        setItems(prev => prev.filter(i => i.id !== id));
+        cargar();
+      } catch (e: any) {
+        alertar(e.message || 'No se pudo eliminar la publicación.');
+      }
+    }
+
     if (Platform.OS === 'web') {
-      if (!(window as any).confirm('¿Eliminar este elemento? Esta acción no se puede deshacer.')) return;
-      try { await bolsasAPI.eliminar(id); cargar(); } catch (e: any) { (window as any).alert(e.message || 'Error al eliminar'); }
+      if ((window as any).confirm(mensaje)) await confirmarYEliminar();
       return;
     }
-    Alert.alert('Eliminar', '¿Eliminar este elemento?', [
+    Alert.alert('Eliminar publicación', mensaje, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => bolsasAPI.eliminar(id).then(cargar) },
+      { text: 'Eliminar', style: 'destructive', onPress: confirmarYEliminar },
     ]);
   }
 
@@ -424,12 +443,12 @@ export default function BolsasRestauranteScreen() {
           // vuelve a funcionar con normalidad para que el restaurante pueda corregir.
           const enRevisionInicial = bloqueadaParaEditar(b);
           const estado = estadoPublicacion(b);
-          // El switch de visibilidad, en cambio, debe quedarse bloqueado durante
-          // TODA la revisión (inicial o "pedir cambios" aún sin reenviar) — no solo
-          // la inicial. Antes se desbloqueaba en cuanto había motivo_rechazo, así
-          // que se podía activar/desactivar una publicación que el admin todavía no
-          // había vuelto a aprobar.
-          const enRevision = b.estado_aprobacion === 'pendiente';
+          // El switch de visibilidad debe quedarse bloqueado mientras la
+          // publicación no esté aprobada — pendiente O rechazada, no solo
+          // pendiente (antes una rechazada se podía "activar" con el switch;
+          // el backend ya lo rechaza igual, pero el control debe verse y
+          // comportarse como deshabilitado, no solo fallar en silencio).
+          const enRevision = toggleVisibilidadBloqueado(b);
           return (
           <View key={b.id} style={[s.card, !b.activo && s.cardInactiva]}>
             <View style={s.cardRow}>
@@ -470,7 +489,11 @@ export default function BolsasRestauranteScreen() {
 
             <View style={s.cardActions}>
               <Switch
-                value={!!b.activo}
+                // Forzado OFF mientras no esté aprobada: no mostrar "encendido" un
+                // activo=true que puede venir de una corrección reenviada a
+                // revisión (ver decidirRevision en el backend) — visualmente debe
+                // leerse igual de bloqueado que lo que de verdad impide el backend.
+                value={enRevision ? false : !!b.activo}
                 disabled={enRevision}
                 onValueChange={() => {
                   if (!b.activo && publicacionVencida(b)) return alertar('El horario de recogida ya venció. Edita la publicación antes de activarla.');
@@ -479,9 +502,13 @@ export default function BolsasRestauranteScreen() {
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
-              {/* Visible a clientes solo si aprobada, activa, vigente y con unidades */}
+              {/* Visible a clientes solo si aprobada, activa, vigente y con unidades.
+                  Rechazada siempre dice "No visible" explícitamente (no "En
+                  revisión": ya hubo una decisión, y fue negativa). */}
               <Text style={s.switchLabel}>
-                {enRevision ? 'En revisión' : estado.visible ? 'Visible' : 'No visible'}
+                {b.estado_aprobacion === 'rechazado' ? 'No visible'
+                  : enRevision ? 'En revisión'
+                  : estado.visible ? 'Visible' : 'No visible'}
               </Text>
               <View style={{ flex: 1 }} />
               <TouchableOpacity
@@ -491,7 +518,7 @@ export default function BolsasRestauranteScreen() {
               >
                 <Text style={[s.editBtnText, enRevisionInicial && s.editBtnTextDisabled]}>{textoBotonEditar(b)}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.deleteBtn} onPress={() => eliminar(b.id)}>
+              <TouchableOpacity style={s.deleteBtn} onPress={() => eliminar(b.id, b.nombre)}>
                 <Text style={s.deleteBtnText}>Eliminar</Text>
               </TouchableOpacity>
             </View>
@@ -638,11 +665,19 @@ export default function BolsasRestauranteScreen() {
             <Text style={s.sectionLabel}>{form.tipo_form === 'cupon' ? '📅 Vigencia' : '⏰ Horario de recogida'}</Text>
             <View style={s.priceRow}>
               <View style={{ flex: 1 }}>
-                <Field label={form.tipo_form === 'cupon' ? 'Válido desde (hora)' : 'Hora inicio'} value={form.hora_recogida_inicio} onChange={set('hora_recogida_inicio')} placeholder="18:00" />
+                <HoraPicker
+                  label={form.tipo_form === 'cupon' ? 'Válido desde (hora) *' : 'Hora inicio *'}
+                  value={form.hora_recogida_inicio}
+                  onChange={set('hora_recogida_inicio')}
+                />
               </View>
               <View style={{ width: 12 }} />
               <View style={{ flex: 1 }}>
-                <Field label={form.tipo_form === 'cupon' ? 'Válido hasta (hora)' : 'Hora fin'} value={form.hora_recogida_fin} onChange={set('hora_recogida_fin')} placeholder="20:00" />
+                <HoraPicker
+                  label={form.tipo_form === 'cupon' ? 'Válido hasta (hora) *' : 'Hora fin *'}
+                  value={form.hora_recogida_fin}
+                  onChange={set('hora_recogida_fin')}
+                />
               </View>
             </View>
 

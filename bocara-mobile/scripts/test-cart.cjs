@@ -289,6 +289,9 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
   const feedback = load('src/utils/cartFeedback.ts', { 'react-native': native });
   const mocks = { react: h.react, 'react-native': native, 'expo-image': { Image: 'Image' }, '@expo/vector-icons': { Ionicons: 'Icon' },
     '@/components/ProductCard': { __esModule: true, default: 'ProductCard', CARD_W: 170 },
+    '@/components/HoraPicker': { __esModule: true, default: function HoraPicker({ label, value, onChange }) {
+      return { type: 'Button', props: { onPress: () => onChange(value), accessibilityLabel: label, children: value } };
+    } },
     'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: effect => { focusEffects.push(effect); }, useLocalSearchParams: () => ({ id: 'bolsa-1' }) },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '@/src/utils/usePublicacionesVigentes': relojMock,

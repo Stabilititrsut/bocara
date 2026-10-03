@@ -29,8 +29,6 @@ export default function AdminContenidoScreen() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [modalRechazo, setModalRechazo] = useState<{ id: string; nombre: string } | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
-  const [modalCambios, setModalCambios] = useState<{ id: string; nombre: string } | null>(null);
-  const [motivoCambios, setMotivoCambios] = useState('');
 
   function showToast(msg: string, ok = true) {
     setToast({ msg, ok });
@@ -109,31 +107,6 @@ export default function AdminContenidoScreen() {
     } finally {
       setProcesando(null);
       setMotivoRechazo('');
-    }
-  }
-
-  async function pedirCambios() {
-    if (!modalCambios) return;
-    const { id, nombre } = modalCambios;
-    setProcesando(id);
-    setModalCambios(null);
-    try {
-      await adminAPI.pedirCambiosBolsa(id, motivoCambios);
-      // A diferencia de aprobar/rechazar, "pedir cambios" NO saca la bolsa de
-      // revisión — la deja en estado_aprobacion='pendiente' a propósito, con
-      // el motivo guardado, para que el restaurante la corrija y un admin la
-      // vuelva a revisar. Por eso sigue apareciendo en /contenido/pendiente:
-      // no es un error, así que se refresca desde el servidor en vez de
-      // sacarla optimistamente de la lista (eso hacía parecer que "se perdía"
-      // el cambio al recargar, cuando en realidad nunca debió desaparecer).
-      await cargar();
-      showToast(`⚠️ Cambios solicitados para "${nombre}". Restaurante notificado.`);
-    } catch (e: any) {
-      setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al pedir cambios' }));
-      showToast(`Error: ${e.message}`, false);
-    } finally {
-      setProcesando(null);
-      setMotivoCambios('');
     }
   }
 
@@ -312,16 +285,9 @@ export default function AdminContenidoScreen() {
                     disabled={procesando === item.id}
                   >
                     {procesando === item.id
-                      ? <ActivityIndicator color={Colors.error} size="small" />
+                      ? <ActivityIndicator color={Colors.white} size="small" />
                       : <Text style={s.btnRechazarText}>✕ Rechazar</Text>
                     }
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[s.btnCambios, procesando === item.id && s.btnDisabled]}
-                    onPress={() => { setModalCambios({ id: item.id, nombre: item.nombre }); setMotivoCambios(''); }}
-                    disabled={procesando === item.id}
-                  >
-                    <Text style={s.btnCambiosText}>⚠ Cambios</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[s.btnAprobar, procesando === item.id && s.btnDisabled]}
@@ -340,33 +306,6 @@ export default function AdminContenidoScreen() {
         )}
         <View style={{ height: 24 }} />
       </ScrollView>
-
-      {/* Modal de pedir cambios */}
-      <Modal visible={!!modalCambios} transparent animationType="slide" onRequestClose={() => setModalCambios(null)}>
-        <View style={s.modalOverlay}>
-          <View style={s.modalCard}>
-            <Text style={s.modalTitle}>⚠️ Pedir cambios en “{modalCambios?.nombre}”</Text>
-            <Text style={s.modalSub}>El restaurante recibirá una notificación con qué debe corregir antes de publicar.</Text>
-            <TextInput
-              style={s.modalInput}
-              placeholder="Ej: La imagen no muestra el producto claramente. Agrega descripción del contenido."
-              placeholderTextColor="#64748B"
-              value={motivoCambios}
-              onChangeText={setMotivoCambios}
-              multiline
-              autoFocus
-            />
-            <View style={s.modalActions}>
-              <TouchableOpacity style={s.modalCancelar} onPress={() => setModalCambios(null)}>
-                <Text style={s.modalCancelarText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.modalRechazar, { backgroundColor: '#B45309' }]} onPress={pedirCambios}>
-                <Text style={s.modalRechazarText}>Enviar solicitud</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       {/* Modal de rechazo */}
       <Modal visible={!!modalRechazo} transparent animationType="slide" onRequestClose={() => setModalRechazo(null)}>
@@ -465,16 +404,10 @@ const s = StyleSheet.create({
   cardActions: { flexDirection: 'row', gap: 10 },
   btnAprobar: { flex: 1, backgroundColor: Colors.green, borderRadius: 12, padding: 14, alignItems: 'center' },
   btnAprobarText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
-  btnRechazar: {
-    flex: 1, backgroundColor: DARK, borderWidth: 1.5, borderColor: Colors.error,
-    borderRadius: 12, padding: 14, alignItems: 'center',
-  },
-  btnRechazarText: { color: Colors.error, fontWeight: '800', fontSize: 14 },
-  btnCambios: {
-    flex: 1, backgroundColor: DARK, borderWidth: 1.5, borderColor: '#B45309',
-    borderRadius: 12, padding: 14, alignItems: 'center',
-  },
-  btnCambiosText: { color: '#F59E0B', fontWeight: '800', fontSize: 14 },
+  // Rechazar: claramente destructivo — fondo rojo, texto blanco (antes era un
+  // outline sobre fondo oscuro, menos explícito que "esto rechaza y notifica").
+  btnRechazar: { flex: 1, backgroundColor: Colors.error, borderRadius: 12, padding: 14, alignItems: 'center' },
+  btnRechazarText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
   btnDisabled: { opacity: 0.5 },
 errorCard: { backgroundColor: '#450A0A', borderRadius: 10, padding: 10, marginBottom: 10, borderWidth: 1, borderColor: '#991B1B' },
   errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },

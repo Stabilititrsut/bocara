@@ -24,6 +24,7 @@ const MOTIVO_RECHAZO_POR_DEFECTO = 'Rechazada por el administrador sin un motivo
 
 // Por qué una publicación no está en el catálogo del cliente.
 const MOTIVOS_NO_VISIBLE = Object.freeze({
+  ELIMINADA: 'eliminada',
   NO_APROBADA: 'no_aprobada',
   INACTIVA: 'inactiva',
   SIN_UNIDADES: 'sin_unidades',
@@ -35,6 +36,15 @@ const MOTIVOS_NO_VISIBLE = Object.freeze({
 // aprobada, igual que hacían las consultas públicas con `estado_aprobacion.is.null`.
 function esAprobada(bolsa) {
   return bolsa?.estado_aprobacion === ESTADOS_APROBACION.APROBADO || bolsa?.estado_aprobacion == null;
+}
+
+// eliminado_en es permanente y nunca lo deshace ningún endpoint (ver DELETE
+// /api/bolsas/:id) — a diferencia de `activo`/estado_aprobacion, que sí
+// pueden volver a cambiar. `== null` cubre tanto NULL real (columna ya
+// migrada, fila no eliminada) como la ausencia total de la columna
+// (despliegue sin la migración aplicada aún: nada puede estar eliminado).
+function estaEliminada(bolsa) {
+  return bolsa?.eliminado_en != null;
 }
 
 // Un negocio solo es navegable para clientes si está activo y, cuando el campo
@@ -53,6 +63,10 @@ function negocioDisponiblePublico(negocio) {
 //   por separado no lo seleccionan.
 function motivosNoVisible(bolsa, { ahora = ahoraGuatemala(), exigirUnidades = true } = {}) {
   const motivos = [];
+  // Primer chequeo, antes que cualquier otro: una eliminada nunca es visible
+  // sin importar su estado_aprobacion/activo/vigencia — no hay combinación de
+  // esos campos que la haga reaparecer.
+  if (estaEliminada(bolsa)) motivos.push(MOTIVOS_NO_VISIBLE.ELIMINADA);
   if (!esAprobada(bolsa)) motivos.push(MOTIVOS_NO_VISIBLE.NO_APROBADA);
   if (bolsa?.activo !== true) motivos.push(MOTIVOS_NO_VISIBLE.INACTIVA);
   if (exigirUnidades && !(Number(bolsa?.cantidad_disponible) > 0)) motivos.push(MOTIVOS_NO_VISIBLE.SIN_UNIDADES);
@@ -158,6 +172,31 @@ function decidirRevision(actual, updates) {
   };
 }
 
+// ── Invariante del switch "activo" ──────────────────────────────────────────
+//
+// esAprobada()/motivosNoVisible() ya garantizan que una pendiente o rechazada
+// nunca se le muestra al cliente, sin importar su `activo` — pero eso por sí
+// solo deja que la propia PETICIÓN de "activar" se acepte y se guarde en la
+// fila, aunque no cambie la visibilidad real. El switch de visibilidad del
+// restaurante (y cualquier llamada directa a la API que mande solo
+// { activo: true }) no debe poder "activar" una publicación que el admin no
+// aprobó — ni aunque el resultado sea inocuo hoy, para no depender de que
+// ninguna otra regla cambie en el futuro (ver tarea "toggle rechazada").
+//
+// A propósito NO se activa cuando `updates` también cambia otros campos: ese
+// es el camino de CORRECCIÓN (decidirRevision más abajo), que sí necesita
+// restaurar `activo=true` sobre una rechazada para que, al aprobarla después,
+// no quede aprobada pero invisible (caso Ola Azul) — ese `activo=true` lo
+// decide el propio backend, nunca lo pide el cliente junto con el resto del
+// formulario (ver bocara-mobile construirPayload, que nunca incluye `activo`).
+function activarSinAprobacionEsInvalido(actual, updates) {
+  if (!updates || typeof updates !== 'object') return false;
+  const claves = Object.keys(updates);
+  const soloActivo = claves.length > 0 && claves.every(c => c === 'activo');
+  const intentaActivar = updates.activo === true || updates.activo === 'true';
+  return soloActivo && intentaActivar && !esAprobada(actual);
+}
+
 module.exports = {
   ESTADOS_APROBACION,
   TIPOS_PUBLICACION,
@@ -165,10 +204,12 @@ module.exports = {
   MOTIVOS_NO_VISIBLE,
   CAMPOS_SIN_REVISION,
   esAprobada,
+  estaEliminada,
   negocioDisponiblePublico,
   motivosNoVisible,
   esVisibleParaCliente,
   filtrarVisiblesParaCliente,
   camposCambiados,
   decidirRevision,
+  activarSinAprobacionEsInvalido,
 };

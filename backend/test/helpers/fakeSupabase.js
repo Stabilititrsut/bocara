@@ -21,6 +21,8 @@ const DEFAULTS = {
     estado_aprobacion: 'aprobado',
     motivo_rechazo: null,
     inactivo_desde: null,
+    eliminado_en: null,
+    eliminado_por: null,
     fecha_caducidad: null,
     created_at: new Date().toISOString(),
   }),

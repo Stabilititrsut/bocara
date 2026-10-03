@@ -147,7 +147,8 @@ test('rechazo: pendiente → rechazado, no visible, motivo guardado y auditado',
 
 test('rechazo sin motivo explícito deja un motivo legible, nunca vacío ni el de una revisión anterior', async () => {
   const p = await crear(promo());
-  await pedir('PUT', `/api/admin/bolsas/${p.id}/pedir-cambios`, { como: IDS.admin, body: { motivo: 'motivo viejo' } });
+  await rechazar(p.id, 'motivo viejo');
+  await editar(p.id, { descripcion: 'corregida' }); // reenvío: pendiente otra vez
   await rechazar(p.id, '');
   assert.ok(fila(p.id).motivo_rechazo, 'motivo_rechazo presente');
   assert.notEqual(fila(p.id).motivo_rechazo, 'motivo viejo');

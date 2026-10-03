@@ -101,6 +101,12 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '@/components/ProductCard': { __esModule: true, default: 'ProductCard', CARD_W: 170 },
+    // Doble mínimo: un botón con el valor actual como texto, para poder leer
+    // y "tocar" la hora seleccionada sin reimplementar el picker real. Nombrada
+    // (no una arrow anónima) para que inputs() la reconozca igual que a Field.
+    '@/components/HoraPicker': { __esModule: true, default: function HoraPicker({ label, value, onChange }) {
+      return React.createElement('Button', { onPress: () => onChange(value), accessibilityLabel: label }, value);
+    } },
     ...mocks,
   }).default;
   const app = {
@@ -332,7 +338,8 @@ function pantallaDisponibles(lista, api = {}) {
 }
 // TextInput directo, o el componente Field de restaurante/bolsas.tsx (value + onChange).
 const inputs = tree => walk(tree)
-  .filter(n => n.type === 'Input' || (typeof n.type === 'function' && n.type.name === 'Field' && 'value' in n.props))
+  .filter(n => n.type === 'Input'
+    || (typeof n.type === 'function' && (n.type.name === 'Field' || n.type.name === 'HoraPicker') && 'value' in n.props))
   .map(n => (n.type === 'Input' ? n : { props: { value: n.props.value, onChangeText: n.props.onChange } }));
 const modalVisible = tree => walk(tree).some(n => n.type === 'Modal' && n.props.visible);
 const boton = (tree, re) => botones(tree).find(b => re.test(b.texto));
@@ -512,6 +519,48 @@ test('Admin: recarga la cola al recuperar el foco', async () => {
   const app = montar('app/admin/contenido.tsx', { mocks: { '@/src/services/api': { adminAPI: { contenidoPendiente: async () => { llamadas++; return { data: [] }; } } } } });
   await app.enfocar(); await app.enfocar();
   assert.equal(llamadas, 2);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ADMIN-1/2/3 — tarjeta pendiente: solo Rechazar + Aprobar, sin "Cambios"
+// ════════════════════════════════════════════════════════════════════════════
+
+test('ADMIN-1/2: la tarjeta pendiente muestra exactamente Rechazar y Aprobar — ningún botón "Cambios"', () => {
+  const app = pantallaContenido({ visible_cliente: true, motivos_no_visible: [] });
+  // Los botones del modal de rechazo ("Cancelar"/"Rechazar y notificar") están
+  // siempre en el árbol en este harness (el doble de Modal no condiciona sus
+  // hijos por `visible`) — se acota a los dos botones de la propia tarjeta.
+  const btns = botones(app.tree).filter(b => /^✕ Rechazar$|^✓ Aprobar$/.test(b.texto));
+  assert.equal(btns.length, 2, `se esperaban los 2 botones de la tarjeta, hay ${btns.length}`);
+  assert.ok(!botones(app.tree).some(b => /Cambios/i.test(b.texto)), 'no debe existir ningún botón "Cambios" en ningún lado de la pantalla');
+});
+
+test('ADMIN-2: no queda código muerto de "pedir cambios" (handler, modal, estado ni llamada a la API)', () => {
+  const fuente = fs.readFileSync(path.join(root, 'app/admin/contenido.tsx'), 'utf8');
+  for (const patron of [/pedirCambiosBolsa/, /modalCambios/, /motivoCambios/, /function pedirCambios\b/, /Pedir cambios/i]) {
+    assert.doesNotMatch(fuente, patron, `admin/contenido.tsx no debe contener ${patron}`);
+  }
+});
+
+test('ADMIN-3: Rechazar usa fondo rojo con texto blanco (ya exige motivo — ver test de arriba)', () => {
+  // Colores reales (no el doble vacío { Colors: {} } de montar()): sin esto, la
+  // comparación sería undefined === undefined y pasaría sin probar nada.
+  const ColorsReal = load('constants/Colors.ts').Colors;
+  const app = montar('app/admin/contenido.tsx', {
+    forcedStates: [[{ id: 'b1', nombre: '2x1 Ceviche', activo: true, negocios: { nombre: 'Ola Azul' } }], false],
+    mocks: {
+      '@/constants/Colors': { Colors: ColorsReal },
+      '@/src/services/api': { adminAPI: { contenidoPendiente: async () => ({ data: [] }) } },
+    },
+  });
+  const btnRechazar = botones(app.tree).find(b => /Rechazar/.test(b.texto));
+  assert.ok(btnRechazar, 'botón Rechazar');
+  const nodo = walk(app.tree).find(n => n.type === 'Button' && n.props.onPress === btnRechazar.onPress);
+  const estilo = [nodo.props.style].flat(Infinity).filter(Boolean).reduce((acc, s) => ({ ...acc, ...s }), {});
+  assert.equal(estilo.backgroundColor, ColorsReal.error, 'fondo rojo (Colors.error)');
+  const textoNodo = walk(nodo).find(n => n.type === 'Text');
+  const estiloTexto = [textoNodo.props.style].flat(Infinity).filter(Boolean).reduce((acc, s) => ({ ...acc, ...s }), {});
+  assert.equal(estiloTexto.color, ColorsReal.white, 'texto blanco');
 });
 
 // ════════════════════════════════════════════════════════════════════════════
