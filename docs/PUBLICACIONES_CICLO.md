@@ -106,6 +106,15 @@ no funcionaba", se creó B correcta → aprobada → B no apareció al cliente.
 7. La pantalla de Promociones del restaurante (`restaurante/cupones.tsx`) no
    mostraba estado ni motivo de rechazo y no tenía forma de reactivar: el
    restaurante no podía saber por qué ni corregir la visibilidad → recreó.
+8. **"Modificar no funciona" también en el cliente del restaurante:** al abrir
+   "Editar", el formulario cargaba la hora tal como la devuelve una columna
+   `time` (`'18:00:00'`), y `normalizarHora` (que no acepta segundos, a
+   propósito) la rechazaba: Guardar fallaba con "Hora de inicio inválida" sin
+   llegar al backend. Corregido con `horaParaFormulario`
+   (`src/utils/estadoPublicacion.ts`), que carga `'18:00'`.
+9. En web, `restaurante/cupones.tsx` usaba `Alert.alert`, que en
+   react-native-web no muestra nada: ni los errores del backend ni la
+   confirmación de guardado se veían, y "Desactivar" no hacía nada.
 
 Con el backend actual, B (nueva, creada bien y aprobada) **sí** se sirve en
 todos los endpoints si está activa y vigente (probado). Por eso lo que ocultó B
@@ -143,7 +152,32 @@ Las filas que ya quedaron "aprobadas pero inactivas" por el bug no se tocan
 automáticamente (ninguna migración de datos): el restaurante las activa desde su
 panel (switch en Disponibles o el nuevo botón **Activar** en Promociones).
 
-## 5. Pruebas
+## 5. Frontend (FRONT-1)
+
+- **Restaurante** (`restaurante/bolsas.tsx` y `restaurante/cupones.tsx`): cada
+  tarjeta muestra un estado — Pendiente, Pendiente · cambios solicitados,
+  Rechazada, Aprobada, Inactiva, Vencida, Agotada — con qué hacer para que se
+  vea, y el motivo del admin. Una rechazada ofrece **Corregir**, que edita la
+  MISMA publicación (`PUT /bolsas/:id`, nunca una copia); al guardar, la
+  tarjeta pasa a Pendiente al instante con la respuesta del backend. El
+  formulario avisa qué pasará al guardar (reenvío a revisión, o "solo unidades
+  no requiere revisión"). En una aprobada viajan **solo los campos que el
+  usuario cambió**: el formulario completa valores derivados (p. ej.
+  `es_descuento` a partir de los precios) que, enviados, el backend vería como
+  cambios de contenido. El tipo se puede cambiar también al editar.
+- **Admin** (`admin/contenido.tsx`): el aviso al aprobar usa `visible_cliente`
+  y `motivos_no_visible`; el motivo de rechazo es **obligatorio** en la UI; la
+  cola se recarga al recuperar el foco.
+- **Cliente**: Home, Tiendas, Promociones, tienda y ficha del negocio vuelven
+  a pedir datos al recuperar el foco (sin realtime de publicaciones: no forma
+  parte del contrato actual). El único filtro local es la vigencia horaria
+  (`usePublicacionesVigentes`), la misma regla del backend aplicada al reloj,
+  para que una lista abierta no muestre algo que venció mientras tanto; nunca
+  oculta lo que el backend considera vigente (ante una hora que no entiende,
+  muestra). El tipo sale siempre de `tipo` (`cupon` → Promoción, `bolsa` →
+  Tiempo limitado), nunca de las banderas de menú.
+
+## 6. Pruebas
 
 - `backend/test/publicacionesCiclo.test.js` — ciclo completo por HTTP con los
   routers reales sobre Supabase en memoria (`test/helpers/`): nueva, rechazo,
@@ -151,11 +185,16 @@ panel (switch en Disponibles o el nuevo botón **Activar** en Promociones).
   modificación de aprobada, matriz de estados, tipos, fallbacks y regresión
   (stock real, horario, unidades, negocio, filtros, CO₂).
 - `backend/test/publicaciones.test.js` — reglas puras del servicio.
-- `bocara-mobile/scripts/test-ciclo-publicaciones.cjs` — refetch al foco en
-  Home/Tiendas/Promociones, estados y acciones en Promociones del restaurante,
-  aviso de visibilidad en el panel admin.
+- `bocara-mobile/scripts/test-ciclo-publicaciones.cjs` — pantallas reales:
+  estados y acciones del restaurante (ver, Corregir, reenviar, solo unidades,
+  error y doble submit), admin (aviso de visibilidad, motivo obligatorio),
+  refetch al foco del cliente y tipos. Incluye **integración real**: las
+  pantallas del restaurante, admin y cliente hablan por HTTP con los routers
+  del backend (Ola Azul A/B, rechazada → corregida → aprobada → visible,
+  matriz de estados y tipos). Si las dependencias del backend no están
+  instaladas, esos tests salen SKIPPED (nunca PASS).
 
-## 6. Guía de pruebas manuales
+## 7. Guía de pruebas manuales
 
 Usar un negocio de prueba (no Ola Azul real) en el entorno de pruebas. Horario
 amplio (p. ej. 08:00–23:00) salvo donde se indique.
@@ -163,7 +202,7 @@ amplio (p. ej. 08:00–23:00) salvo donde se indique.
 **PM1 — Ola Azul (recrear).** 1) Comercio: Promociones → + Nueva → "2x1
 Ceviche", precio original 120, con descuento 110 (mal) → Guardar → mensaje
 "enviada a revisión" y tarjeta **En revisión**. 2) Admin: Contenido pendiente →
-Rechazar con motivo "Un 2x1 de Q120 cuesta Q60". 3) Comercio: la tarjeta muestra
+Rechazar (sin motivo el botón no se habilita) con motivo "Un 2x1 de Q120 cuesta Q60". 3) Comercio: la tarjeta muestra
 **✕ Rechazada** y el motivo. 4) Crear otra "2x1 Ceviche" con descuento 60 →
 Guardar (no debe dar error de duplicado). 5) Admin: Aprobar → aviso "aprobado y
 visible para clientes". 6) Cliente (app ya abierta): ir a Home, Tiendas y
@@ -173,7 +212,7 @@ Promociones **sin** pull-to-refresh → aparece Ola Azul y la promo de Q60.
 rechazada en ninguna.
 
 **PM2 — Corregir la rechazada.** Rechazar una promo → comercio pulsa
-**Corregir**, cambia el precio y guarda → mensaje "volvió a revisión", tarjeta
+**Corregir** (el formulario trae los datos y las horas sin segundos), cambia el precio y guarda → mensaje "volvió a revisión", tarjeta
 **En revisión** → Admin aprueba → aviso "visible" → cliente la ve (Home,
 Tiendas, Promociones, tienda, detalle) con el precio nuevo.
 

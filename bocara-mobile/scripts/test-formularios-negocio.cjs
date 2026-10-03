@@ -92,6 +92,7 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
     react: h.react, 'react-native': native, 'expo-image': { Image: 'Image' }, '@expo/vector-icons': { Ionicons: 'Icon' },
     'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: () => {} },
     '@/src/utils/horarioRecogida': horarioReal,
+    '@/src/utils/estadoPublicacion': load('src/utils/estadoPublicacion.ts', { './horarioRecogida': horarioReal }),
     '@/src/utils/pickImage': {},
     '@/src/utils/hora': load('src/utils/hora.ts'),
     '@/constants/Colors': { Colors: {} },

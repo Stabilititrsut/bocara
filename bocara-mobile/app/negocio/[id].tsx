@@ -1,6 +1,6 @@
 import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
 import { volver } from '@/src/utils/backNavigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Linking, ActivityIndicator, Platform, StatusBar,
@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, pedidosAPI, favoritosAPI, resenasAPI } from '@/src/services/api';
 import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
@@ -125,6 +125,19 @@ export default function NegocioDetailScreen() {
       setImpacto(impactoRes.data);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
+
+  // Al volver a la ficha se re-piden sus publicaciones en silencio (misma regla
+  // que app/tienda/[id].tsx): una recién aprobada aparece sin recargar. La
+  // primera vez ya la cubre la carga inicial. Un error conserva lo último bueno.
+  const primerFoco = useRef(true);
+  useFocusEffect(useCallback(() => {
+    if (primerFoco.current) { primerFoco.current = false; return; }
+    if (!id) return;
+    negociosAPI.detalleCompleto(id).then((r) => {
+      setTiempoLimitado(r.data?.bolsas?.tiempo_limitado || []);
+      setPromocion(r.data?.bolsas?.promocion || []);
+    }).catch(() => {});
+  }, [id]));
 
   // Si previos se vacía y el filtro activo es 'previos', reset
   useEffect(() => {

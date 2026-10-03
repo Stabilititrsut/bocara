@@ -1,5 +1,5 @@
 import { publicacionVencida } from '@/src/utils/horarioRecogida';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal,
@@ -9,6 +9,10 @@ import { bolsasAPI, negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import type { Bolsa, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
+import {
+  estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
+  horaParaFormulario,
+} from '@/src/utils/estadoPublicacion';
 
 // Promoción tal como la devuelve GET /bolsas?mi_negocio=true: incluye el estado
 // de revisión del admin, igual que BolsaRestaurante en restaurante/bolsas.tsx.
@@ -45,6 +49,29 @@ const FORM_INIT: CuponForm = {
   hora_recogida_fin: '20:00',
 };
 
+// Alert.alert no hace nada en react-native-web: en web se usa el diálogo del
+// navegador (mismo criterio que restaurante/bolsas.tsx). Sin esto, en la app web
+// no se veían ni los errores del backend ni la confirmación de guardado.
+function avisar(titulo: string, mensaje: string) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') window.alert(mensaje);
+  else Alert.alert(titulo, mensaje);
+}
+
+function construirPayload(form: CuponForm, horaInicio: string, horaFin: string): CrearBolsaPayload {
+  return {
+    nombre: form.nombre.trim(),
+    contenido: form.contenido.trim().toUpperCase(),
+    categoria: form.categoria,
+    descripcion: form.descripcion.trim(),
+    precio_original: parseFloat(form.precio_original) || 0,
+    precio_descuento: parseFloat(form.precio_descuento),
+    cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
+    hora_recogida_inicio: horaInicio,
+    hora_recogida_fin: horaFin,
+    tipo: 'cupon',
+  };
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <View style={{ marginBottom: 14 }}>
@@ -63,6 +90,10 @@ export default function CuponesRestauranteScreen() {
   const [saving, setSaving] = useState(false);
   const [negocioId, setNegocioId] = useState<string>('');
   const [form, setForm] = useState<CuponForm>({ ...FORM_INIT });
+  const [errorGuardar, setErrorGuardar] = useState('');
+  // Payload que el formulario cargó al abrir "Editar": base para mandar solo
+  // los campos que el usuario cambió (ver payloadDeEdicion).
+  const cargadoAlEditar = useRef<CrearBolsaPayload | null>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -85,13 +116,16 @@ export default function CuponesRestauranteScreen() {
 
   function abrirNuevo() {
     setEditando(null);
+    setErrorGuardar('');
+    cargadoAlEditar.current = null;
     setForm({ ...FORM_INIT });
     setModal(true);
   }
 
   function abrirEditar(c: CuponRestaurante) {
     setEditando(c);
-    setForm({
+    setErrorGuardar('');
+    const cargado: CuponForm = {
       nombre: c.nombre || '',
       contenido: c.contenido || '',
       categoria: c.categoria || 'Porcentaje',
@@ -99,62 +133,64 @@ export default function CuponesRestauranteScreen() {
       precio_original: String(c.precio_original || ''),
       precio_descuento: String(c.precio_descuento || ''),
       cantidad_disponible: String(c.cantidad_disponible || '1'),
-      hora_recogida_inicio: c.hora_recogida_inicio || '18:00',
-      hora_recogida_fin: c.hora_recogida_fin || '20:00',
-    });
+      hora_recogida_inicio: horaParaFormulario(c.hora_recogida_inicio, '18:00'),
+      hora_recogida_fin: horaParaFormulario(c.hora_recogida_fin, '20:00'),
+    };
+    cargadoAlEditar.current = construirPayload(cargado,
+      normalizarHora(cargado.hora_recogida_inicio) || cargado.hora_recogida_inicio,
+      normalizarHora(cargado.hora_recogida_fin) || cargado.hora_recogida_fin);
+    setForm(cargado);
     setModal(true);
   }
 
   async function guardar() {
     if (saving) return;
     if (publicacionVencida(form)) {
-      const mensaje = 'El horario de recogida ya venció. Corrígelo antes de publicar.';
-      if (Platform.OS === 'web' && typeof window !== 'undefined') window.alert(mensaje);
-      else Alert.alert('Publicación vencida', mensaje);
-      return;
+      return avisar('Publicación vencida', 'El horario de recogida ya venció. Corrígelo antes de publicar.');
     }
     if (!form.nombre.trim() || !form.contenido.trim()) {
-      return Alert.alert('Campos requeridos', 'Nombre y código del cupón son obligatorios');
+      return avisar('Campos requeridos', 'Nombre y código del cupón son obligatorios');
     }
     if (form.precio_descuento == null || form.precio_descuento === '') {
-      return Alert.alert('Campos requeridos', 'El precio con descuento es obligatorio');
+      return avisar('Campos requeridos', 'El precio con descuento es obligatorio');
     }
     const horaInicio = normalizarHora(form.hora_recogida_inicio);
-    if (!horaInicio) return Alert.alert('Error', 'Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+    if (!horaInicio) return avisar('Error', 'Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     const horaFin = normalizarHora(form.hora_recogida_fin);
-    if (!horaFin) return Alert.alert('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
-    setSaving(true);
+    if (!horaFin) return avisar('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     // negocio_id solo se manda al crear: PUT /bolsas/:id lo ignora (no está en
     // su allowlist de campos editables), así que mandarlo al editar no
     // cambiaría nada — ver ActualizarBolsaPayload en src/types/index.ts.
-    const payload: CrearBolsaPayload = {
-      nombre: form.nombre.trim(),
-      contenido: form.contenido.trim().toUpperCase(),
-      categoria: form.categoria,
-      descripcion: form.descripcion.trim(),
-      precio_original: parseFloat(form.precio_original) || 0,
-      precio_descuento: parseFloat(form.precio_descuento),
-      cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-      hora_recogida_inicio: horaInicio,
-      hora_recogida_fin: horaFin,
-      tipo: 'cupon',
-    };
-    try {
-      // Toda promoción nueva o corregida pasa por revisión del admin antes de
-      // verse: el mensaje lo dice según el estado que devuelve el backend.
-      const res = editando
-        ? await bolsasAPI.actualizar(editando.id, payload)
-        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
-      const enRevision = res.data?.estado_aprobacion === 'pendiente';
-      Alert.alert('Listo', enRevision
-        ? (editando
-          ? 'Cambios guardados. La promoción volvió a revisión y no será visible hasta que el administrador la apruebe.'
-          : 'Promoción creada y enviada a revisión del administrador.')
-        : (editando ? 'Promoción actualizada' : 'Promoción publicada'));
+    const payload = construirPayload(form, horaInicio, horaFin);
+    const cambios = editando ? payloadDeEdicion(editando, payload, cargadoAlEditar.current) : payload;
+    if (editando && Object.keys(cambios).length === 0) {
       setModal(false);
+      return avisar('Sin cambios', 'No modificaste ningún dato.');
+    }
+    setSaving(true);
+    setErrorGuardar('');
+    try {
+      // Siempre se edita la MISMA publicación (PUT /bolsas/:id), nunca se crea
+      // una copia: corregir una rechazada la devuelve a Pendiente.
+      const res = editando
+        ? await bolsasAPI.actualizar(editando.id, cambios)
+        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
+      // La tarjeta refleja el estado devuelto por el backend al instante (p. ej.
+      // Rechazada → Pendiente), sin esperar a la recarga de abajo.
+      const guardada: CuponRestaurante | undefined = res.data?.id ? res.data : undefined;
+      if (guardada) {
+        setCupones(prev => editando
+          ? prev.map(c => (c.id === guardada.id ? { ...c, ...guardada } : c))
+          : [guardada, ...prev]);
+      }
+      setModal(false);
+      avisar('Listo', mensajeTrasGuardar(res.data?.estado_aprobacion, !!editando));
       cargar();
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      // El formulario queda abierto con lo que el usuario escribió.
+      const mensaje = e?.message || 'No se pudo guardar la promoción';
+      setErrorGuardar(mensaje);
+      avisar('Error', mensaje);
     } finally {
       setSaving(false);
     }
@@ -165,17 +201,22 @@ export default function CuponesRestauranteScreen() {
   // la manda a revisión.
   async function activar(c: CuponRestaurante) {
     if (publicacionVencida(c)) {
-      return Alert.alert('Promoción vencida', 'El horario ya venció. Edítala para actualizarlo antes de activarla.');
+      return avisar('Promoción vencida', 'El horario ya venció. Edítala para actualizarlo antes de activarla.');
     }
     try {
       await bolsasAPI.actualizar(c.id, { activo: true });
       cargar();
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo activar la promoción');
+      avisar('Error', e.message || 'No se pudo activar la promoción');
     }
   }
 
   async function desactivar(id: string) {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (!window.confirm('¿Seguro que quieres desactivar este cupón?')) return;
+      try { await bolsasAPI.eliminar(id); cargar(); } catch (e: any) { avisar('Error', e.message || 'No se pudo desactivar'); }
+      return;
+    }
     Alert.alert('Desactivar cupón', '¿Seguro que quieres desactivar este cupón?', [
       { text: 'Cancelar', style: 'cancel' },
       {
@@ -220,8 +261,7 @@ export default function CuponesRestauranteScreen() {
             : 0;
           const aprobada = c.estado_aprobacion === 'aprobado' || !c.estado_aprobacion;
           const rechazada = c.estado_aprobacion === 'rechazado';
-          const enRevision = c.estado_aprobacion === 'pendiente';
-          const enRevisionInicial = enRevision && !c.motivo_rechazo;
+          const estado = estadoPublicacion(c);
           return (
             <View key={c.id} style={s.card}>
               <View style={s.cardTop}>
@@ -240,17 +280,10 @@ export default function CuponesRestauranteScreen() {
                   </View>
                   <Text style={s.tipo}>{c.categoria}</Text>
                   <View style={s.estadoRow}>
-                    {enRevision && <Text style={[s.estado, s.estadoRevision]}>En revisión</Text>}
-                    {rechazada && <Text style={[s.estado, s.estadoRechazada]}>✕ Rechazada</Text>}
-                    {aprobada && c.activo && <Text style={[s.estado, s.estadoVisible]}>✓ Visible</Text>}
-                    {aprobada && !c.activo && <Text style={[s.estado, s.estadoOculta]}>Oculta</Text>}
+                    <Text style={[s.estado, ESTILO_ESTADO[estado.clave]]}>{estado.etiqueta}</Text>
+                    {estado.visible && <Text style={[s.estado, s.estadoVisible]}>Visible para clientes</Text>}
                   </View>
-                  {rechazada && (
-                    <Text style={s.ayuda}>Corrígela y guárdala para enviarla de nuevo a revisión.</Text>
-                  )}
-                  {enRevision && c.motivo_rechazo && (
-                    <Text style={s.ayuda}>El administrador pidió cambios — corrige y guarda para reenviar a revisión.</Text>
-                  )}
+                  {estado.ayuda ? <Text style={s.ayuda}>{estado.ayuda}</Text> : null}
                   {c.motivo_rechazo ? <Text style={s.motivo}>Motivo: {c.motivo_rechazo}</Text> : null}
                   {c.descripcion ? <Text style={s.descripcion}>{c.descripcion}</Text> : null}
                 </View>
@@ -269,9 +302,9 @@ export default function CuponesRestauranteScreen() {
               </View>
               <View style={s.cardActions}>
                 {/* En revisión inicial el backend responde 409 a cualquier edición. */}
-                {!enRevisionInicial && (
+                {!bloqueadaParaEditar(c) && (
                   <TouchableOpacity style={s.btnEditar} onPress={() => abrirEditar(c)}>
-                    <Text style={s.btnEditarText}>✏️ {rechazada ? 'Corregir' : 'Editar'}</Text>
+                    <Text style={s.btnEditarText}>✏️ {textoBotonEditar(c)}</Text>
                   </TouchableOpacity>
                 )}
                 {c.activo && !rechazada && (
@@ -304,6 +337,9 @@ export default function CuponesRestauranteScreen() {
           </View>
 
           <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+            {editando && avisoAlEditar(editando) ? <Text style={s.avisoEdicion}>{avisoAlEditar(editando)}</Text> : null}
+            {editando?.motivo_rechazo ? <Text style={s.motivo}>Motivo del administrador: {editando.motivo_rechazo}</Text> : null}
+            {errorGuardar ? <Text style={s.errorGuardar}>{errorGuardar}</Text> : null}
             <Field label="Nombre del cupón *">
               <TextInput style={s.input} value={form.nombre} onChangeText={set('nombre')} placeholder="Ej. Descuento miércoles" placeholderTextColor={Colors.textLight} />
             </Field>
@@ -415,6 +451,8 @@ const s = StyleSheet.create({
   estadoOculta: { backgroundColor: Colors.border, color: Colors.textSecondary },
   ayuda: { fontSize: 12, color: Colors.textSecondary, marginTop: 4 },
   motivo: { fontSize: 12, color: Colors.error, marginTop: 4, fontWeight: '600' },
+  avisoEdicion: { fontSize: 13, color: '#92400E', backgroundColor: '#FEF3C7', borderRadius: 10, padding: 10, marginBottom: 12 },
+  errorGuardar: { fontSize: 13, color: Colors.error, backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12, fontWeight: '600' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: Colors.border, backgroundColor: Colors.white },
   cancelText: { fontSize: 16, color: Colors.textSecondary },
   modalTitle: { fontSize: 17, fontWeight: '800', color: Colors.brown },
@@ -428,3 +466,13 @@ const s = StyleSheet.create({
   tipoChipText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
   tipoChipTextActive: { color: Colors.white, fontWeight: '800' },
 });
+
+const ESTILO_ESTADO = {
+  pendiente: s.estadoRevision,
+  cambios: s.estadoRevision,
+  rechazada: s.estadoRechazada,
+  inactiva: s.estadoOculta,
+  vencida: s.estadoOculta,
+  agotada: s.estadoOculta,
+  aprobada: s.estadoVisible,
+};

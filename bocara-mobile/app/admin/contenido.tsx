@@ -1,9 +1,10 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, TextInput, RefreshControl, Modal,
 } from 'react-native';
 import { Image } from 'expo-image';
+import { useFocusEffect } from 'expo-router';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -46,7 +47,9 @@ export default function AdminContenidoScreen() {
     }
   }, []);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  // Al recuperar el foco: un restaurante pudo reenviar una corrección mientras
+  // el admin estaba en otra pantalla.
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   async function aprobar(id: string, nombre: string) {
     console.log('[contenido] CLICK aprobar', { id, nombre });
@@ -86,16 +89,19 @@ export default function AdminContenidoScreen() {
 
   async function rechazar() {
     if (!modalRechazo) return;
+    // El motivo es lo que el restaurante necesita para corregir: obligatorio.
+    // (El backend guarda uno genérico si llegara vacío, pero no le sirve a nadie.)
+    if (!motivoRechazo.trim()) return;
     const { id, nombre } = modalRechazo;
     setProcesando(id);
     setModalRechazo(null);
     setErroresItem(prev => ({ ...prev, [id]: '' }));
     console.log('[contenido] rechazar →', { id, nombre });
     try {
-      await adminAPI.rechazarBolsa(id, motivoRechazo);
+      await adminAPI.rechazarBolsa(id, motivoRechazo.trim());
       console.log('[contenido] rechazar OK:', id);
       setItems(prev => prev.filter(i => i.id !== id));
-      showToast(`"${nombre}" rechazado. Propietario notificado.`);
+      showToast(`"${nombre}" rechazado: ya no es visible para clientes. Propietario notificado con el motivo.`);
     } catch (e: any) {
       console.error('[contenido] rechazar error:', e.message);
       setErroresItem(prev => ({ ...prev, [id]: e.message || 'Error al rechazar' }));
@@ -367,7 +373,7 @@ export default function AdminContenidoScreen() {
         <View style={s.modalOverlay}>
           <View style={s.modalCard}>
             <Text style={s.modalTitle}>Rechazar “{modalRechazo?.nombre}”</Text>
-            <Text style={s.modalSub}>Escribe el motivo para notificar al propietario (opcional).</Text>
+            <Text style={s.modalSub}>Motivo obligatorio: el restaurante lo verá en su panel para corregir la publicación.</Text>
             <TextInput
               style={s.modalInput}
               placeholder="Ej: Las imágenes no cumplen con los requisitos..."
@@ -381,7 +387,11 @@ export default function AdminContenidoScreen() {
               <TouchableOpacity style={s.modalCancelar} onPress={() => setModalRechazo(null)}>
                 <Text style={s.modalCancelarText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.modalRechazar} onPress={rechazar}>
+              <TouchableOpacity
+                style={[s.modalRechazar, !motivoRechazo.trim() && s.btnDisabled]}
+                onPress={rechazar}
+                disabled={!motivoRechazo.trim()}
+              >
                 <Text style={s.modalRechazarText}>Rechazar y notificar</Text>
               </TouchableOpacity>
             </View>

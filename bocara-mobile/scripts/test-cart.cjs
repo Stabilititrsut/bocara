@@ -294,6 +294,7 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
     '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/context/CartContext': { useCart: () => cart }, '@/src/utils/cartFeedback': feedback,
     '@/src/utils/horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }),
+    '@/src/utils/estadoPublicacion': load('src/utils/estadoPublicacion.ts', { './horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }) }),
     '@/src/utils/stock': stockReal,
     '@/src/utils/tipoPublicacion': tipoPublicacionReal,
     '@/src/context/AuthContext': { useAuth: () => ({ usuario: { rol: 'cliente' } }) },

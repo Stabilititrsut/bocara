@@ -10,6 +10,11 @@ import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
+import {
+  estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
+  horaParaFormulario,
+  type ClaveEstado,
+} from '@/src/utils/estadoPublicacion';
 
 // Bolsa tal como la devuelve GET /bolsas?mi_negocio=true — además de los campos
 // públicos, incluye el estado de revisión del admin (backend/routes/bolsas.js /
@@ -105,6 +110,44 @@ const FORM_INIT: BolsaForm = {
   es_precio_bajo: false,
 };
 
+// Payload que POST/PUT /bolsas esperan a partir del formulario. Se usa para
+// guardar y también para calcular lo que el formulario cargó al abrir "Editar"
+// (base de payloadDeEdicion: solo viajan los campos que el usuario cambió).
+function construirPayload(form: BolsaForm, horaInicio: string, horaFin: string): CrearBolsaPayload {
+  const precOrig = parseFloat(form.precio_original) || 0;
+  const precDesc = parseFloat(form.precio_descuento) || 0;
+  const datos: CrearBolsaPayload = {
+    tipo: form.tipo_form,
+    nombre: form.nombre.trim(),
+    descripcion: form.descripcion.trim(),
+    contenido: form.tipo_form === 'cupon' ? form.contenido.trim().toUpperCase() : form.contenido.trim(),
+    precio_original: precOrig,
+    precio_descuento: precDesc,
+    cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
+    hora_recogida_inicio: horaInicio,
+    hora_recogida_fin: horaFin,
+    imagen_url: form.imagen_url || null,
+    // Clasificación en el menú
+    categoria_menu: form.categoria_menu || null,
+    es_tiempo_limitado: form.es_tiempo_limitado,
+    es_promocion: form.es_promocion,
+    es_descuento: form.es_descuento || (precOrig > precDesc),
+    es_destacado: form.es_destacado,
+    es_mas_vendido: form.es_mas_vendido,
+    es_precio_bajo: form.es_precio_bajo,
+    // categoria_alimento aplica a todos los tipos de publicación
+    categoria_alimento: form.categoria_alimento || null,
+  };
+  // peso y fecha de caducidad solo para bolsas
+  if (form.tipo_form === 'bolsa') {
+    datos.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
+    const [d, m, y] = form.fecha_caducidad.split('/');
+    if (d && m && y) datos.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  if (form.tipo_form === 'cupon') datos.categoria = form.categoria;
+  return datos;
+}
+
 export default function BolsasRestauranteScreen() {
   const [items, setItems] = useState<BolsaRestaurante[]>([]);
   const [loading, setLoading] = useState(true);
@@ -118,6 +161,8 @@ export default function BolsasRestauranteScreen() {
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<any>(null);
+  // Publicación que se está editando y el payload que su formulario cargó.
+  const edicionInicial = useRef<{ bolsa: BolsaRestaurante; payload: CrearBolsaPayload } | null>(null);
   const set = <K extends keyof BolsaForm>(k: K) => (v: BolsaForm[K]) => setForm(f => ({ ...f, [k]: v }));
 
   function handleWebFileChange(e: any) {
@@ -187,7 +232,7 @@ export default function BolsasRestauranteScreen() {
     setSaving(false);
     if (b) {
       setEditId(b.id);
-      setForm({
+      const cargado: BolsaForm = {
         ...FORM_INIT,
         tipo_form: b.tipo === 'cupon' ? 'cupon' : 'bolsa',
         nombre: b.nombre || '',
@@ -197,8 +242,8 @@ export default function BolsasRestauranteScreen() {
         precio_descuento: String(b.precio_descuento),
         cantidad_disponible: String(b.cantidad_disponible),
         peso_estimado_kg: String(b.peso_estimado_kg || 0.5),
-        hora_recogida_inicio: b.hora_recogida_inicio || '18:00',
-        hora_recogida_fin: b.hora_recogida_fin || '20:00',
+        hora_recogida_inicio: horaParaFormulario(b.hora_recogida_inicio, '18:00'),
+        hora_recogida_fin: horaParaFormulario(b.hora_recogida_fin, '20:00'),
         imagen_url: b.imagen_url || '',
         activo: b.activo,
         categoria: b.categoria || 'Porcentaje',
@@ -213,9 +258,17 @@ export default function BolsasRestauranteScreen() {
         es_destacado: b.es_destacado ?? false,
         es_mas_vendido: b.es_mas_vendido ?? false,
         es_precio_bajo: b.es_precio_bajo ?? false,
-      });
+      };
+      edicionInicial.current = {
+        bolsa: b,
+        payload: construirPayload(cargado,
+          normalizarHora(cargado.hora_recogida_inicio) || cargado.hora_recogida_inicio,
+          normalizarHora(cargado.hora_recogida_fin) || cargado.hora_recogida_fin),
+      };
+      setForm(cargado);
     } else {
       setEditId(null);
+      edicionInicial.current = null;
       setForm(FORM_INIT);
     }
     setModal(true);
@@ -229,15 +282,6 @@ export default function BolsasRestauranteScreen() {
   function avisar(msg: string) {
     if (Platform.OS === 'web') (window as any).alert(msg);
     else Alert.alert('Listo', msg);
-  }
-
-  function mensajeGuardado(data: BolsaRestaurante | undefined, esEdicion: boolean) {
-    if (data?.estado_aprobacion === 'pendiente') {
-      return esEdicion
-        ? 'Cambios guardados. Tu publicación fue enviada a revisión y no será visible hasta que el administrador la apruebe.'
-        : 'Publicación creada y enviada a revisión del administrador.';
-    }
-    return esEdicion ? 'Publicación actualizada correctamente.' : 'Publicación creada correctamente.';
   }
 
   async function guardar() {
@@ -270,51 +314,38 @@ export default function BolsasRestauranteScreen() {
     const horaFin = normalizarHora(form.hora_recogida_fin);
     if (!horaFin) return alertar('Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
 
-    setSaving(true);
-    const precOrig = parseFloat(form.precio_original) || 0;
-    const precDesc = parseFloat(form.precio_descuento) || 0;
     const esEdicion = !!editId;
 
-    // Campos comunes a crear/editar. negocio_id se agrega solo al crear más
-    // abajo: PUT /bolsas/:id lo ignora (no está en su allowlist de campos
-    // editables), así que mandarlo en una edición no cambiaría nada.
-    const payload: CrearBolsaPayload = {
-      tipo: form.tipo_form,
-      nombre: form.nombre.trim(),
-      descripcion: form.descripcion.trim(),
-      contenido: form.tipo_form === 'cupon' ? form.contenido.trim().toUpperCase() : form.contenido.trim(),
-      precio_original: precOrig,
-      precio_descuento: precDesc,
-      cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-      hora_recogida_inicio: horaInicio,
-      hora_recogida_fin: horaFin,
-      imagen_url: form.imagen_url || null,
-      // Clasificación en el menú
-      categoria_menu: form.categoria_menu || null,
-      es_tiempo_limitado: form.es_tiempo_limitado,
-      es_promocion: form.es_promocion,
-      es_descuento: form.es_descuento || (precOrig > precDesc),
-      es_destacado: form.es_destacado,
-      es_mas_vendido: form.es_mas_vendido,
-      es_precio_bajo: form.es_precio_bajo,
-      // categoria_alimento aplica a todos los tipos de publicación
-      categoria_alimento: form.categoria_alimento || null,
-    };
-    // peso y fecha de caducidad solo para bolsas
-    if (form.tipo_form === 'bolsa') {
-      payload.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
-      const [d, m, y] = form.fecha_caducidad.split('/');
-      if (d && m && y) payload.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    // negocio_id se agrega solo al crear: PUT /bolsas/:id lo ignora (no está en
+    // su allowlist de campos editables), así que mandarlo en una edición no
+    // cambiaría nada.
+    const payload = construirPayload(form, horaInicio, horaFin);
+    const cambios = esEdicion
+      ? payloadDeEdicion(edicionInicial.current?.bolsa, payload, edicionInicial.current?.payload ?? null)
+      : payload;
+    if (esEdicion && Object.keys(cambios).length === 0) {
+      setModal(false);
+      return avisar('No modificaste ningún dato.');
     }
-    if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
+    setSaving(true);
 
     try {
+      // Siempre se edita la MISMA publicación (PUT /bolsas/:id), nunca se crea
+      // una copia: corregir una rechazada la devuelve a Pendiente.
       const res = esEdicion
-        ? await bolsasAPI.actualizar(editId, payload)
+        ? await bolsasAPI.actualizar(editId, cambios)
         : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
+      // La tarjeta refleja al instante el estado que devolvió el backend (p. ej.
+      // Rechazada → Pendiente), sin esperar a la recarga.
+      const guardada: BolsaRestaurante | undefined = res.data?.id ? res.data : undefined;
+      if (guardada) {
+        setItems(prev => esEdicion
+          ? prev.map(i => (i.id === guardada.id ? { ...i, ...guardada } : i))
+          : [guardada, ...prev]);
+      }
       setModal(false);
       cargar();
-      avisar(mensajeGuardado(res.data, esEdicion));
+      avisar(mensajeTrasGuardar(res.data?.estado_aprobacion, esEdicion));
     } catch (e: any) {
       alertar(e.message || 'Error al guardar');
     } finally {
@@ -391,7 +422,8 @@ export default function BolsasRestauranteScreen() {
           // que apruebe una versión distinta a la que ve. Una vez que hay una
           // decisión (aprobado / rechazado / "pedir cambios" con motivo), editar
           // vuelve a funcionar con normalidad para que el restaurante pueda corregir.
-          const enRevisionInicial = b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
+          const enRevisionInicial = bloqueadaParaEditar(b);
+          const estado = estadoPublicacion(b);
           // El switch de visibilidad, en cambio, debe quedarse bloqueado durante
           // TODA la revisión (inicial o "pedir cambios" aún sin reenviar) — no solo
           // la inicial. Antes se desbloqueaba en cuanto había motivo_rechazo, así
@@ -413,16 +445,9 @@ export default function BolsasRestauranteScreen() {
                     <Text style={s.tipoBadgeText}>{b.tipo === 'cupon' ? 'PROMO' : 'T. LIMITADO'}</Text>
                   </View>
                   <View style={s.descBadge}><Text style={s.descBadgeText}>-{desc(b)}%</Text></View>
-                  {!b.activo && <View style={s.inactivaBadge}><Text style={s.inactivaText}>Inactiva</Text></View>}
-                  {b.estado_aprobacion === 'pendiente' && (
-                    <View style={s.enRevisionBadge}><Text style={s.enRevisionText}>En revisión</Text></View>
-                  )}
-                  {b.estado_aprobacion === 'rechazado' && (
-                    <View style={s.rechazadaBadge}><Text style={s.rechazadaText}>✕ Rechazada</Text></View>
-                  )}
-                  {(b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion) && b.activo && (
-                    <View style={s.aprobadaBadge}><Text style={s.aprobadaText}>✓ Aprobada</Text></View>
-                  )}
+                  <View style={BADGE_ESTADO[estado.clave][0]}>
+                    <Text style={BADGE_ESTADO[estado.clave][1]}>{estado.etiqueta}</Text>
+                  </View>
                 </View>
                 <Text style={s.cardNombre}>{b.nombre}</Text>
                 {b.tipo === 'cupon' && b.contenido ? (
@@ -431,12 +456,7 @@ export default function BolsasRestauranteScreen() {
                   <Text style={s.cardSub} numberOfLines={1}>{b.descripcion}</Text>
                 )}
                 <Text style={s.cardHora}>⏰ {b.hora_recogida_inicio?.slice(0, 5)} – {b.hora_recogida_fin?.slice(0, 5)}</Text>
-                {enRevisionInicial && (
-                  <Text style={s.revisionMsg}>Esta publicación está siendo revisada por el administrador. No se puede editar ni activar hasta que se resuelva la revisión.</Text>
-                )}
-                {b.estado_aprobacion === 'pendiente' && b.motivo_rechazo && (
-                  <Text style={s.revisionMsg}>El administrador pidió cambios — corrige y guarda para reenviar a revisión</Text>
-                )}
+                {estado.ayuda ? <Text style={s.revisionMsg}>{estado.ayuda}</Text> : null}
                 {b.motivo_rechazo && (
                   <View style={s.motivoBox}><Text style={s.motivoText}>Motivo: {b.motivo_rechazo}</Text></View>
                 )}
@@ -459,13 +479,9 @@ export default function BolsasRestauranteScreen() {
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
-              {/* Visible a clientes solo si activo Y aprobado */}
+              {/* Visible a clientes solo si aprobada, activa, vigente y con unidades */}
               <Text style={s.switchLabel}>
-                {enRevision
-                  ? 'En revisión'
-                  : b.activo && (b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion)
-                  ? 'Visible'
-                  : 'Inactiva'}
+                {enRevision ? 'En revisión' : estado.visible ? 'Visible' : 'No visible'}
               </Text>
               <View style={{ flex: 1 }} />
               <TouchableOpacity
@@ -473,7 +489,7 @@ export default function BolsasRestauranteScreen() {
                 onPress={() => abrir(b)}
                 disabled={enRevisionInicial}
               >
-                <Text style={[s.editBtnText, enRevisionInicial && s.editBtnTextDisabled]}>Editar</Text>
+                <Text style={[s.editBtnText, enRevisionInicial && s.editBtnTextDisabled]}>{textoBotonEditar(b)}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.deleteBtn} onPress={() => eliminar(b.id)}>
                 <Text style={s.deleteBtnText}>Eliminar</Text>
@@ -507,8 +523,15 @@ export default function BolsasRestauranteScreen() {
           </View>
 
           <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
-            {/* Selector de tipo */}
-            {!editId && (
+            {/* Qué pasará al guardar esta edición (reglas del backend). */}
+            {editId && avisoAlEditar(edicionInicial.current?.bolsa) ? (
+              <Text style={s.avisoEdicion}>{avisoAlEditar(edicionInicial.current?.bolsa)}</Text>
+            ) : null}
+            {editId && edicionInicial.current?.bolsa.motivo_rechazo ? (
+              <View style={s.motivoBox}><Text style={s.motivoText}>Motivo del administrador: {edicionInicial.current.bolsa.motivo_rechazo}</Text></View>
+            ) : null}
+            {/* Selector de tipo (también al editar: cambiarlo vuelve a revisión) */}
+            {(
               <View style={s.tipoSelectorWrap}>
                 <Text style={s.sectionLabel}>Tipo de publicación</Text>
                 <View style={s.tipoSelector}>
@@ -776,6 +799,7 @@ const s = StyleSheet.create({
   aprobadaBadge: { backgroundColor: '#DCFCE7', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   aprobadaText: { fontSize: 10, color: '#16A34A', fontWeight: '700' },
   motivoBox: { backgroundColor: '#FEF2F2', borderRadius: 8, padding: 8, marginTop: 4 },
+  avisoEdicion: { fontSize: 13, color: '#92400E', backgroundColor: '#FEF3C7', borderRadius: 10, padding: 10, marginBottom: 12 },
   motivoText: { fontSize: 12, color: '#DC2626', fontStyle: 'italic' },
 
   modal: { flex: 1, backgroundColor: Colors.background },
@@ -833,3 +857,14 @@ const s = StyleSheet.create({
   catChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   catChipTextActive: { color: '#fff', fontWeight: '700' },
 });
+
+// Badge [contenedor, texto] por estado (src/utils/estadoPublicacion.ts).
+const BADGE_ESTADO: Record<ClaveEstado, [object, object]> = {
+  pendiente: [s.enRevisionBadge, s.enRevisionText],
+  cambios: [s.enRevisionBadge, s.enRevisionText],
+  rechazada: [s.rechazadaBadge, s.rechazadaText],
+  inactiva: [s.inactivaBadge, s.inactivaText],
+  vencida: [s.inactivaBadge, s.inactivaText],
+  agotada: [s.inactivaBadge, s.inactivaText],
+  aprobada: [s.aprobadaBadge, s.aprobadaText],
+};
