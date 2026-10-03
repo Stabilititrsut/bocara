@@ -1,12 +1,45 @@
 import { create } from 'axios';
+import { Platform } from 'react-native';
 import { emitSessionInvalid } from './sessionEvents';
 import { getAuthToken } from './authTokenStorage';
 import type { CrearBolsaPayload, ActualizarBolsaPayload } from '../types';
 
+// Puerto donde corre el backend local (ver docs/ENTORNO_LOCAL.md). Ajustable sin
+// tocar código si algún día el backend local cambia de puerto.
+const PUERTO_API_LOCAL = process.env.EXPO_PUBLIC_LOCAL_API_PORT || '3000';
+
+// Mismo patrón que usan solo literales de IPv4 (ej. "198.168.21.19"), nunca
+// nombres de dominio — así nunca puede confundirse con bocarafood.com o
+// *.vercel.app, que son nombres, no IPs.
+const IP_LITERAL_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+
+// En web, el JS bundle que sirve `expo start --web` es EL MISMO para cualquiera
+// que lo abra — por laptop local (http://localhost:8085) o por otra máquina de
+// la misma red (http://198.168.21.19:8085) — porque EXPO_PUBLIC_API_URL se
+// "hornea" una sola vez al arrancar el bundler, no por visitante. Si se deja
+// fija en "http://localhost:3000/api", la laptop remota de la LAN termina
+// pidiéndole a SU PROPIO localhost (que no tiene nada corriendo), no al backend
+// real. La solución: en vez de confiar en el valor horneado, se deriva el
+// backend del origen con el que el navegador cargó la página en ese momento
+// (window.location), y solo cuando ese origen es localhost o una IP literal —
+// nunca un nombre de dominio real — para que esto jamás pueda activarse en un
+// build de producción servido desde bocarafood.com o un preview de Vercel.
+function resolverApiBaseUrlLocalWeb(): string | null {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  const { hostname, protocol } = window.location;
+  const esLocal = hostname === 'localhost' || hostname === '127.0.0.1' || IP_LITERAL_RE.test(hostname);
+  if (!esLocal) return null;
+  return `${protocol}//${hostname}:${PUERTO_API_LOCAL}/api`;
+}
+
 // La URL de producción es siempre el fallback — __DEV__ nunca se usa para la URL
 // para evitar que bocara.vercel.app apunte a localhost por error de bundler.
+// resolverApiBaseUrlLocalWeb() tiene prioridad sobre EXPO_PUBLIC_API_URL en web
+// local/LAN: ese env var queda fijo en el bundle y no puede variar por
+// visitante, así que si no se le da prioridad, un valor horneado como
+// "http://localhost:3000/api" seguiría rompiendo el acceso por LAN.
 export const API_BASE_URL: string =
-  process.env.EXPO_PUBLIC_API_URL || 'https://bocara.onrender.com/api';
+  resolverApiBaseUrlLocalWeb() || process.env.EXPO_PUBLIC_API_URL || 'https://bocara.onrender.com/api';
 
 const api = create({
   baseURL: API_BASE_URL,

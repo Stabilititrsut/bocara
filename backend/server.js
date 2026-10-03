@@ -181,6 +181,19 @@ app.listen(PORT, () => {
   console.log(`api_key_configurada=${_cuboKey.length > 0}`);
 
   console.log('[ADMIN] Ruta disponible: GET /api/admin/cubo-status');
+
+  // Un backend LOCAL apuntando a la misma base que Render correría estas tareas
+  // en paralelo con producción: el recordatorio de recogida deduplica solo en
+  // memoria (mandaría push duplicados a clientes reales) y los reintentos
+  // post-pago y barridos de pedidos/reservas escribirían sobre datos reales.
+  // Solo se desactivan con BOCARA_DISABLE_JOBS=true explícito (lo pone
+  // backend/.env.local.template); sin la variable, todo sigue igual.
+  if (process.env.BOCARA_DISABLE_JOBS === 'true') {
+    console.warn('⏸ Tareas en segundo plano DESACTIVADAS (BOCARA_DISABLE_JOBS=true): '
+      + 'recordatorios, reintentos post-pago y barridos de pedidos/reservas no corren en este proceso.');
+    return;
+  }
+
   setInterval(enviarRecordatoriosRecogida, 60 * 1000);
   console.log('⏰ Cron de recordatorios de recogida activo');
 
