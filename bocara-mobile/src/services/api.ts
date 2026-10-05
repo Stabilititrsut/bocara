@@ -167,7 +167,7 @@ export const bolsasAPI = {
 export const pedidosAPI = {
   listar: () => api.get('/pedidos'),
   detalle: (id: string) => api.get(`/pedidos/${id}`),
-  restaurante: () => api.get('/pedidos/restaurante'),
+  restaurante: (params?: { fecha?: string; mes?: string }) => api.get('/pedidos/restaurante', { params }),
   previosEnNegocio: (negocioId: string) => api.get(`/pedidos/previos/${negocioId}`),
   actualizarEstado: (id: string, estado: string) =>
     api.put(`/pedidos/${id}/estado`, { estado }),

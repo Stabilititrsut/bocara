@@ -99,6 +99,9 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
     '@/components/HoraPicker': { __esModule: true, default: function HoraPicker({ label, value, onChange }) {
       return { type: 'Button', props: { onPress: () => onChange(value), accessibilityLabel: label, children: value } };
     } },
+    '@/components/CalendarioPicker': { __esModule: true, default: function CalendarioPicker({ label, value, onChange }) {
+      return { type: 'Button', props: { onPress: () => onChange(value), accessibilityLabel: label, children: value } };
+    } },
     ...extraMocks,
   };
   const Component = load(file, mocks).default;
@@ -107,14 +110,14 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
 
 // ── 1-3: Payload tipado — crear/editar bolsa y cupón ─────────────────────────
 
-test('bolsas.tsx: crear bolsa manda negocio_id, tipo="bolsa" y convierte fecha DD/MM/YYYY -> YYYY-MM-DD', async () => {
+test('bolsas.tsx: crear bolsa manda negocio_id, tipo="bolsa" y fecha_disponible/fecha_caducidad en formato canónico', async () => {
   const calls = [];
   const form = {
     tipo_form: 'bolsa', nombre: 'Pan del día', descripcion: '', contenido: 'Pan variado',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
     hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
     peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
-    fecha_caducidad: '31/12/2026', categoria_alimento: 'cereales', categoria_menu: '',
+    fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
   };
@@ -138,6 +141,7 @@ test('bolsas.tsx: crear bolsa manda negocio_id, tipo="bolsa" y convierte fecha D
   assert.equal(payload.precio_descuento, 20);
   assert.equal(typeof payload.precio_original, 'number');
   assert.equal(payload.cantidad_disponible, 5);
+  assert.equal(payload.fecha_disponible, '2026-01-01');
   assert.equal(payload.fecha_caducidad, '2026-12-31');
   assert.equal(payload.peso_estimado_kg, 0.5);
   assert.equal(payload.categoria, undefined, 'categoria (tipo de descuento) solo aplica a cupones');
@@ -150,7 +154,7 @@ test('bolsas.tsx: editar bolsa NO manda negocio_id (PUT lo ignora, ver backend/r
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
     hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
     peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
-    fecha_caducidad: '31/12/2026', categoria_alimento: 'cereales', categoria_menu: '',
+    fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
   };
@@ -217,7 +221,7 @@ test('bolsas.tsx: tras el primer toque, el botón queda deshabilitado y un segun
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
     hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
     peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
-    fecha_caducidad: '31/12/2026', categoria_alimento: 'cereales', categoria_menu: '',
+    fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
   };
@@ -271,7 +275,7 @@ test('bolsas.tsx: si el submit falla, el modal permanece abierto y el formulario
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
     hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
     peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
-    fecha_caducidad: '31/12/2026', categoria_alimento: 'cereales', categoria_menu: '',
+    fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
   };
@@ -305,7 +309,7 @@ test('bolsas.tsx: muestra loading (spinner) en vez del botón Guardar mientras e
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
     hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
     peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
-    fecha_caducidad: '31/12/2026', categoria_alimento: 'cereales', categoria_menu: '',
+    fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
   };

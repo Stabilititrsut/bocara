@@ -9,6 +9,7 @@ import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 import HoraPicker from '@/components/HoraPicker';
+import CalendarioPicker from '@/components/CalendarioPicker';
 import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 import {
@@ -60,9 +61,12 @@ const MENU_CLASIFS: { key: MenuClasifKey; label: string; emoji: string }[] = [
   { key: 'es_precio_bajo',     label: 'Precio bajo',     emoji: '💰' },
 ];
 
-// Estado del formulario del modal — todos los campos numéricos/de fecha viajan
-// como string mientras se editan (TextInput); `guardar()` los convierte al
-// tipo real que espera CrearBolsaPayload/ActualizarBolsaPayload antes de enviarlos.
+// Estado del formulario del modal — los campos numéricos viajan como string
+// mientras se editan (TextInput); `guardar()` los convierte al tipo real que
+// espera CrearBolsaPayload/ActualizarBolsaPayload antes de enviarlos. Las
+// fechas (fecha_disponible/fecha_caducidad) ya viajan en formato canónico
+// 'YYYY-MM-DD' — las entrega así CalendarioPicker, el mismo formato que usa
+// el backend para columnas `date` — sin conversión manual de por medio.
 interface BolsaForm {
   tipo_form: TipoPublicacion;
   nombre: string;
@@ -80,6 +84,9 @@ interface BolsaForm {
   // (ver validarDatosBolsa), así que un registro existente puede traer un
   // valor fuera de TIPOS_DESCUENTO — la UI solo lo usa para resaltar el chip.
   categoria: string;
+  // Promoción: fecha de publicación. Tiempo limitado: fecha de inicio de
+  // vigencia (fecha_caducidad es su fecha fin — ver construirPayload).
+  fecha_disponible: string;
   fecha_caducidad: string;
   categoria_alimento: string;
   categoria_menu: string;
@@ -99,6 +106,7 @@ const FORM_INIT: BolsaForm = {
   hora_recogida_inicio: '18:00', hora_recogida_fin: '20:00',
   peso_estimado_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
+  fecha_disponible: '',
   fecha_caducidad: '',
   categoria_alimento: '',
   // Clasificación en el menú
@@ -138,12 +146,15 @@ function construirPayload(form: BolsaForm, horaInicio: string, horaFin: string):
     es_precio_bajo: form.es_precio_bajo,
     // categoria_alimento aplica a todos los tipos de publicación
     categoria_alimento: form.categoria_alimento || null,
+    // Fecha de publicación (Promoción) / inicio de vigencia (Tiempo
+    // limitado) — ya viene en formato canónico YYYY-MM-DD de CalendarioPicker.
+    fecha_disponible: form.fecha_disponible,
   };
-  // peso y fecha de caducidad solo para bolsas
+  // peso y fecha fin solo para bolsas — una Promoción nunca tiene fecha fin
+  // (el backend la ignora igual si llegara, pero el frontend no la manda).
   if (form.tipo_form === 'bolsa') {
     datos.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
-    const [d, m, y] = form.fecha_caducidad.split('/');
-    if (d && m && y) datos.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    datos.fecha_caducidad = form.fecha_caducidad;
   }
   if (form.tipo_form === 'cupon') datos.categoria = form.categoria;
   return datos;
@@ -249,9 +260,10 @@ export default function BolsasRestauranteScreen() {
         activo: b.activo,
         categoria: b.categoria || 'Porcentaje',
         categoria_alimento: b.categoria_alimento || '',
-        fecha_caducidad: b.fecha_caducidad
-          ? (() => { const d = new Date(b.fecha_caducidad + 'T12:00:00'); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; })()
-          : '',
+        // Columna `date` del backend: ya llega como 'YYYY-MM-DD' (se recorta
+        // por si trajera hora/offset) — CalendarioPicker espera ese mismo formato.
+        fecha_disponible: b.fecha_disponible ? String(b.fecha_disponible).slice(0, 10) : '',
+        fecha_caducidad: b.fecha_caducidad ? String(b.fecha_caducidad).slice(0, 10) : '',
         categoria_menu: b.categoria_menu || '',
         es_tiempo_limitado: b.es_tiempo_limitado ?? (b.tipo !== 'cupon'),
         es_promocion: b.es_promocion ?? (b.tipo === 'cupon'),
@@ -298,16 +310,22 @@ export default function BolsasRestauranteScreen() {
       return alertar('Selecciona la categoría del alimento antes de publicar.');
     }
 
-    // Validar fecha de caducidad para bolsas de tiempo limitado
+    // Fecha de publicación/inicio — obligatoria para ambos tipos, siempre
+    // vía CalendarioPicker (nunca texto libre), así que si está vacía es
+    // porque nunca se seleccionó.
+    if (!form.fecha_disponible) {
+      return alertar(form.tipo_form === 'cupon'
+        ? 'La fecha de publicación es obligatoria'
+        : 'La fecha de inicio es obligatoria');
+    }
+
+    // Tiempo limitado también necesita fecha fin, y no puede ser anterior al
+    // inicio (Promoción no tiene fecha fin — ver construirPayload).
     if (form.tipo_form === 'bolsa') {
-      const fc = form.fecha_caducidad?.trim();
-      if (!fc) return alertar('La fecha de caducidad es obligatoria');
-      const parts = fc.split('/');
-      if (parts.length !== 3 || parts.some((p: string) => !p)) return alertar('Formato de fecha inválido. Usa DD/MM/YYYY');
-      const fechaCad = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-      if (isNaN(fechaCad.getTime())) return alertar('Fecha de caducidad inválida');
-      if (fechaCad < hoy) return alertar('La fecha de caducidad no puede ser anterior a hoy');
+      if (!form.fecha_caducidad) return alertar('La fecha de fin es obligatoria');
+      if (form.fecha_caducidad < form.fecha_disponible) {
+        return alertar('La fecha de fin no puede ser anterior a la fecha de inicio');
+      }
     }
 
     const horaInicio = normalizarHora(form.hora_recogida_inicio);
@@ -662,7 +680,38 @@ export default function BolsasRestauranteScreen() {
 
             <Field label="Unidades disponibles *" value={form.cantidad_disponible} onChange={set('cantidad_disponible')} placeholder="5" keyboard="numeric" />
 
-            <Text style={s.sectionLabel}>{form.tipo_form === 'cupon' ? '📅 Vigencia' : '⏰ Horario de recogida'}</Text>
+            <Text style={s.sectionLabel}>{form.tipo_form === 'cupon' ? '📅 Fecha de publicación' : '📅 Fecha de vigencia'}</Text>
+            {form.tipo_form === 'cupon' ? (
+              // Promoción: solo fecha de publicación — no tiene fecha fin.
+              // Su disponibilidad posterior depende de activo/stock/aprobación
+              // y del horario diario de abajo, nunca de una fecha de cierre.
+              <CalendarioPicker
+                label="Fecha de publicación *"
+                value={form.fecha_disponible}
+                onChange={set('fecha_disponible')}
+              />
+            ) : (
+              // Tiempo limitado: rango fecha inicio → fecha fin, ambas por
+              // calendario. minDate en "Fecha fin" bloquea en la UI misma
+              // elegir un día anterior al de inicio (la regla real la aplica
+              // igual el backend, ver validarDatosBolsa).
+              <View style={s.priceRow}>
+                <View style={{ flex: 1 }}>
+                  <CalendarioPicker label="Fecha inicio *" value={form.fecha_disponible} onChange={set('fecha_disponible')} />
+                </View>
+                <View style={{ width: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <CalendarioPicker
+                    label="Fecha fin *"
+                    value={form.fecha_caducidad}
+                    onChange={set('fecha_caducidad')}
+                    minDate={form.fecha_disponible || undefined}
+                  />
+                </View>
+              </View>
+            )}
+
+            <Text style={s.sectionLabel}>⏰ Horario de recogida</Text>
             <View style={s.priceRow}>
               <View style={{ flex: 1 }}>
                 <HoraPicker
@@ -704,13 +753,6 @@ export default function BolsasRestauranteScreen() {
 
             {form.tipo_form === 'bolsa' && (
               <>
-                <Field
-                  label="Fecha de caducidad * (DD/MM/YYYY)"
-                  value={form.fecha_caducidad}
-                  onChange={set('fecha_caducidad')}
-                  placeholder="31/12/2025"
-                  keyboard="numeric"
-                />
                 <Field
                   label="Peso aproximado por unidad (kg)"
                   value={form.peso_estimado_kg}

@@ -69,6 +69,14 @@ function construirPayload(form: CuponForm, horaInicio: string, horaFin: string):
     hora_recogida_inicio: horaInicio,
     hora_recogida_fin: horaFin,
     tipo: 'cupon',
+    // fecha_disponible (fecha de publicación) es obligatoria en el backend
+    // (ver routes/bolsas.js). Esta pantalla no tiene selector propio de
+    // fecha — se publica siempre a partir de hoy en Guatemala (UTC-6 fijo,
+    // sin horario de verano — igual que services/horarioGuatemala.js en el
+    // backend). Restar 6h antes de tomar la fecha evita que, cerca de la
+    // medianoche UTC, esto calcule "mañana" y la publicación nazca con
+    // motivo "no_iniciada" hasta el día siguiente.
+    fecha_disponible: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10),
   };
 }
 

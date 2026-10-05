@@ -8,7 +8,7 @@
 // y de la regla "¿la ve el cliente?", que antes estaba repetida —con pequeñas
 // diferencias— en seis consultas de routes/bolsas.js y routes/negocios.js.
 
-const { ahoraGuatemala, estaVencida, normalizarHora, normalizarFecha } = require('./horarioGuatemala');
+const { ahoraGuatemala, estaVencida, noHaIniciado, normalizarHora, normalizarFecha } = require('./horarioGuatemala');
 
 const ESTADOS_APROBACION = Object.freeze({
   PENDIENTE: 'pendiente',
@@ -29,6 +29,7 @@ const MOTIVOS_NO_VISIBLE = Object.freeze({
   INACTIVA: 'inactiva',
   SIN_UNIDADES: 'sin_unidades',
   VENCIDA: 'vencida',
+  NO_INICIADA: 'no_iniciada',
   NEGOCIO_NO_DISPONIBLE: 'negocio_no_disponible',
 });
 
@@ -71,6 +72,7 @@ function motivosNoVisible(bolsa, { ahora = ahoraGuatemala(), exigirUnidades = tr
   if (bolsa?.activo !== true) motivos.push(MOTIVOS_NO_VISIBLE.INACTIVA);
   if (exigirUnidades && !(Number(bolsa?.cantidad_disponible) > 0)) motivos.push(MOTIVOS_NO_VISIBLE.SIN_UNIDADES);
   if (estaVencida(bolsa, ahora)) motivos.push(MOTIVOS_NO_VISIBLE.VENCIDA);
+  if (noHaIniciado(bolsa, ahora)) motivos.push(MOTIVOS_NO_VISIBLE.NO_INICIADA);
   if (bolsa && 'negocios' in bolsa && !negocioDisponiblePublico(bolsa.negocios)) {
     motivos.push(MOTIVOS_NO_VISIBLE.NEGOCIO_NO_DISPONIBLE);
   }
@@ -101,7 +103,7 @@ const CAMPOS_SIN_REVISION = new Set(['activo', 'cantidad_disponible']);
 
 const CAMPOS_NUMERICOS = new Set(['precio_original', 'precio_descuento', 'cantidad_disponible', 'peso_estimado_kg']);
 const CAMPOS_HORA = new Set(['hora_recogida_inicio', 'hora_recogida_fin']);
-const CAMPOS_FECHA = new Set(['fecha_caducidad']);
+const CAMPOS_FECHA = new Set(['fecha_caducidad', 'fecha_disponible']);
 const CAMPOS_BOOLEANOS = new Set(['activo', 'permite_envio', 'es_tiempo_limitado', 'es_promocion',
   'es_descuento', 'es_destacado', 'es_mas_vendido', 'es_precio_bajo']);
 

@@ -156,3 +156,18 @@ test('activarSinAprobacionEsInvalido: false al desactivar, al aprobar, o al corr
   // Sin updates, o updates vacío: nada que invalidar.
   assert.equal(activarSinAprobacionEsInvalido({ ...BASE, estado_aprobacion: 'rechazado' }, {}), false);
 });
+
+// ── fecha_disponible: no_iniciada ──────────────────────────────────────────
+
+test('no visible: fecha_disponible futura → "no_iniciada"', () => {
+  assert.deepEqual(
+    motivosNoVisible({ ...BASE, fecha_disponible: '2026-10-04' }, { ahora: AHORA }),
+    ['no_iniciada'],
+  );
+});
+
+test('visible: fecha_disponible de hoy o del pasado no bloquea nada', () => {
+  assert.deepEqual(motivosNoVisible({ ...BASE, fecha_disponible: AHORA.fecha }, { ahora: AHORA }), []);
+  assert.deepEqual(motivosNoVisible({ ...BASE, fecha_disponible: '2026-10-01' }, { ahora: AHORA }), []);
+  assert.deepEqual(motivosNoVisible({ ...BASE, fecha_disponible: null }, { ahora: AHORA }), []);
+});

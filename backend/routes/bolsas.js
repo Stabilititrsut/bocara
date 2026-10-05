@@ -67,6 +67,12 @@ function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
     return 'La hora de finalización no puede ser igual a la hora de inicio';
   if (datos.fecha_caducidad && !/^\d{4}-\d{2}-\d{2}$/.test(datos.fecha_caducidad))
     return 'La fecha de caducidad debe usar el formato AAAA-MM-DD';
+  if (datos.fecha_disponible && !/^\d{4}-\d{2}-\d{2}$/.test(datos.fecha_disponible))
+    return 'La fecha de inicio/publicación debe usar el formato AAAA-MM-DD';
+  // Fin anterior al inicio nunca es válido. Fin == inicio sí (p. ej. una
+  // promoción o bolsa de un solo día) — por eso es `>`, no `>=`.
+  if (datos.fecha_disponible && datos.fecha_caducidad && datos.fecha_disponible > datos.fecha_caducidad)
+    return 'La fecha de fin no puede ser anterior a la fecha de inicio';
   // `tipo` es el único campo que decide si es Promoción ('cupon') o Tiempo
   // limitado ('bolsa'). Un valor fuera de esos dos se guardaba tal cual y la app
   // lo trataba como 'bolsa' mientras los endpoints de promociones lo ignoraban.
@@ -187,6 +193,8 @@ router.get('/', async (req, res) => {
     query = query.or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
     // Ocultar promociones ya vencidas aunque sigan activas y aprobadas
     query = query.or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
+    // Ocultar publicaciones que aún no llegan a su fecha de inicio/publicación
+    query = query.or(`fecha_disponible.is.null,fecha_disponible.lte.${hoy()}`);
   }
   // mi_negocio=true no filtra por activo/cantidad/aprobación: el restaurante debe
   // ver TODAS sus publicaciones en su panel de gestión (ocultas, rechazadas,
@@ -385,7 +393,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, imagen_url, peso_estimado_kg, fecha_caducidad, categoria_alimento,
+    permite_envio, imagen_url, peso_estimado_kg, fecha_caducidad, fecha_disponible, categoria_alimento,
     categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
     es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
@@ -399,9 +407,25 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'hora_recogida_inicio y hora_recogida_fin son requeridos' });
   }
 
+  // fecha_disponible = fecha de publicación (Promoción) / fecha inicio
+  // (Tiempo limitado). El selector visual del restaurante nunca la deja
+  // vacía — igual que con las horas, el backend no confía solo en eso.
+  if (!fecha_disponible) {
+    return res.status(400).json({ error: 'fecha_disponible es requerida' });
+  }
+  const tipoFinal = tipo || 'bolsa';
+  // Promoción nunca tiene fecha fin: se publica desde fecha_disponible y su
+  // disponibilidad posterior depende de activo/stock/aprobación/horario, no
+  // de una fecha de caducidad — "no inventar una fecha fin para promociones".
+  // Tiempo limitado sí la requiere (es su fecha fin de vigencia).
+  if (tipoFinal === 'bolsa' && !fecha_caducidad) {
+    return res.status(400).json({ error: 'fecha_caducidad es requerida para Tiempo limitado' });
+  }
+  const fechaCaducidadFinal = tipoFinal === 'cupon' ? null : fecha_caducidad;
+
   const horarioCreacion = {
     hora_recogida_inicio, hora_recogida_fin,
-    fecha_caducidad: fecha_caducidad || null,
+    fecha_disponible, fecha_caducidad: fechaCaducidadFinal,
   };
 
   const errorValidacion = validarDatosBolsa({
@@ -487,7 +511,8 @@ router.post('/', authMiddleware, async (req, res) => {
       categoria_alimento: categoria_alimento || null,
       imagen_url: imagen_url || null,
       estado_aprobacion: estadoAprobacion,
-      fecha_caducidad: fecha_caducidad || null,
+      fecha_disponible,
+      fecha_caducidad: fechaCaducidadFinal,
       categoria_menu: categoria_menu || null,
       es_tiempo_limitado: es_tiempo_limitado ?? false,
       es_promocion: es_promocion ?? false,
@@ -601,11 +626,22 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // ambiental que quisiera.
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
+    'permite_envio','activo','imagen_url','fecha_caducidad','fecha_disponible','categoria_alimento',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
     'es_destacado','es_mas_vendido','es_precio_bajo','peso_estimado_kg'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
+
+  // Promoción nunca tiene fecha fin (igual que al crear, ver POST /api/bolsas):
+  // si el tipo resultante es 'cupon', cualquier fecha_caducidad que venga en
+  // el body se descarta — ANTES de decidirRevision, para que comparar contra
+  // la fila actual (ya guardada en null) nunca detecte un "cambio" falso por
+  // un valor que de todos modos se va a ignorar (p. ej. la app reenvía el
+  // formulario completo con la fecha que cargó, aunque nunca vaya a guardarse).
+  const tipoResultantePrevio = updates.tipo !== undefined ? updates.tipo : bolsa.tipo;
+  if (tipoResultantePrevio === 'cupon' && updates.fecha_caducidad !== undefined) {
+    updates.fecha_caducidad = null;
+  }
 
   // Invariante de backend, independiente del frontend: el switch "activo" (o
   // cualquier llamada que solo mande ese campo) nunca puede, por sí solo,
@@ -629,6 +665,17 @@ router.put('/:id', authMiddleware, async (req, res) => {
   else if (req.body.estado_aprobacion !== undefined) updates.estado_aprobacion = req.body.estado_aprobacion;
 
   const datosResultantes = { ...bolsa, ...updates };
+
+  // Red de seguridad para el caso raro de convertir el tipo a 'cupon' en esta
+  // misma edición SIN tocar fecha_caducidad explícitamente: el valor viejo
+  // (de cuando era 'bolsa') no debe quedar colgado. No reabre la decisión de
+  // revisión de arriba (tipo ya la disparó por sí solo); solo corrige lo que
+  // se va a escribir.
+  if (datosResultantes.tipo === 'cupon' && datosResultantes.fecha_caducidad != null) {
+    updates.fecha_caducidad = null;
+    datosResultantes.fecha_caducidad = null;
+  }
+
   // tipo solo se valida si la edición lo cambia: una fila heredada con un tipo
   // fuera de catálogo no debe impedir corregir otros campos.
   const errorValidacion = validarDatosBolsa({ ...datosResultantes, tipo: updates.tipo }, { permiteCantidadCero: true });
@@ -642,7 +689,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // ni en una que toca campos ajenos al horario: el restaurante debe poder archivar
   // o corregir una publicación ya vencida — para volver a publicarla tiene que
   // mandar un horario nuevo, y entonces esta validación sí corre.
-  const tocaHorario = ['hora_recogida_inicio', 'hora_recogida_fin', 'fecha_caducidad']
+  const tocaHorario = ['hora_recogida_inicio', 'hora_recogida_fin', 'fecha_caducidad', 'fecha_disponible']
     .some(campo => updates[campo] !== undefined);
   const reactiva = updates.activo === true || updates.activo === 'true';
   if (tocaHorario || reactiva) {

@@ -12,8 +12,12 @@ const {
   fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
 } = require('./helpers/appPublicaciones');
 
+const HOY = fechaGuatemala(0);
 const MANANA = fechaGuatemala(1);
-const HORARIO_VIGENTE = { hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00', fecha_caducidad: MANANA };
+const HORARIO_VIGENTE = {
+  hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00',
+  fecha_disponible: HOY, fecha_caducidad: MANANA,
+};
 
 function promo(extra = {}) {
   return {
@@ -230,4 +234,42 @@ test('TIME: con ambas horas presentes, crear sigue funcionando igual que antes',
 test('TIME: una hora vacía explícita ("") se rechaza igual que ausente', async () => {
   const r = await pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: promo({ hora_recogida_inicio: '' }) });
   assert.equal(r.status, 400);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// DATE-7 — backend rechaza fecha fin anterior a fecha inicio (crear y editar)
+// ════════════════════════════════════════════════════════════════════════════
+
+test('DATE-7: crear Tiempo limitado con fecha_caducidad anterior a fecha_disponible → 400', async () => {
+  const r = await pedir('POST', '/api/bolsas', {
+    como: IDS.restaurante,
+    body: bolsaTiempoLimitado({ fecha_disponible: fechaGuatemala(5), fecha_caducidad: fechaGuatemala(1) }),
+  });
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.match(r.body.error, /fecha de fin/i);
+});
+
+test('DATE-7: editar y mover fecha_caducidad antes de fecha_disponible → 400, no se guarda', async () => {
+  const p = await crear(bolsaTiempoLimitado());
+  await aprobar(p.id); // sale de "revisión inicial" (409) para poder editarla
+  const r = await editar(p.id, { fecha_caducidad: fechaGuatemala(-1) }); // antes de fecha_disponible=HOY
+  assert.equal(r.status, 400, JSON.stringify(r.body));
+  assert.equal(fila(p.id).fecha_caducidad, MANANA, 'la fila conserva el valor anterior, no el inválido');
+});
+
+test('DATE-7: fecha_disponible == fecha_caducidad (un solo día) es válido', async () => {
+  const r = await pedir('POST', '/api/bolsas', {
+    como: IDS.restaurante,
+    body: bolsaTiempoLimitado({ fecha_disponible: MANANA, fecha_caducidad: MANANA }),
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+});
+
+test('Promoción: el backend ignora fecha_caducidad aunque llegue en el body (crear y editar)', async () => {
+  const p = await crear(promo({ fecha_caducidad: fechaGuatemala(10) }));
+  assert.equal(fila(p.id).fecha_caducidad, null);
+  await aprobar(p.id); // sale de "revisión inicial" (409) para poder editarla
+  const ed = await editar(p.id, { fecha_caducidad: fechaGuatemala(20), descripcion: 'otra' });
+  assert.equal(ed.status, 200, JSON.stringify(ed.body));
+  assert.equal(fila(p.id).fecha_caducidad, null, 'sigue sin fecha fin tras editar');
 });

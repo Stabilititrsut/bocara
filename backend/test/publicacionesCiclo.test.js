@@ -14,11 +14,16 @@ const {
   fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
 } = require('./helpers/appPublicaciones');
 
+const HOY = fechaGuatemala(0);
 const MANANA = fechaGuatemala(1);
 const AYER = fechaGuatemala(-1);
 
-// Ventana que no vence durante la prueba: termina mañana.
-const HORARIO_VIGENTE = { hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00', fecha_caducidad: MANANA };
+// Ventana que no vence durante la prueba: termina mañana. fecha_disponible=HOY
+// para que ya haya "iniciado" (no dispare el nuevo motivo no_iniciada).
+const HORARIO_VIGENTE = {
+  hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00',
+  fecha_disponible: HOY, fecha_caducidad: MANANA,
+};
 
 function promo(extra = {}) {
   return {
@@ -261,7 +266,11 @@ test('Ola Azul: A mal creada → rechazada; B creada bien → aprobada ⇒ B vis
   assert.equal(vista.precio_descuento, 60);
   assert.equal(vista.hora_recogida_inicio, '08:00');
   assert.equal(vista.hora_recogida_fin, '22:00');
-  assert.equal(vista.fecha_caducidad, MANANA);
+  // Promoción nunca tiene fecha fin — el backend la limpia aunque el payload
+  // de creación la incluyera (HORARIO_VIGENTE la trae para las bolsas de
+  // Tiempo limitado; en una promoción se ignora, ver POST /api/bolsas).
+  assert.equal(vista.fecha_caducidad, null, 'una promoción nunca guarda fecha_caducidad');
+  assert.equal(vista.fecha_disponible, HOY);
   assert.equal(vista.cantidad_disponible, 5);
   assert.equal(vista.cantidad_disponible_real, 5);
   assert.equal('motivo_rechazo' in vista, false, 'el feed público no expone motivo_rechazo');
@@ -308,10 +317,14 @@ test('aprobada → modificar dato relevante → pendiente y deja de verse hasta 
   assert.equal(fila(p.id).precio_descuento, 50);
 });
 
+// fecha_caducidad no está en este loop: una Promoción ya no la tiene (el
+// backend la fuerza a null, ver POST/PUT /api/bolsas), así que "cambiarla"
+// nunca es un cambio real sobre un promo(). Tiene su propio test justo abajo,
+// usando bolsaTiempoLimitado(), que sí la usa de verdad.
 for (const [campo, valor] of [
   ['nombre', '2x1 Ceviche mixto'], ['descripcion', 'otra'], ['contenido', 'NUEVOCOD'],
   ['precio_original', 130], ['tipo', 'bolsa'], ['categoria', 'Porcentaje'],
-  ['hora_recogida_fin', '21:00'], ['fecha_caducidad', fechaGuatemala(2)], ['imagen_url', 'https://x/y.jpg'],
+  ['hora_recogida_fin', '21:00'], ['imagen_url', 'https://x/y.jpg'],
 ]) {
   test(`aprobada: cambiar "${campo}" vuelve a revisión`, async () => {
     const p = await crear(promo());
@@ -321,6 +334,35 @@ for (const [campo, valor] of [
     assert.equal(ed.body.estado_aprobacion, 'pendiente');
   });
 }
+
+test('aprobada (Tiempo limitado): cambiar "fecha_caducidad" vuelve a revisión', async () => {
+  const p = await crear(bolsaTiempoLimitado());
+  await aprobar(p.id);
+  const ed = await editar(p.id, { fecha_caducidad: fechaGuatemala(2) });
+  assert.equal(ed.status, 200, JSON.stringify(ed.body));
+  assert.equal(ed.body.estado_aprobacion, 'pendiente');
+});
+
+test('CAL-8 (backend): Tiempo limitado con fin anterior al inicio se rechaza al crear y al editar', async () => {
+  const r = await pedir('POST', '/api/bolsas', {
+    como: IDS.restaurante, body: bolsaTiempoLimitado({ fecha_disponible: MANANA, fecha_caducidad: HOY }),
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /anterior a la fecha de inicio/);
+
+  const p = await crear(bolsaTiempoLimitado());
+  await aprobar(p.id); // en revisión inicial no se edita (409) — ver tests de arriba
+  const ed = await editar(p.id, { fecha_caducidad: AYER });
+  assert.equal(ed.status, 400, JSON.stringify(ed.body));
+  assert.equal(fila(p.id).fecha_caducidad, MANANA, 'la fecha guardada no cambia');
+});
+
+test('CAL-7 (backend): Tiempo limitado exige fecha inicio y fecha fin', async () => {
+  const sinFin = await pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: bolsaTiempoLimitado({ fecha_caducidad: undefined }) });
+  assert.equal(sinFin.status, 400);
+  const sinInicio = await pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: bolsaTiempoLimitado({ fecha_disponible: undefined }) });
+  assert.equal(sinInicio.status, 400);
+});
 
 test('aprobada: reponer unidades (cantidad_disponible) no la saca del catálogo', async () => {
   const p = await crear(promo());
@@ -549,7 +591,14 @@ test('regresión: filtros de zona y categoría del feed siguen funcionando', asy
 });
 
 test('regresión: no se puede crear con horario ya vencido ni con unidades inválidas', async () => {
-  const vencida = await pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: promo({ fecha_caducidad: AYER }) });
+  // fecha_caducidad vencida: con bolsaTiempoLimitado, no promo() — una
+  // Promoción ya no tiene fecha fin, así que el backend la ignora en vez de
+  // rechazarla (ver POST /api/bolsas); el caso real de "fecha fin vencida" es
+  // Tiempo limitado, que sí la usa y sí la valida.
+  const vencida = await pedir('POST', '/api/bolsas', {
+    como: IDS.restaurante,
+    body: bolsaTiempoLimitado({ fecha_disponible: AYER, fecha_caducidad: AYER }),
+  });
   assert.equal(vencida.status, 400);
   const sinUnidades = await pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: promo({ cantidad_disponible: 0 }) });
   assert.equal(sinUnidades.status, 400);

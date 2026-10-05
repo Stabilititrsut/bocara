@@ -107,6 +107,9 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     '@/components/HoraPicker': { __esModule: true, default: function HoraPicker({ label, value, onChange }) {
       return React.createElement('Button', { onPress: () => onChange(value), accessibilityLabel: label }, value);
     } },
+    '@/components/CalendarioPicker': { __esModule: true, default: function CalendarioPicker({ label, value, onChange }) {
+      return React.createElement('Button', { onPress: () => onChange(value), accessibilityLabel: label }, value);
+    } },
     ...mocks,
   }).default;
   const app = {
@@ -176,7 +179,8 @@ const cupon = (extra = {}) => ({
   id: 'c1', negocio_id: 'n1', nombre: '2x1 Ceviche', contenido: 'OLA2X1', categoria: '2x1', tipo: 'cupon',
   precio_original: 120, precio_descuento: 60, cantidad_disponible: 5, activo: true,
   estado_aprobacion: 'aprobado', motivo_rechazo: null,
-  hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', ...extra,
+  hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
+  fecha_disponible: '2026-01-01', ...extra,
 });
 
 function pantallaCupones(lista, api = {}) {
@@ -339,7 +343,7 @@ function pantallaDisponibles(lista, api = {}) {
 // TextInput directo, o el componente Field de restaurante/bolsas.tsx (value + onChange).
 const inputs = tree => walk(tree)
   .filter(n => n.type === 'Input'
-    || (typeof n.type === 'function' && (n.type.name === 'Field' || n.type.name === 'HoraPicker') && 'value' in n.props))
+    || (typeof n.type === 'function' && ['Field', 'HoraPicker', 'CalendarioPicker'].includes(n.type.name) && 'value' in n.props))
   .map(n => (n.type === 'Input' ? n : { props: { value: n.props.value, onChangeText: n.props.onChange } }));
 const modalVisible = tree => walk(tree).some(n => n.type === 'Modal' && n.props.visible);
 const boton = (tree, re) => botones(tree).find(b => re.test(b.texto));
@@ -407,6 +411,79 @@ test('Disponibles: el tipo también se puede cambiar al editar (selector visible
   const app = pantallaDisponibles([deBD()]);
   boton(app.tree, /^Editar$/).onPress();
   assert.match(textOf(app.render()), /Tipo de publicación/);
+});
+
+// Igual que inputs() más arriba: el doble de CalendarioPicker/HoraPicker no
+// se "invoca" (walk() no ejecuta componentes función) — se lee `label`
+// directo del descriptor {type, props} sin resolver, por nombre de función.
+const etiquetasDeFecha = tree => walk(tree)
+  .filter(n => typeof n.type === 'function' && ['HoraPicker', 'CalendarioPicker'].includes(n.type.name))
+  .map(n => n.props.label);
+
+test('DATE-3/DATE-4: Promoción muestra "Fecha de publicación" y NUNCA "Fecha fin"', () => {
+  const app = pantallaDisponibles([deBD({ tipo: 'cupon' })]);
+  boton(app.tree, /^Editar$/).onPress();
+  const etiquetas = etiquetasDeFecha(app.render());
+  assert.ok(etiquetas.some(e => e.includes('Fecha de publicación')), JSON.stringify(etiquetas));
+  assert.ok(!etiquetas.some(e => e.includes('Fecha fin')), 'una Promoción no debe mostrar fecha fin');
+  assert.ok(!etiquetas.some(e => e.includes('Fecha inicio')), 'Promoción usa "fecha de publicación", no "fecha inicio"');
+});
+
+test('DATE-5: Tiempo limitado muestra "Fecha inicio" Y "Fecha fin" (no "Fecha de publicación")', () => {
+  const app = pantallaDisponibles([deBD({ tipo: 'bolsa', fecha_caducidad: '2030-12-31' })]);
+  boton(app.tree, /^Editar$/).onPress();
+  const etiquetas = etiquetasDeFecha(app.render());
+  assert.ok(etiquetas.some(e => e.includes('Fecha inicio')), JSON.stringify(etiquetas));
+  assert.ok(etiquetas.some(e => e.includes('Fecha fin')), JSON.stringify(etiquetas));
+  assert.ok(!etiquetas.some(e => e.includes('Fecha de publicación')), 'Tiempo limitado usa "fecha inicio", no "fecha de publicación"');
+});
+
+const calendarios = tree => walk(tree)
+  .filter(n => typeof n.type === 'function' && n.type.name === 'CalendarioPicker')
+  .map(n => n.props);
+const bolsaFechas = (extra = {}) => deBD({
+  tipo: 'bolsa', categoria_alimento: 'cereales', fecha_disponible: '2030-06-10', fecha_caducidad: '2030-06-20', ...extra,
+});
+
+test('CAL-6: Promoción tiene un único calendario (fecha de publicación)', () => {
+  const app = pantallaDisponibles([deBD({ tipo: 'cupon' })]);
+  boton(app.tree, /^Editar$/).onPress();
+  const cals = calendarios(app.render());
+  assert.deepEqual(cals.map(c => c.label), ['Fecha de publicación *']);
+});
+
+test('CAL-7: Tiempo limitado tiene dos calendarios — inicio y fin — y fin usa inicio como minDate', () => {
+  const app = pantallaDisponibles([bolsaFechas()]);
+  boton(app.tree, /^Editar$/).onPress();
+  const cals = calendarios(app.render());
+  assert.deepEqual(cals.map(c => c.label), ['Fecha inicio *', 'Fecha fin *']);
+  assert.equal(cals[1].minDate, '2030-06-10', 'el calendario de fin bloquea días anteriores al inicio');
+});
+
+test('CAL-8: fin anterior a inicio se bloquea al guardar (no llama al backend)', async () => {
+  const llamadas = [];
+  const app = pantallaDisponibles([bolsaFechas()], {
+    actualizar: async (id, body) => { llamadas.push(body); return { data: { id, ...body } }; },
+  });
+  boton(app.tree, /^Editar$/).onPress();
+  calendarios(app.render()).find(c => c.label === 'Fecha fin *').onChange('2030-06-05');
+  await guardarDe(app.render()).props.onPress(); await tick();
+  assert.equal(llamadas.length, 0, 'no debe enviar un rango inválido');
+  assert.ok(app.alerts.some(a => /anterior a la fecha de inicio/.test(a[1])), JSON.stringify(app.alerts));
+});
+
+test('CAL-9: editar conserva las fechas existentes (YYYY-MM-DD) en los calendarios', () => {
+  const app = pantallaDisponibles([bolsaFechas({ fecha_disponible: '2030-06-10T00:00:00', fecha_caducidad: '2030-06-20' })]);
+  boton(app.tree, /^Editar$/).onPress();
+  const cals = calendarios(app.render());
+  assert.equal(cals[0].value, '2030-06-10');
+  assert.equal(cals[1].value, '2030-06-20');
+});
+
+test('TIME-6/DATE: Promoción y Tiempo limitado comparten el mismo HoraPicker y CalendarioPicker (un solo formulario)', () => {
+  const src = fs.readFileSync(path.join(root, 'app/restaurante/bolsas.tsx'), 'utf8');
+  assert.doesNotMatch(src, /DD\/MM\/YYYY/, 'ya no debe quedar texto libre de fecha con ese formato');
+  assert.doesNotMatch(src, /keyboard="numeric"[^/]*fecha/i, 'las fechas no deben usar teclado numérico de texto libre');
 });
 
 // ════════════════════════════════════════════════════════════════════════════
