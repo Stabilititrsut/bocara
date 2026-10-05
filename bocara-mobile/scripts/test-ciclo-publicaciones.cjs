@@ -984,7 +984,7 @@ integracion('Aprobada → cambiar solo unidades (integración): sigue visible, s
 integracion('Admin (integración): aprobar algo vencido muestra que NO quedó visible y por qué', async () => {
   backend.fake.reiniciar(backend.datosBase());
   backend.fake._db.tablas.bolsas.push({
-    id: 'vencida-1', negocio_id: backend.IDS.olaAzul, nombre: 'Promo vieja', tipo: 'cupon', precio_original: 100, precio_descuento: 50,
+    id: 'vencida-1', negocio_id: backend.IDS.olaAzul, nombre: 'Promo vieja', imagen_url: 'https://cdn.bocara.test/foto.jpg', tipo: 'cupon', precio_original: 100, precio_descuento: 50,
     cantidad_disponible: 3, activo: true, estado_aprobacion: 'pendiente', fecha_caducidad: AYER,
     hora_recogida_inicio: '08:00', hora_recogida_fin: '20:00', created_at: new Date().toISOString(),
   });
@@ -1145,4 +1145,29 @@ test('faltaFotoParaGuardar: crear siempre exige; editar solo si vuelve a revisi�
   assert.equal(faltaFotoParaGuardar(null, { bolsa: aprobada, cambios: { nombre: 'x' } }), true);
   assert.equal(faltaFotoParaGuardar(null, { bolsa: { estado_aprobacion: 'rechazado' }, cambios: { cantidad_disponible: 3 } }), true,
     'una rechazada vuelve a revisión con cualquier cambio');
+});
+
+// ── SEC-3: pendiente heredada sin foto — editable solo para agregar la foto ──
+
+test('SEC-3: pendiente sin foto (revisión inicial) ofrece Editar y exige la foto al guardar', async () => {
+  const llamadas = [];
+  const app = pantallaDisponibles([deBD({ estado_aprobacion: 'pendiente', motivo_rechazo: null, imagen_url: null, nombre: 'Heredada' })], {
+    actualizar: async (id, body) => { llamadas.push(body); return { data: {} }; },
+  });
+  const editar = boton(app.tree, /^Editar$/);
+  assert.ok(editar, 'debe poder abrirse para agregar la foto');
+  editar.onPress();
+  const tree = app.render();
+  assert.match(textOf(tree), /no tiene foto: agrégala para que el administrador pueda aprobarla/);
+  await guardarDe(tree).props.onPress(); await tick();
+  assert.equal(llamadas.length, 0);
+  assert.ok(app.alerts.some(a => a[1] === MSG_FOTO), JSON.stringify(app.alerts));
+});
+
+test('SEC-3: pendiente CON foto sigue bloqueada para editar en revisión inicial', () => {
+  assert.equal(estadoReal.bloqueadaParaEditar({ estado_aprobacion: 'pendiente', motivo_rechazo: null, imagen_url: 'https://x/y.jpg' }), true);
+  assert.equal(estadoReal.bloqueadaParaEditar({ estado_aprobacion: 'pendiente', motivo_rechazo: null, imagen_url: null }), false);
+  assert.equal(estadoReal.faltaFotoParaGuardar(null, {
+    bolsa: { estado_aprobacion: 'pendiente', motivo_rechazo: null }, cambios: { cantidad_disponible: 2 },
+  }), true, 'la única edición posible en revisión inicial es completar la foto');
 });

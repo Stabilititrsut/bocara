@@ -614,7 +614,13 @@ router.put('/:id', authMiddleware, async (req, res) => {
     // permitir editarla o activarla podría hacer que apruebe una versión que el
     // restaurante ya cambió. Bloqueado solo mientras dure esa primera revisión;
     // en cuanto hay una decisión (aprobado/rechazado/pedir-cambios) se libera.
-    if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo) {
+    //
+    // Excepción: una pendiente heredada SIN foto. El admin no puede aprobarla
+    // (routes/admin.js lo bloquea), así que no hay carrera posible — se deja
+    // editar, pero solo para completar la foto (sin ella quedaría trabada).
+    if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo && !tieneFoto(bolsa.imagen_url)) {
+      if (!tieneFoto(req.body.imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
+    } else if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo) {
       return res.status(409).json({
         error: 'Esta publicación está en revisión inicial. Espera a que el administrador la revise antes de editarla o activarla.',
       });

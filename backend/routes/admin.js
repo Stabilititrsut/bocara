@@ -9,7 +9,7 @@ const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
-const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
+const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
@@ -947,6 +947,12 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
   // en otra pestaña justo cuando el restaurante la eliminó.
   if (estaEliminada(bolsa)) {
     return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede aprobarse.' });
+  }
+
+  // Ninguna publicación se aprueba sin foto, tampoco una heredada: sigue
+  // legible y el restaurante puede editarla para agregarla (PUT /bolsas/:id).
+  if (!tieneFoto(bolsa.imagen_url)) {
+    return res.status(409).json({ error: MENSAJE_APROBAR_PUBLICACION_SIN_FOTO });
   }
 
   // Repetir "aprobar" sobre algo ya aprobado es idempotente: no vuelve a

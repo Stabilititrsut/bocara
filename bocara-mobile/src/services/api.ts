@@ -149,6 +149,9 @@ export const negociosAPI = {
   bolsas: (id: string) => api.get(`/negocios/${id}/bolsas`),
   miNegocio: () => api.get('/negocios/mi-negocio'),
   actualizar: (id: string, data: any) => api.put(`/negocios/${id}`, data),
+  // rechazado → pendiente. El backend controla la transición (exige foto y
+  // deja el negocio inactivo); PUT /negocios/:id no acepta estados.
+  reenviarSolicitud: () => api.post('/negocios/mi-negocio/reenviar'),
   estadisticas: (id: string) => api.get(`/negocios/${id}/estadisticas`),
   ganancias: (periodo?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo } }),
   solicitarCambios: (data: any) => api.post('/negocios/mi-negocio/solicitar-cambios', data),

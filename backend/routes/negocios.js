@@ -9,6 +9,7 @@ const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../services/impactoAmbiental');
 const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
 const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -421,6 +422,20 @@ router.put('/:id', authMiddleware, async (req, res) => {
   if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
 
+  // Activar/suspender y el estado de verificación son decisiones del admin
+  // (aprobar, rechazar, toggle en routes/admin.js). El restaurante no puede
+  // cambiarlos manipulando el payload — antes `activo` se aceptaba tal cual y
+  // un negocio podía activarse a sí mismo. Reenviar una solicitud rechazada
+  // tiene su propio endpoint: POST /api/negocios/mi-negocio/reenviar.
+  if (req.usuario.rol !== 'admin') {
+    if (req.body.activo !== undefined) {
+      return res.status(403).json({ error: 'Solo un administrador puede activar o suspender el negocio.' });
+    }
+    if (req.body.estado_verificacion !== undefined || req.body.verificado !== undefined) {
+      return res.status(403).json({ error: 'El estado de verificación lo decide el administrador. Para reenviar tu solicitud usa "Reenviar a revisión".' });
+    }
+  }
+
   const { nombre, descripcion, direccion, zona, ciudad, telefono, categoria, activo,
     imagen_url, dpi_foto_url, nit, dpi, datos_bancarios, horario_atencion,
     punto_referencia, google_maps_url, waze_url,
@@ -561,6 +576,48 @@ router.get('/:id/bolsas', async (req, res) => {
     tiempo_limitado: bolsas.filter(b => b.tipo !== 'cupon'),
     promociones: bolsas.filter(b => b.tipo === 'cupon'),
   });
+});
+
+// POST /api/negocios/mi-negocio/reenviar — rechazado → pendiente.
+//
+// Única transición de estado que el restaurante puede pedir, y la controla el
+// backend: solo desde 'rechazado', sobre el MISMO negocio (nunca crea otro),
+// exige foto (sin ella el admin no podría aprobarlo) y lo deja pendiente e
+// inactivo hasta que el admin decida. El motivo del rechazo se limpia de la
+// fila (la solicitud nueva ya no lo tiene pendiente) y queda en el evento de
+// auditoría — mismo criterio que el reenvío de publicaciones (PUT /bolsas/:id).
+// Las correcciones de campos se guardan antes con PUT /api/negocios/:id.
+router.post('/mi-negocio/reenviar', authMiddleware, async (req, res) => {
+  if (req.usuario.rol !== 'restaurante') return res.status(403).json({ error: 'No autorizado' });
+
+  const { data: negocio, error: negocioErr } = await supabase
+    .from('negocios')
+    .select('id,propietario_id,estado_verificacion,imagen_url,motivo_rechazo')
+    .eq('propietario_id', req.usuario.id)
+    .maybeSingle();
+  if (negocioErr) return res.status(500).json({ error: negocioErr.message });
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  if (negocio.estado_verificacion !== 'rechazado') {
+    return res.status(409).json({ error: 'Solo una solicitud rechazada puede reenviarse a revisión.' });
+  }
+  if (!tieneFoto(negocio.imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
+
+  const { data, error } = await supabase
+    .from('negocios')
+    .update({ estado_verificacion: 'pendiente', activo: false, verificado: false, motivo_rechazo: null })
+    .eq('id', negocio.id)
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+
+  enqueueEventBestEffort({
+    eventType: 'negocio.reenviado_revision', aggregateType: 'negocio', aggregateId: negocio.id,
+    discriminator: new Date().toISOString(),
+    payload: { estado_anterior: 'rechazado', motivo_anterior: negocio.motivo_rechazo || null },
+  });
+
+  res.json(data);
 });
 
 // POST /api/negocios/mi-negocio/solicitar-cambios

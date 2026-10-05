@@ -226,29 +226,36 @@ export default function PerfilRestauranteScreen() {
   }
 
   async function guardar() {
-    if (camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
+    const esRechazado = negocio?.estado_verificacion === 'rechazado';
+    // Un rechazado puede reenviar aunque solo haya cambiado la foto (que se
+    // guarda aparte, al subirla) — por eso no exige campos pendientes.
+    if (!esRechazado && camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
     setSaving(true);
     setToast(null);
     try {
       const lat = parseFloat(form.latitud);
       const lng = parseFloat(form.longitud);
 
-      if (negocio?.estado_verificacion === 'rechazado') {
+      if (esRechazado) {
         // Sin foto del negocio la solicitud no puede aprobarse (el admin
         // recibiría un 409): no se reenvía hasta que la agregue.
         if (!negocio?.imagen_url?.trim()) {
           showToast('Debes agregar una foto del negocio para continuar.', false);
           return;
         }
-        // Si fue rechazado: actualizar directamente + reenviar a revisión
-        const payload: any = {};
-        camposPendientes.forEach(k => { payload[k] = form[k]; });
-        if (camposPendientes.has('latitud')) payload.latitud = isNaN(lat) ? null : lat;
-        if (camposPendientes.has('longitud')) payload.longitud = isNaN(lng) ? null : lng;
-        payload.estado_verificacion = 'pendiente';
-        await negociosAPI.actualizar(negocio.id, payload);
-        setCamposPendientes(new Set());
-        setNegocio((n: any) => ({ ...n, estado_verificacion: 'pendiente' }));
+        // Si fue rechazado: guardar las correcciones y reenviar a revisión.
+        // La transición rechazado → pendiente la hace el backend (endpoint
+        // propio): el frontend nunca escribe estado_verificacion.
+        if (camposPendientes.size > 0) {
+          const payload: any = {};
+          camposPendientes.forEach(k => { payload[k] = form[k]; });
+          if (camposPendientes.has('latitud')) payload.latitud = isNaN(lat) ? null : lat;
+          if (camposPendientes.has('longitud')) payload.longitud = isNaN(lng) ? null : lng;
+          await negociosAPI.actualizar(negocio.id, payload);
+          setCamposPendientes(new Set());
+        }
+        const res = await negociosAPI.reenviarSolicitud();
+        setNegocio((n: any) => ({ ...n, ...(res.data || {}), estado_verificacion: 'pendiente', motivo_rechazo: null }));
         setRechazoInfo(null);
         showToast('✅ Solicitud re-enviada. El equipo de Bocara la revisará en 24-48h.');
       } else {
@@ -333,8 +340,12 @@ export default function PerfilRestauranteScreen() {
             <Text style={s.pendienteHint}>⏳ Tienes cambios sin enviar</Text>
           )}
         </View>
-        <TouchableOpacity style={[s.saveBtn, camposPendientes.size === 0 && s.saveBtnDisabled]} onPress={guardar} disabled={saving}>
-          <Text style={s.saveBtnText}>{saving ? '...' : 'Enviar cambios'}</Text>
+        <TouchableOpacity
+          style={[s.saveBtn, camposPendientes.size === 0 && negocio?.estado_verificacion !== 'rechazado' && s.saveBtnDisabled]}
+          onPress={guardar}
+          disabled={saving}
+        >
+          <Text style={s.saveBtnText}>{saving ? '...' : negocio?.estado_verificacion === 'rechazado' ? 'Reenviar a revisión' : 'Enviar cambios'}</Text>
         </TouchableOpacity>
       </View>
 

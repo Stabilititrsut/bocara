@@ -14,6 +14,7 @@ const MENSAJE_FOTO_PUBLICACION = 'La foto es obligatoria';
 const MENSAJE_FOTO_NEGOCIO = 'Debes agregar una foto del negocio para continuar.';
 const MENSAJE_APROBAR_NEGOCIO_SIN_FOTO = 'No se puede aprobar el negocio porque no tiene foto.';
 const MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO = 'No se puede activar el negocio porque no tiene foto.';
+const MENSAJE_APROBAR_PUBLICACION_SIN_FOTO = 'No se puede aprobar la publicación porque no tiene foto.';
 
 // null, undefined, '' y solo espacios no son una foto.
 function tieneFoto(valor) {
@@ -41,6 +42,7 @@ module.exports = {
   MENSAJE_FOTO_NEGOCIO,
   MENSAJE_APROBAR_NEGOCIO_SIN_FOTO,
   MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO,
+  MENSAJE_APROBAR_PUBLICACION_SIN_FOTO,
   tieneFoto,
   normalizarFotoEnEdicion,
 };

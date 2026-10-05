@@ -185,18 +185,20 @@ test('PHOTO-BIZ-4: no se puede borrar la foto del negocio ni activarlo sin foto'
   }
   assert.equal(fila('negocios', id).imagen_url, FOTO_NEGOCIO);
 
-  // Negocio sin foto: no se activa ni por PUT ni por el toggle del admin.
+  // Negocio sin foto: el admin no lo activa ni por PUT ni por el toggle.
+  // (El restaurante no puede tocar `activo` en absoluto — ver negociosSeguridad.test.js.)
   const sinFotoId = sembrarNegocio();
-  const put = await pedir('PUT', `/api/negocios/${sinFotoId}`, { como: IDS.otroRestaurante, body: { activo: true } });
+  const put = await pedir('PUT', `/api/negocios/${sinFotoId}`, { como: IDS.admin, body: { activo: true } });
   assert.equal(put.status, 400);
+  assert.equal(put.body.error, MSG_NEGOCIO);
   const toggle = await pedir('PUT', `/api/admin/negocios/${sinFotoId}/toggle`, { como: IDS.admin });
   assert.equal(toggle.status, 409);
   assert.equal(fila('negocios', sinFotoId).activo, false);
 
-  // Con foto nueva sí: subirla y activarlo en la misma edición funciona.
-  const conFoto = await pedir('PUT', `/api/negocios/${sinFotoId}`, {
-    como: IDS.otroRestaurante, body: { imagen_url: FOTO_NEGOCIO, activo: true },
-  });
+  // El restaurante sube la foto; después el admin sí puede activarlo.
+  const foto = await pedir('PUT', `/api/negocios/${sinFotoId}`, { como: IDS.otroRestaurante, body: { imagen_url: FOTO_NEGOCIO } });
+  assert.equal(foto.status, 200, JSON.stringify(foto.body));
+  const conFoto = await pedir('PUT', `/api/negocios/${sinFotoId}`, { como: IDS.admin, body: { activo: true } });
   assert.equal(conFoto.status, 200, JSON.stringify(conFoto.body));
 });
 

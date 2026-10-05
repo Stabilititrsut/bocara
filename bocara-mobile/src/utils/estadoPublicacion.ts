@@ -11,6 +11,7 @@ export interface PublicacionConEstado extends HorarioPublicacion {
   motivo_rechazo?: string | null;
   activo?: boolean;
   cantidad_disponible?: number;
+  imagen_url?: string | null;
 }
 
 export type ClaveEstado = 'pendiente' | 'cambios' | 'rechazada' | 'inactiva' | 'vencida' | 'agotada' | 'aprobada';
@@ -50,8 +51,15 @@ export function estadoPublicacion(b: PublicacionConEstado, now = new Date()): Es
 
 // Pendiente de la PRIMERA decisión del admin: el backend responde 409 a
 // cualquier edición (el admin puede estar revisando esa misma versión).
+// En revisión inicial no se edita — salvo una heredada sin foto: el admin no
+// puede aprobarla así (backend/routes/admin.js), y el restaurante tiene que
+// poder agregarla (el backend solo acepta esa edición si trae la foto).
 export function bloqueadaParaEditar(b: PublicacionConEstado): boolean {
-  return b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
+  return enRevisionInicial(b) && tieneFoto(b.imagen_url);
+}
+
+function enRevisionInicial(b: PublicacionConEstado | null | undefined): boolean {
+  return b?.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
 }
 
 // El switch "Visible / No visible" del restaurante: una publicación que no
@@ -72,6 +80,9 @@ export function textoBotonEditar(b: PublicacionConEstado): string {
 // Aviso dentro del formulario de edición: qué pasará al guardar.
 export function avisoAlEditar(b: PublicacionConEstado | null | undefined): string | null {
   if (!b) return null;
+  if (enRevisionInicial(b) && !tieneFoto(b.imagen_url)) {
+    return 'Esta publicación no tiene foto: agrégala para que el administrador pueda aprobarla.';
+  }
   if (b.estado_aprobacion === 'rechazado' || b.estado_aprobacion === 'pendiente') {
     return 'Al guardar, la publicación se envía de nuevo a revisión del administrador.';
   }
@@ -147,5 +158,8 @@ export function faltaFotoParaGuardar(
   edicion: { bolsa: PublicacionConEstado | null | undefined; cambios: object } | null,
 ): boolean {
   if (tieneFoto(imagenUrl)) return false;
-  return edicion ? edicionVuelveARevision(edicion.bolsa, edicion.cambios) : true;
+  if (!edicion) return true;
+  // Pendiente en revisión inicial sin foto: la única edición posible es completarla.
+  if (enRevisionInicial(edicion.bolsa)) return true;
+  return edicionVuelveARevision(edicion.bolsa, edicion.cambios);
 }

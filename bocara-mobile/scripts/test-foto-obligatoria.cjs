@@ -169,10 +169,10 @@ test('PHOTO-BIZ-1: si la foto no se pudo subir tras crear la cuenta, se avisa (n
 
 // ── PHOTO-BIZ-4: perfil del restaurante ──────────────────────────────────────
 
-function perfil(negocio, api = {}) {
+function perfil(negocio, api = {}, pendientes = ['descripcion']) {
   // negocio(0), form(1), camposPendientes(2), loading(3), saving(4), ..., toast(7)
   return montar('app/restaurante/perfil.tsx', {
-    forzados: { 0: negocio, 1: { ...negocio }, 2: new Set(['descripcion']), 3: false },
+    forzados: { 0: negocio, 1: { ...negocio }, 2: new Set(pendientes), 3: false },
     mocks: {
       '@/src/context/AuthContext': { useAuth: () => ({ usuario: { nombre: 'Ana' }, logout() {} }) },
       '@/src/services/api': {
@@ -194,11 +194,60 @@ test('PHOTO-BIZ-4: el perfil rotula "Foto del negocio *" y avisa si falta', () =
 
 test('PHOTO-BIZ-4: un negocio rechazado sin foto no puede reenviar su solicitud', async () => {
   const llamadas = [];
-  const app = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'rechazado', imagen_url: '', descripcion: 'x' },
-    { actualizar: async (id, body) => { llamadas.push(body); return { data: {} }; } });
+  const app = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'rechazado', imagen_url: '', descripcion: 'x' }, {
+    actualizar: async (id, body) => { llamadas.push(body); return { data: {} }; },
+    reenviarSolicitud: async () => { llamadas.push('reenviar'); return { data: {} }; },
+  });
   await app.boton('guardar').props.onPress(); await tick();
   assert.equal(llamadas.length, 0, 'no se reenvía sin foto');
   assert.match(textOf(app.render()), /Debes agregar una foto del negocio para continuar\./);
+});
+
+// ── SEC-1/SEC-2: el perfil nunca escribe estados; reenvía por el endpoint ────
+
+test('SEC-2: rechazado con foto — guarda las correcciones SIN estado y reenvía por el endpoint del backend', async () => {
+  const llamadas = [];
+  const app = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'rechazado', imagen_url: FOTO, descripcion: 'nueva' }, {
+    actualizar: async (id, body) => { llamadas.push(['PUT', body]); return { data: {} }; },
+    reenviarSolicitud: async () => { llamadas.push(['REENVIAR']); return { data: { id: 'n1', estado_verificacion: 'pendiente', activo: false } }; },
+  });
+  assert.match(textOf(app.tree), /Reenviar a revisión/);
+  await app.boton('guardar').props.onPress(); await tick();
+  assert.deepEqual(llamadas.map(l => l[0]), ['PUT', 'REENVIAR'], 'primero las correcciones, después el reenvío');
+  assert.equal(llamadas[0][1].descripcion, 'nueva');
+  assert.equal('estado_verificacion' in llamadas[0][1], false, 'el frontend no escribe estado_verificacion');
+  assert.equal('activo' in llamadas[0][1], false);
+  assert.equal(app.estado(0).estado_verificacion, 'pendiente');
+  assert.equal(app.estado(0).motivo_rechazo, null);
+});
+
+test('SEC-2: rechazado sin campos cambiados (p. ej. solo subió la foto) igual puede reenviar', async () => {
+  const llamadas = [];
+  const app = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'rechazado', imagen_url: FOTO }, {
+    actualizar: async () => { llamadas.push('PUT'); return { data: {} }; },
+    reenviarSolicitud: async () => { llamadas.push('REENVIAR'); return { data: {} }; },
+  }, []);
+  await app.boton('guardar').props.onPress(); await tick();
+  assert.deepEqual(llamadas, ['REENVIAR']);
+});
+
+test('SEC-1: el perfil de un negocio aprobado no manda activo ni estados (solicitud de cambios)', async () => {
+  const enviados = [];
+  const app = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'aprobado', imagen_url: FOTO, descripcion: 'nueva' }, {
+    actualizar: async (id, body) => { enviados.push(body); return { data: {} }; },
+    solicitarCambios: async (body) => { enviados.push(body.cambios); return {}; },
+  });
+  await app.boton('guardar').props.onPress(); await tick();
+  assert.equal(enviados.length, 1);
+  for (const k of ['activo', 'estado_verificacion', 'verificado']) assert.equal(k in enviados[0], false, k);
+});
+
+test('SEC-1: ninguna pantalla del restaurante manda activo/estado_verificacion al negocio', () => {
+  for (const file of ['app/restaurante/perfil.tsx', 'app/registro-restaurante.tsx', 'app/restaurante/index.tsx']) {
+    const src = fs.readFileSync(path.join(root, file), 'utf8');
+    assert.doesNotMatch(src, /estado_verificacion\s*=\s*['"]/, `${file} asigna estado_verificacion`);
+    assert.doesNotMatch(src, /negociosAPI\.actualizar\([^)]*activo/, `${file} manda activo`);
+  }
 });
 
 test('PHOTO-BIZ-4: la foto del perfil solo se reemplaza — nunca se envía vacía', () => {
