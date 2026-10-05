@@ -17,7 +17,19 @@ const ALLOWED_ORIGINS = Object.freeze([
 // así que se acepta cualquier puerto de localhost / 127.0.0.1. Nunca en producción.
 const LOCAL_ORIGIN_RE = /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/;
 
-// Orígenes extra sin redeploy (ej. preview de Vercel): CORS_EXTRA_ORIGINS="https://a.com,https://b.com"
+// Pruebas desde otra máquina de la misma red (ej. abrir la app web desde un
+// celular o laptop apuntando a la IP del equipo que corre `expo start --web`).
+// Solo direcciones IPv4 privadas (RFC1918: 10.0.0.0/8, 172.16.0.0/12,
+// 192.168.0.0/16), cualquier puerto, y nunca en producción (mismo gate que
+// LOCAL_ORIGIN_RE). Una IP de LAN que no caiga en estos rangos (ej. una
+// 198.168.x.x, que es pública y no una LAN típica 192.168.x.x) no debe
+// agregarse aquí a mano: para esa usa CORS_EXTRA_ORIGINS en backend/.env, que
+// ya existe para orígenes puntuales sin tocar código ni redeploy.
+const LAN_PRIVATE_ORIGIN_RE =
+  /^http:\/\/(10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})(:\d{1,5})?$/;
+
+// Orígenes extra sin redeploy (ej. preview de Vercel, o una IP de LAN que no
+// caiga en LAN_PRIVATE_ORIGIN_RE): CORS_EXTRA_ORIGINS="https://a.com,http://b:8085"
 function origenesExtra(env = process.env) {
   return String(env.CORS_EXTRA_ORIGINS || '')
     .split(',')
@@ -30,7 +42,7 @@ function esOrigenPermitido(origin, env = process.env) {
   if (!origin) return true;
   if (ALLOWED_ORIGINS.includes(origin)) return true;
   if (origenesExtra(env).includes(origin)) return true;
-  if (env.NODE_ENV !== 'production' && LOCAL_ORIGIN_RE.test(origin)) return true;
+  if (env.NODE_ENV !== 'production' && (LOCAL_ORIGIN_RE.test(origin) || LAN_PRIVATE_ORIGIN_RE.test(origin))) return true;
   return false;
 }
 
@@ -58,4 +70,4 @@ function corsMiddleware(env = process.env) {
   return require('cors')(corsOptions(env));
 }
 
-module.exports = { corsMiddleware, corsOptions, esOrigenPermitido, ALLOWED_ORIGINS, LOCAL_ORIGIN_RE };
+module.exports = { corsMiddleware, corsOptions, esOrigenPermitido, ALLOWED_ORIGINS, LOCAL_ORIGIN_RE, LAN_PRIVATE_ORIGIN_RE };

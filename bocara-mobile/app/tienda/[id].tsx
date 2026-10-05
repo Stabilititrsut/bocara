@@ -193,6 +193,17 @@ export default function TiendaScreen() {
     }).finally(() => setLoading(false));
   }, [id, reintentoId]);
 
+  // Al volver a la tienda (p. ej. desde el detalle o el carrito) se re-piden las
+  // publicaciones en silencio: una recién aprobada aparece y una que dejó de
+  // estar disponible desaparece sin recargar. La primera vez ya la cubre la
+  // carga de arriba. Un error de red conserva la última lista buena.
+  const primerFoco = useRef(true);
+  useFocusEffect(useCallback(() => {
+    if (primerFoco.current) { primerFoco.current = false; return; }
+    if (!id) return;
+    bolsasAPI.listar({ negocio_id: id }).then(r => setBolsas(r.data || [])).catch(() => {});
+  }, [id]));
+
   const filtradas = useMemo(() => {
     switch (filtro) {
       case 'descuentos':

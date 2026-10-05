@@ -12,10 +12,15 @@ const {
   co2PorUnidad, factorCO2, PESO_UNIDAD_DEFECTO_KG,
 } = require('../services/impactoAmbiental');
 const {
-  ahoraGuatemala, hoyGuatemala, filtrarVigentes, estaVencida, validarHorarioFuturo,
+  ahoraGuatemala, hoyGuatemala, validarHorarioFuturo,
   MENSAJE_HORARIO_VENCIDO,
 } = require('../services/horarioGuatemala');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { MENSAJE_FOTO_PUBLICACION, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
+const {
+  TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
+  estaEliminada, activarSinAprobacionEsInvalido,
+} = require('../services/publicaciones');
 const router = express.Router();
 
 // Fecha de hoy (YYYY-MM-DD) en Guatemala para comparar contra fecha_caducidad
@@ -48,9 +53,13 @@ function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
       (!Number.isFinite(Number(datos.peso_estimado_kg)) || Number(datos.peso_estimado_kg) <= 0 || Number(datos.peso_estimado_kg) > 100))
     return 'El peso estimado debe ser mayor que 0 y menor o igual a 100 kg';
 
+  // `!== undefined` (no un simple truthy-check): el selector de hora del
+  // restaurante nunca manda '', pero una llamada directa a la API sí podría —
+  // y una hora vacía explícita debe rechazarse igual que una mal formada, no
+  // pasar de largo como si el campo no se hubiera tocado.
   const timeRe = /^([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/;
-  if (datos.hora_recogida_inicio && !timeRe.test(datos.hora_recogida_inicio)) return 'Hora de inicio inválida';
-  if (datos.hora_recogida_fin && !timeRe.test(datos.hora_recogida_fin)) return 'Hora de finalización inválida';
+  if (datos.hora_recogida_inicio !== undefined && !timeRe.test(String(datos.hora_recogida_inicio || ''))) return 'Hora de inicio inválida';
+  if (datos.hora_recogida_fin !== undefined && !timeRe.test(String(datos.hora_recogida_fin || ''))) return 'Hora de finalización inválida';
   // hora_fin < hora_inicio NO es un error: es una ventana que cruza la medianoche
   // (p. ej. 22:00 → 02:00), soportada por services/horarioGuatemala.js, que la
   // hace terminar al día siguiente. Solo se rechaza la ventana de duración cero.
@@ -59,6 +68,17 @@ function validarDatosBolsa(datos, { permiteCantidadCero = false } = {}) {
     return 'La hora de finalización no puede ser igual a la hora de inicio';
   if (datos.fecha_caducidad && !/^\d{4}-\d{2}-\d{2}$/.test(datos.fecha_caducidad))
     return 'La fecha de caducidad debe usar el formato AAAA-MM-DD';
+  if (datos.fecha_disponible && !/^\d{4}-\d{2}-\d{2}$/.test(datos.fecha_disponible))
+    return 'La fecha de inicio/publicación debe usar el formato AAAA-MM-DD';
+  // Fin anterior al inicio nunca es válido. Fin == inicio sí (p. ej. una
+  // promoción o bolsa de un solo día) — por eso es `>`, no `>=`.
+  if (datos.fecha_disponible && datos.fecha_caducidad && datos.fecha_disponible > datos.fecha_caducidad)
+    return 'La fecha de fin no puede ser anterior a la fecha de inicio';
+  // `tipo` es el único campo que decide si es Promoción ('cupon') o Tiempo
+  // limitado ('bolsa'). Un valor fuera de esos dos se guardaba tal cual y la app
+  // lo trataba como 'bolsa' mientras los endpoints de promociones lo ignoraban.
+  if (datos.tipo !== undefined && !TIPOS_PUBLICACION.includes(datos.tipo))
+    return 'tipo debe ser "bolsa" (tiempo limitado) o "cupon" (promoción)';
   return null;
 }
 
@@ -159,7 +179,12 @@ router.get('/', async (req, res) => {
   let query = supabase
     .from('bolsas')
     .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,activo,estado_verificacion)`)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    // Eliminada = fuera de TODO flujo, incluido el panel de gestión del
+    // restaurante (mi_negocio=true no filtra por nada más). Repetido más
+    // abajo en JS (estaEliminada) como red de seguridad si este filtro SQL
+    // falla (columna aún no migrada) y se cae al fallback sin él.
+    .is('eliminado_en', null);
 
   if (mi_negocio !== 'true') {
     // El feed público solo debe mostrar lo que un cliente puede comprar ahora mismo.
@@ -169,6 +194,8 @@ router.get('/', async (req, res) => {
     query = query.or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null');
     // Ocultar promociones ya vencidas aunque sigan activas y aprobadas
     query = query.or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
+    // Ocultar publicaciones que aún no llegan a su fecha de inicio/publicación
+    query = query.or(`fecha_disponible.is.null,fecha_disponible.lte.${hoy()}`);
   }
   // mi_negocio=true no filtra por activo/cantidad/aprobación: el restaurante debe
   // ver TODAS sus publicaciones en su panel de gestión (ocultas, rechazadas,
@@ -180,11 +207,17 @@ router.get('/', async (req, res) => {
 
   let { data, error } = await query;
   if (error) {
-    // Fallback sin columnas opcionales (estado_aprobacion puede no existir aún)
+    // Fallback sin los filtros `.or()` (estado_aprobacion / fecha_caducidad).
+    // Mantiene `tipo` y el negocio: sin ellos la pestaña Promociones mezclaba
+    // publicaciones de Tiempo limitado. El estado de aprobación y la vigencia
+    // se siguen aplicando abajo con filtrarVisiblesParaCliente — el fallback
+    // falla CERRADO, nunca muestra pendientes ni rechazadas.
+    console.warn('[BOLSAS] consulta principal falló, usando fallback:', error.message);
     let q2 = supabase
       .from('bolsas')
       .select(`${selectBolsas}, negocios(id,nombre,zona,ciudad,categoria,latitud,longitud,imagen_url,activo,estado_verificacion)`);
     if (mi_negocio !== 'true') q2 = q2.eq('activo', true).gt('cantidad_disponible', 0);
+    if (tipo) q2 = q2.eq('tipo', tipo);
     if (nIdOwner) q2 = q2.eq('negocio_id', nIdOwner);
     else if (negocio_id) q2 = q2.eq('negocio_id', negocio_id);
     const r = await q2;
@@ -196,20 +229,23 @@ router.get('/', async (req, res) => {
   if (resultado.length > 0) console.log('[BOLSAS] total:', resultado.length, '| sample imagen_url:', resultado[0]?.imagen_url || '(sin imagen)');
 
 
-  // Solo bolsas de negocios activos/aprobados (excepto cuando el restaurante consulta sus propias bolsas)
+  // Feed público: misma regla que todo el catálogo (services/publicaciones.js) —
+  // aprobada, activa, con unidades, vigente en hora de Guatemala y de un negocio
+  // activo/aprobado. Va antes de reservas, distancia y contadores para que ningún
+  // cálculo de más abajo cuente algo que el cliente no puede comprar. El registro
+  // NUNCA se borra: solo deja de listarse. El restaurante (mi_negocio=true) ve todo.
   if (mi_negocio !== 'true') {
-    resultado = resultado.filter(b => b.negocios?.activo === true &&
-      (b.negocios?.estado_verificacion === 'aprobado' || b.negocios?.estado_verificacion == null));
-
-    // Publicaciones cuya ventana de recogida ya terminó según la hora de Guatemala.
-    // Va antes de reservas, distancia y contadores para que ningún cálculo de más
-    // abajo cuente una publicación que el cliente ya no puede recoger. El registro
-    // NUNCA se borra: solo deja de listarse mientras esté vencido.
-    const antesDeVencidas = resultado.length;
-    resultado = filtrarVigentes(resultado);
-    if (antesDeVencidas !== resultado.length) {
-      console.log('[BOLSAS] excluidas por horario vencido (America/Guatemala):', antesDeVencidas - resultado.length);
+    const antes = resultado.length;
+    resultado = filtrarVisiblesParaCliente(resultado);
+    if (antes !== resultado.length) {
+      console.log('[BOLSAS] excluidas del feed público (no aprobadas, inactivas, vencidas o negocio no disponible):',
+        antes - resultado.length);
     }
+  } else {
+    // mi_negocio=true no pasa por filtrarVisiblesParaCliente (el restaurante
+    // debe ver pendientes/rechazadas/ocultas/agotadas) — pero eliminada es la
+    // única excepción: nunca debe reaparecer ni en su propio panel de gestión.
+    resultado = resultado.filter(b => !estaEliminada(b));
   }
 
   // Inyectar cantidad_disponible_real con la MISMA fórmula que usa el checkout
@@ -311,21 +347,18 @@ router.get('/:id', async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 
-  // Una bolsa oculta, pendiente/rechazada, o de un negocio suspendido/no aprobado
-  // no debe ser consultable directamente aunque el cliente conozca el id.
-  const negocioOk = data.negocios && data.negocios.activo !== false &&
-    (data.negocios.estado_verificacion === 'aprobado' || data.negocios.estado_verificacion == null);
-  const bolsaOk = data.activo !== false &&
-    (data.estado_aprobacion === 'aprobado' || data.estado_aprobacion == null);
-  if (!negocioOk || !bolsaOk) {
-    return res.status(404).json({ error: 'Bolsa no encontrada' });
-  }
-  // El detalle público sigue la misma regla que el feed: si la ventana de recogida
-  // ya venció en Guatemala, la publicación no es consultable aunque se conozca el id
-  // (si no, el cliente podría abrirla desde un enlace viejo y llegar al checkout).
-  if (estaVencida(data)) {
+  // Misma regla que el feed (services/publicaciones.js): una publicación oculta,
+  // pendiente/rechazada, vencida o de un negocio suspendido/no aprobado no es
+  // consultable aunque el cliente conozca el id (si no, podría abrirla desde un
+  // enlace viejo y llegar al checkout). Única excepción: agotada sigue siendo
+  // consultable — la app muestra "agotado" en vez de un 404.
+  const motivos = motivosNoVisible(data, { exigirUnidades: false });
+  if (motivos.length === 1 && motivos[0] === MOTIVOS_NO_VISIBLE.VENCIDA) {
     console.log('[BOLSAS DETAIL] bolsa con horario vencido (America/Guatemala):', data.id);
     return res.status(404).json({ error: MENSAJE_HORARIO_VENCIDO });
+  }
+  if (motivos.length > 0) {
+    return res.status(404).json({ error: 'Bolsa no encontrada' });
   }
   if (data.negocios) {
     delete data.negocios.activo;
@@ -361,23 +394,52 @@ router.post('/', authMiddleware, async (req, res) => {
 
   const { negocio_id, nombre, descripcion, contenido, precio_original, precio_descuento,
     cantidad_disponible, tipo, categoria, hora_recogida_inicio, hora_recogida_fin,
-    permite_envio, imagen_url, peso_estimado_kg, fecha_caducidad, categoria_alimento,
+    permite_envio, imagen_url, peso_estimado_kg, fecha_caducidad, fecha_disponible, categoria_alimento,
     categoria_menu, es_tiempo_limitado, es_promocion, es_descuento,
     es_destacado, es_mas_vendido, es_precio_bajo } = req.body;
 
   if (!nombre || precio_original == null || precio_descuento == null)
     return res.status(400).json({ error: 'nombre, precio_original y precio_descuento son requeridos' });
 
-  // Los mismos defaults que se persisten más abajo, para validar exactamente lo
-  // que se va a guardar y no una versión sin horario.
+  // El restaurante elige la hora con un selector (nunca la escribe a mano) —
+  // el backend no debe depender solo de eso: una publicación sin horario de
+  // recogida/vigencia explícito no se crea, nunca se le inventa un default.
+  if (!hora_recogida_inicio || !hora_recogida_fin) {
+    return res.status(400).json({ error: 'hora_recogida_inicio y hora_recogida_fin son requeridos' });
+  }
+
+  // fecha_disponible = fecha de publicación (Promoción) / fecha inicio
+  // (Tiempo limitado). El selector visual del restaurante nunca la deja
+  // vacía — igual que con las horas, el backend no confía solo en eso.
+  if (!fecha_disponible) {
+    return res.status(400).json({ error: 'fecha_disponible es requerida' });
+  }
+  // Foto obligatoria para toda publicación nueva (Promoción y Tiempo
+  // limitado) — el formulario ya la exige, pero el backend no confía en eso.
+  // null, '' y solo espacios cuentan como "sin foto" (services/fotoObligatoria.js).
+  if (!tieneFoto(imagen_url)) {
+    return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
+  }
+  const imagenFinal = imagen_url.trim();
+  const tipoFinal = tipo || 'bolsa';
+  // Promoción nunca tiene fecha fin: se publica desde fecha_disponible y su
+  // disponibilidad posterior depende de activo/stock/aprobación/horario, no
+  // de una fecha de caducidad — "no inventar una fecha fin para promociones".
+  // Tiempo limitado sí la requiere (es su fecha fin de vigencia).
+  if (tipoFinal === 'bolsa' && !fecha_caducidad) {
+    return res.status(400).json({ error: 'fecha_caducidad es requerida para Tiempo limitado' });
+  }
+  const fechaCaducidadFinal = tipoFinal === 'cupon' ? null : fecha_caducidad;
+
   const horarioCreacion = {
-    hora_recogida_inicio: hora_recogida_inicio || '18:00',
-    hora_recogida_fin: hora_recogida_fin || '20:00',
-    fecha_caducidad: fecha_caducidad || null,
+    hora_recogida_inicio, hora_recogida_fin,
+    fecha_disponible, fecha_caducidad: fechaCaducidadFinal,
   };
 
   const errorValidacion = validarDatosBolsa({
     nombre, precio_original, precio_descuento,
+    // Sin tipo se crea como 'bolsa' (más abajo), así que solo se valida si viene.
+    tipo: tipo || undefined,
     cantidad_disponible: cantidad_disponible ?? 1,
     peso_estimado_kg: peso_estimado_kg ?? 0.5,
     ...horarioCreacion,
@@ -449,15 +511,16 @@ router.post('/', authMiddleware, async (req, res) => {
       precio_descuento: parseFloat(precio_descuento),
       cantidad_disponible: cantidad_disponible == null ? 1 : Number(cantidad_disponible),
       tipo: tipo || 'bolsa', categoria,
-      hora_recogida_inicio: hora_recogida_inicio || '18:00',
-      hora_recogida_fin: hora_recogida_fin || '20:00',
+      hora_recogida_inicio,
+      hora_recogida_fin,
       permite_envio: permite_envio || false,
       peso_estimado_kg: pesoKg,
       co2_salvado_kg: co2Unidad,
       categoria_alimento: categoria_alimento || null,
-      imagen_url: imagen_url || null,
+      imagen_url: imagenFinal,
       estado_aprobacion: estadoAprobacion,
-      fecha_caducidad: fecha_caducidad || null,
+      fecha_disponible,
+      fecha_caducidad: fechaCaducidadFinal,
       categoria_menu: categoria_menu || null,
       es_tiempo_limitado: es_tiempo_limitado ?? false,
       es_promocion: es_promocion ?? false,
@@ -486,11 +549,11 @@ router.post('/', authMiddleware, async (req, res) => {
         precio_descuento: parseFloat(precio_descuento),
         cantidad_disponible: cantidad_disponible == null ? 1 : Number(cantidad_disponible),
         tipo: tipo || 'bolsa', categoria,
-        hora_recogida_inicio: hora_recogida_inicio || '18:00',
-        hora_recogida_fin: hora_recogida_fin || '20:00',
+        hora_recogida_inicio,
+        hora_recogida_fin,
         permite_envio: permite_envio || false,
         peso_estimado_kg: pesoKg,
-        imagen_url: imagen_url || null,
+        imagen_url: imagenFinal,
         estado_aprobacion: estadoAprobacion,
         es_tiempo_limitado: es_tiempo_limitado ?? false,
         es_promocion: es_promocion ?? false,
@@ -529,7 +592,9 @@ router.post('/', authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa, error: bolsaErr } = await supabase
     .from('bolsas')
-    .select('negocio_id, estado_aprobacion, motivo_rechazo, peso_estimado_kg, categoria_alimento, nombre, precio_original, precio_descuento, cantidad_disponible, hora_recogida_inicio, hora_recogida_fin, fecha_caducidad')
+    // Fila completa: decidirRevision compara cada campo editado contra su valor
+    // actual para saber si hubo un cambio real de contenido.
+    .select('*')
     .eq('id', req.params.id)
     .single();
   console.log('[PUT /bolsas/:id] id=%s usuario=%s error=%s', req.params.id, req.usuario?.id, bolsaErr?.message);
@@ -549,11 +614,24 @@ router.put('/:id', authMiddleware, async (req, res) => {
     // permitir editarla o activarla podría hacer que apruebe una versión que el
     // restaurante ya cambió. Bloqueado solo mientras dure esa primera revisión;
     // en cuanto hay una decisión (aprobado/rechazado/pedir-cambios) se libera.
-    if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo) {
+    //
+    // Excepción: una pendiente heredada SIN foto. El admin no puede aprobarla
+    // (routes/admin.js lo bloquea), así que no hay carrera posible — se deja
+    // editar, pero solo para completar la foto (sin ella quedaría trabada).
+    if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo && !tieneFoto(bolsa.imagen_url)) {
+      if (!tieneFoto(req.body.imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
+    } else if (bolsa.estado_aprobacion === 'pendiente' && !bolsa.motivo_rechazo) {
       return res.status(409).json({
         error: 'Esta publicación está en revisión inicial. Espera a que el administrador la revise antes de editarla o activarla.',
       });
     }
+  }
+
+  // Eliminada = permanente. Ningún PUT puede modificarla, ni reactivarla —
+  // tampoco el admin: si de verdad hay que deshacerlo, es una operación
+  // directa en la base de datos, no un camino de la API (ver DELETE-4).
+  if (estaEliminada(bolsa)) {
+    return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede modificarse.' });
   }
 
   // co2_salvado_kg NO está en esta lista a propósito: es un campo derivado. Lo
@@ -562,14 +640,73 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // ambiental que quisiera.
   const campos = ['nombre','descripcion','contenido','precio_original','precio_descuento',
     'cantidad_disponible','tipo','categoria','hora_recogida_inicio','hora_recogida_fin',
-    'permite_envio','activo','imagen_url','fecha_caducidad','categoria_alimento',
+    'permite_envio','activo','imagen_url','fecha_caducidad','fecha_disponible','categoria_alimento',
     'categoria_menu','es_tiempo_limitado','es_promocion','es_descuento',
     'es_destacado','es_mas_vendido','es_precio_bajo','peso_estimado_kg'];
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
+  // Una edición nunca puede quitar la foto de una publicación que la tiene.
+  // Una heredada sin foto que recibe vacío otra vez no es un cambio (se
+  // descarta); si además la edición la manda a revisión, se exige foto abajo.
+  const errorFoto = normalizarFotoEnEdicion(updates, bolsa.imagen_url, MENSAJE_FOTO_PUBLICACION);
+  if (errorFoto) return res.status(400).json({ error: errorFoto });
+
+  // Promoción nunca tiene fecha fin (igual que al crear, ver POST /api/bolsas):
+  // si el tipo resultante es 'cupon', cualquier fecha_caducidad que venga en
+  // el body se descarta — ANTES de decidirRevision, para que comparar contra
+  // la fila actual (ya guardada en null) nunca detecte un "cambio" falso por
+  // un valor que de todos modos se va a ignorar (p. ej. la app reenvía el
+  // formulario completo con la fecha que cargó, aunque nunca vaya a guardarse).
+  const tipoResultantePrevio = updates.tipo !== undefined ? updates.tipo : bolsa.tipo;
+  if (tipoResultantePrevio === 'cupon' && updates.fecha_caducidad !== undefined) {
+    updates.fecha_caducidad = null;
+  }
+
+  // Invariante de backend, independiente del frontend: el switch "activo" (o
+  // cualquier llamada que solo mande ese campo) nunca puede, por sí solo,
+  // activar una publicación que el admin no aprobó — ni pendiente ni
+  // rechazada. La corrección de una rechazada (que SÍ restaura activo=true
+  // como parte de reenviarla a revisión) no pasa por aquí: ese camino cambia
+  // más campos que solo `activo` (ver activarSinAprobacionEsInvalido).
+  if (activarSinAprobacionEsInvalido(bolsa, updates)) {
+    return res.status(409).json({
+      error: 'Esta publicación no está aprobada. No se puede activar hasta que un administrador la apruebe.',
+    });
+  }
+
+  // Estado de revisión resultante (services/publicaciones.js). Los restaurantes
+  // nunca fijan estado_aprobacion por su cuenta: `campos` no lo incluye, y aquí
+  // solo lo cambia la regla. Se decide ANTES de validar porque reenviar una
+  // rechazada la reactiva, y una reactivación exige horario vigente.
+  const esAdmin = req.usuario.rol === 'admin';
+  const revision = esAdmin ? null : decidirRevision(bolsa, updates);
+  if (revision) Object.assign(updates, revision.cambios);
+  else if (req.body.estado_aprobacion !== undefined) updates.estado_aprobacion = req.body.estado_aprobacion;
+
   const datosResultantes = { ...bolsa, ...updates };
-  const errorValidacion = validarDatosBolsa(datosResultantes, { permiteCantidadCero: true });
+
+  // Publicación heredada sin foto: puede seguir leyéndose, ocultándose,
+  // reponiendo unidades o eliminándose (cambios que no vuelven a revisión),
+  // pero un cambio de contenido que la manda a revisión exige completar la
+  // foto — el mismo formulario de edición permite agregarla.
+  if (revision?.reenvio && !tieneFoto(datosResultantes.imagen_url)) {
+    return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
+  }
+
+  // Red de seguridad para el caso raro de convertir el tipo a 'cupon' en esta
+  // misma edición SIN tocar fecha_caducidad explícitamente: el valor viejo
+  // (de cuando era 'bolsa') no debe quedar colgado. No reabre la decisión de
+  // revisión de arriba (tipo ya la disparó por sí solo); solo corrige lo que
+  // se va a escribir.
+  if (datosResultantes.tipo === 'cupon' && datosResultantes.fecha_caducidad != null) {
+    updates.fecha_caducidad = null;
+    datosResultantes.fecha_caducidad = null;
+  }
+
+  // tipo solo se valida si la edición lo cambia: una fila heredada con un tipo
+  // fuera de catálogo no debe impedir corregir otros campos.
+  const errorValidacion = validarDatosBolsa({ ...datosResultantes, tipo: updates.tipo }, { permiteCantidadCero: true });
   if (errorValidacion) return res.status(400).json({ error: errorValidacion });
 
   // El horario resultante debe terminar en el futuro (hora de Guatemala) cuando la
@@ -580,7 +717,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // ni en una que toca campos ajenos al horario: el restaurante debe poder archivar
   // o corregir una publicación ya vencida — para volver a publicarla tiene que
   // mandar un horario nuevo, y entonces esta validación sí corre.
-  const tocaHorario = ['hora_recogida_inicio', 'hora_recogida_fin', 'fecha_caducidad']
+  const tocaHorario = ['hora_recogida_inicio', 'hora_recogida_fin', 'fecha_caducidad', 'fecha_disponible']
     .some(campo => updates[campo] !== undefined);
   const reactiva = updates.activo === true || updates.activo === 'true';
   if (tocaHorario || reactiva) {
@@ -624,29 +761,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
     updates.inactivo_desde = updates.activo ? null : new Date().toISOString();
   }
 
-  // Un cambio que solo toca "activo" (+ inactivo_desde, que viaja siempre junto)
-  // es un toggle de visibilidad del restaurante, no una edición de contenido —
-  // no debe mandar la publicación de vuelta a revisión.
-  const soloVisibilidad = Object.keys(updates).length > 0 &&
-    Object.keys(updates).every(k => k === 'activo' || k === 'inactivo_desde');
-
-  // BUG 2: Restaurantes nunca pueden aprobar directamente — strip any estado_aprobacion del body
-  if (req.usuario.rol !== 'admin') {
-    delete updates.estado_aprobacion;
-    // Si editó el contenido de una bolsa aprobada o rechazada, vuelve a revisión del admin
-    if (!soloVisibilidad && (bolsa.estado_aprobacion === 'aprobado' || bolsa.estado_aprobacion === 'rechazado')) {
-      updates.estado_aprobacion = 'pendiente';
-      updates.motivo_rechazo = null;
-    } else if (!soloVisibilidad && bolsa.estado_aprobacion === 'pendiente' && bolsa.motivo_rechazo) {
-      // Estaba en "pedir cambios" (pendiente + motivo). Al reenviar, limpiar el
-      // motivo para que el admin vea que el restaurante ya corrigió y quede
-      // claro en la cola que espera una revisión nueva, no la misma de antes.
-      updates.motivo_rechazo = null;
-    }
-  } else if (req.body.estado_aprobacion !== undefined) {
-    updates.estado_aprobacion = req.body.estado_aprobacion;
-  }
-
   // Reintenta quitando, una por una, las columnas que el propio error de la BD
   // reporte como inexistentes — nunca se inventa/crea el campo, solo se deja de
   // enviar el que realmente falta y se sigue trabajando con los campos reales.
@@ -665,26 +779,84 @@ router.put('/:id', authMiddleware, async (req, res) => {
   if (columnasOmitidas.length) {
     console.warn('[PUT /bolsas/:id] columnas omitidas por no existir en la BD:', columnasOmitidas.join(', '));
   }
+
+  // Auditoría de cada vuelta a revisión: el motivo del rechazo anterior se limpia
+  // de la fila (para que la cola del admin muestre una revisión nueva), así que
+  // queda aquí. Discriminador por instante: cada reenvío es un evento propio.
+  if (revision?.reenvio) {
+    console.log('[PUT /bolsas/:id] reenviada a revisión | id=%s | estado_anterior=%s | campos=%s',
+      req.params.id, bolsa.estado_aprobacion, revision.campos.join(','));
+    enqueueEventBestEffort({
+      eventType: 'publicacion.reenviada_revision', aggregateType: 'bolsa', aggregateId: req.params.id,
+      discriminator: new Date().toISOString(),
+      payload: {
+        negocio_id: bolsa.negocio_id,
+        estado_anterior: bolsa.estado_aprobacion ?? null,
+        motivo_anterior: bolsa.motivo_rechazo ?? null,
+        campos_cambiados: revision.campos,
+        actor_usuario_id: req.usuario.id,
+      },
+    });
+  }
   res.json(data);
 });
 
-// DELETE /api/bolsas/:id — desactivar bolsa
+// DELETE /api/bolsas/:id — eliminación LÓGICA de la publicación.
+//
+// No es un hard delete: pedido_items.bolsa_id es NOT NULL REFERENCES
+// bolsas(id) sin ON DELETE CASCADE (sql/cubo-pago-schema.sql) — un DELETE
+// físico sobre una bolsa con pedidos históricos fallaría por integridad
+// referencial, y aunque no los tuviera, dejaría huérfanas las filas de
+// `favoritos` que la referencian por `referencia_id` (sin FK real). Se marca
+// `eliminado_en` (permanente, nunca se deshace) en vez de borrar la fila:
+// services/publicaciones.js la excluye de TODO — feed público, detalle,
+// panel del restaurante (mi_negocio=true) y cola del admin — y
+// PUT /api/bolsas/:id rechaza cualquier intento de modificarla después.
 router.delete('/:id', authMiddleware, async (req, res) => {
   const { data: bolsa } = await supabase
     .from('bolsas')
-    .select('negocio_id, negocios(propietario_id)')
+    .select('negocio_id, eliminado_en, negocios(propietario_id)')
     .eq('id', req.params.id)
     .single();
   if (!bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
   if (bolsa.negocios?.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
-  // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
-  // de limpieza (server.js). Si la columna aún no existe, reintentar sin ella.
-  const { error } = await supabase.from('bolsas')
-    .update({ activo: false, inactivo_desde: new Date().toISOString() })
-    .eq('id', req.params.id);
-  if (error) await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
-  res.json({ ok: true });
+
+  // Idempotente: repetir el DELETE sobre algo ya eliminado no es un error ni
+  // vuelve a auditar un evento que no ocurrió.
+  if (estaEliminada(bolsa)) {
+    return res.json({ ok: true, tipo: 'ya_eliminada' });
+  }
+
+  const ahora = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('bolsas')
+    .update({ eliminado_en: ahora, eliminado_por: req.usuario.id, activo: false })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) {
+    // Columna eliminado_en/eliminado_por aún no existe (migración
+    // supabase/migrations/20261003230000_bolsas_eliminacion_logica.sql
+    // pendiente de aplicar) — degradar al comportamiento anterior (solo
+    // ocultar) en vez de fallar, nunca inventar la columna.
+    console.warn('[DELETE /bolsas/:id] eliminado_en no disponible aún — solo se oculta, no se elimina:', error.message);
+    const r2 = await supabase.from('bolsas')
+      .update({ activo: false, inactivo_desde: ahora })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (r2.error) await supabase.from('bolsas').update({ activo: false }).eq('id', req.params.id);
+    return res.json({ ok: true, tipo: 'oculta_sin_migracion', data: r2.data });
+  }
+
+  enqueueEventBestEffort({
+    eventType: 'publicacion.eliminada', aggregateType: 'bolsa', aggregateId: req.params.id,
+    payload: { negocio_id: bolsa.negocio_id, actor_usuario_id: req.usuario.id, actor_rol: req.usuario.rol },
+  });
+
+  res.json({ ok: true, tipo: 'eliminada', data });
 });
 
 async function notificarFavoritos(negocioId, bolsaNombre, bolsaId) {
