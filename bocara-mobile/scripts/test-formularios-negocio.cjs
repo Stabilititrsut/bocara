@@ -42,7 +42,7 @@ const tick = async () => { for (let i = 0; i < 5; i++) await new Promise(setImme
 // que el resultado no dependa de a qué hora corre la suite.
 const bolsa = (overrides = {}) => ({
   id: 'b1', negocio_id: 'n1', nombre: 'Bolsa sorpresa', precio_original: 40, precio_descuento: 20,
-  cantidad_disponible: 5, tipo: 'bolsa', hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
+  cantidad_disponible: 5, tipo: 'bolsa', hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
   ...overrides,
 });
 
@@ -115,8 +115,8 @@ test('bolsas.tsx: crear bolsa manda negocio_id, tipo="bolsa" y fecha_disponible/
   const form = {
     tipo_form: 'bolsa', nombre: 'Pan del día', descripcion: '', contenido: 'Pan variado',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
-    peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
+    peso_estimado_kg: '0.5', activo: true, categoria: 'Porcentaje',
     fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
@@ -152,8 +152,8 @@ test('bolsas.tsx: editar bolsa NO manda negocio_id (PUT lo ignora, ver backend/r
   const form = {
     tipo_form: 'bolsa', nombre: 'Pan del día', descripcion: '', contenido: '',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
-    peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
+    peso_estimado_kg: '0.5', activo: true, categoria: 'Porcentaje',
     fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
@@ -177,7 +177,7 @@ test('cupones.tsx: crear cupón manda tipo="cupon" y negocio_id; editar NO manda
   const form = {
     nombre: 'Miércoles feliz', contenido: 'bocara20', categoria: 'Porcentaje', descripcion: '',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '3',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
   };
   // cupones, loading, refreshing, modal, editando, saving, negocioId, form
   const crearCalls = [];
@@ -219,8 +219,8 @@ test('bolsas.tsx: tras el primer toque, el botón queda deshabilitado y un segun
   const form = {
     tipo_form: 'bolsa', nombre: 'Pan', descripcion: '', contenido: '',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
-    peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
+    peso_estimado_kg: '0.5', activo: true, categoria: 'Porcentaje',
     fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
@@ -249,7 +249,7 @@ test('cupones.tsx: tras el primer toque, el botón queda deshabilitado y un segu
   const form = {
     nombre: 'Miércoles feliz', contenido: 'BOCARA20', categoria: 'Porcentaje', descripcion: '',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '3',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
   };
   let resolver;
   const pending = new Promise(r => { resolver = r; });
@@ -273,8 +273,8 @@ test('bolsas.tsx: si el submit falla, el modal permanece abierto y el formulario
   const form = {
     tipo_form: 'bolsa', nombre: 'Pan', descripcion: '', contenido: '',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
-    peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
+    peso_estimado_kg: '0.5', activo: true, categoria: 'Porcentaje',
     fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,
@@ -307,8 +307,8 @@ test('bolsas.tsx: muestra loading (spinner) en vez del botón Guardar mientras e
   const form = {
     tipo_form: 'bolsa', nombre: 'Pan', descripcion: '', contenido: '',
     precio_original: '40', precio_descuento: '20', cantidad_disponible: '5',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
-    peso_estimado_kg: '0.5', imagen_url: '', activo: true, categoria: 'Porcentaje',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
+    peso_estimado_kg: '0.5', activo: true, categoria: 'Porcentaje',
     fecha_disponible: '2026-01-01', fecha_caducidad: '2026-12-31', categoria_alimento: 'cereales', categoria_menu: '',
     es_tiempo_limitado: true, es_promocion: false, es_descuento: false,
     es_destacado: false, es_mas_vendido: false, es_precio_bajo: false,

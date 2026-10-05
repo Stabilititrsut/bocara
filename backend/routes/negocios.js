@@ -8,6 +8,7 @@ const { hoyGuatemala } = require('../services/horarioGuatemala');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../services/impactoAmbiental');
 const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
+const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -295,9 +296,14 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'No autorizado' });
 
   const { nombre, descripcion, direccion, zona, ciudad, telefono, categoria, email,
-    nit, dpi, datos_bancarios, horario_atencion,
+    nit, dpi, datos_bancarios, horario_atencion, imagen_url,
     latitud: latManual, longitud: lngManual } = req.body;
   if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
+  // Un negocio creado por esta vía puede nacer aprobado y activo (admin):
+  // nunca sin foto. (El registro de restaurantes crea el negocio en
+  // routes/auth.js, pendiente e inactivo — la foto se sube justo después, con
+  // la sesión ya creada, y sin ella el admin no puede aprobarlo.)
+  if (!tieneFoto(imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
 
   let latitud = latManual ? parseFloat(latManual) : null;
   let longitud = lngManual ? parseFloat(lngManual) : null;
@@ -311,6 +317,7 @@ router.post('/', authMiddleware, async (req, res) => {
     propietario_id: req.usuario.id, nombre, descripcion, direccion,
     zona, ciudad: ciudad || 'Guatemala', telefono, categoria,
     email: email || req.usuario.email,
+    imagen_url: imagen_url.trim(),
     latitud, longitud,
     estado_verificacion: req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente',
     activo: req.usuario.rol === 'admin',
@@ -409,7 +416,7 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
 
 // PUT /api/negocios/:id — actualizar negocio con re-geocodificación si cambia dirección
 router.put('/:id', authMiddleware, async (req, res) => {
-  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud').eq('id', req.params.id).single();
+  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud,imagen_url').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
   if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
@@ -436,6 +443,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
   if (punto_referencia !== undefined)   updates.punto_referencia = punto_referencia;
   if (google_maps_url !== undefined)    updates.google_maps_url = google_maps_url;
   if (waze_url !== undefined)           updates.waze_url = waze_url;
+
+  // La foto del negocio no se puede quitar (null, '' o espacios) — solo
+  // reemplazar por otra. Y un negocio sin foto (dato heredado) no puede
+  // quedar activo por esta vía.
+  const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
+  if (errorFoto) return res.status(400).json({ error: errorFoto });
+  const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
+  if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
+    return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
+  }
 
   // Coordenadas manuales tienen prioridad
   if (latManual != null) updates.latitud  = parseFloat(latManual);

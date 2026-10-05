@@ -14,7 +14,7 @@ import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 import {
   estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
-  horaParaFormulario, toggleVisibilidadBloqueado,
+  horaParaFormulario, toggleVisibilidadBloqueado, faltaFotoParaGuardar, MENSAJE_FOTO_PUBLICACION,
   type ClaveEstado,
 } from '@/src/utils/estadoPublicacion';
 
@@ -172,7 +172,13 @@ export default function BolsasRestauranteScreen() {
   const [uploadFotoError, setUploadFotoError] = useState('');
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
   const [saving, setSaving] = useState(false);
+  // Se intentó guardar sin foto: marca el bloque de foto en rojo.
+  const [fotoFaltante, setFotoFaltante] = useState(false);
   const fileInputRef = useRef<any>(null);
+  // Scroll del formulario y posición del bloque de foto, para llevar al
+  // usuario hasta ella si intenta guardar sin foto.
+  const modalScrollRef = useRef<ScrollView>(null);
+  const fotoY = useRef(0);
   // Publicación que se está editando y el payload que su formulario cargó.
   const edicionInicial = useRef<{ bolsa: BolsaRestaurante; payload: CrearBolsaPayload } | null>(null);
   const set = <K extends keyof BolsaForm>(k: K) => (v: BolsaForm[K]) => setForm(f => ({ ...f, [k]: v }));
@@ -189,7 +195,7 @@ export default function BolsasRestauranteScreen() {
         const ext = file.type.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(base64, path, file.type || 'image/jpeg');
-        if (data?.publicUrl) setForm((f) => ({ ...f, imagen_url: data.publicUrl }));
+        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); }
       } catch (err: any) {
         setUploadFotoError(err.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -209,7 +215,7 @@ export default function BolsasRestauranteScreen() {
         const ext = picked.mimeType.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
-        if (data?.publicUrl) setForm((f) => ({ ...f, imagen_url: data.publicUrl }));
+        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); }
       } catch (e: any) {
         setUploadFotoError(e.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -241,6 +247,7 @@ export default function BolsasRestauranteScreen() {
 
   function abrir(b?: BolsaRestaurante) {
     setUploadFotoError('');
+    setFotoFaltante(false);
     setSaving(false);
     if (b) {
       setEditId(b.id);
@@ -297,8 +304,20 @@ export default function BolsasRestauranteScreen() {
     else Alert.alert('Listo', msg);
   }
 
+  // Sin foto no se guarda: se marca el bloque, se lleva el scroll hasta él y
+  // se explica por qué (nunca un botón deshabilitado sin explicación).
+  function marcarFotoFaltante() {
+    setFotoFaltante(true);
+    modalScrollRef.current?.scrollTo({ y: Math.max(0, fotoY.current - 16), animated: true });
+    alertar(MENSAJE_FOTO_PUBLICACION);
+  }
+
   async function guardar() {
     if (saving) return;
+    if (uploadingFoto) return alertar('Espera a que termine de subir la foto.');
+    // Foto obligatoria al crear (Promoción y Tiempo limitado). Al editar se
+    // revisa más abajo, cuando ya se sabe qué cambió.
+    if (!editId && faltaFotoParaGuardar(form.imagen_url, null)) return marcarFotoFaltante();
     if (publicacionVencida(form)) return alertar('El horario de recogida ya venció. Corrígelo antes de publicar.');
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
       return alertar('Nombre, precio original y precio Bocara son requeridos');
@@ -345,6 +364,11 @@ export default function BolsasRestauranteScreen() {
     if (esEdicion && Object.keys(cambios).length === 0) {
       setModal(false);
       return avisar('No modificaste ningún dato.');
+    }
+    // Publicación heredada sin foto: cambiar unidades o visibilidad se
+    // permite; un cambio que la manda a revisión exige agregar la foto.
+    if (esEdicion && faltaFotoParaGuardar(form.imagen_url, { bolsa: edicionInicial.current?.bolsa, cambios })) {
+      return marcarFotoFaltante();
     }
     setSaving(true);
 
@@ -567,7 +591,7 @@ export default function BolsasRestauranteScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+          <ScrollView ref={modalScrollRef} contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
             {/* Qué pasará al guardar esta edición (reglas del backend). */}
             {editId && avisoAlEditar(edicionInicial.current?.bolsa) ? (
               <Text style={s.avisoEdicion}>{avisoAlEditar(edicionInicial.current?.bolsa)}</Text>
@@ -600,11 +624,11 @@ export default function BolsasRestauranteScreen() {
               </View>
             )}
 
-            {/* Foto */}
-            <>
-              <Text style={s.sectionLabel}>📷 Foto</Text>
+            {/* Foto (obligatoria) */}
+            <View onLayout={(e) => { fotoY.current = e.nativeEvent.layout.y; }}>
+              <Text style={s.sectionLabel}>📷 Foto *</Text>
               <TouchableOpacity
-                style={[s.fotoBtn, uploadingFoto && { opacity: 0.6 }]}
+                style={[s.fotoBtn, fotoFaltante && !form.imagen_url && s.fotoBtnError, uploadingFoto && { opacity: 0.6 }]}
                 onPress={seleccionarFotoBolsa}
                 disabled={uploadingFoto}
                 activeOpacity={0.8}
@@ -623,10 +647,13 @@ export default function BolsasRestauranteScreen() {
                   }
                 </View>
               </TouchableOpacity>
+              {fotoFaltante && !form.imagen_url ? (
+                <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {MENSAJE_FOTO_PUBLICACION}</Text></View>
+              ) : null}
               {uploadFotoError ? (
                 <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {uploadFotoError}</Text></View>
               ) : null}
-            </>
+            </View>
 
             <Text style={s.sectionLabel}>📝 Información</Text>
             <Field label="Nombre *" value={form.nombre} onChange={set('nombre')} placeholder={form.tipo_form === 'cupon' ? 'Ej. Descuento miércoles' : 'Ej. Bolsa de panadería'} />
@@ -892,6 +919,7 @@ const s = StyleSheet.create({
   uploadError: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12, marginTop: -8 },
   uploadErrorText: { color: '#B91C1C', fontSize: 13, fontWeight: '600' },
   fotoBtn: { borderRadius: 12, overflow: 'hidden', height: 150, marginBottom: 16 },
+  fotoBtnError: { borderWidth: 2, borderColor: Colors.error },
   fotoPreview: { width: '100%', height: '100%' },
   fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', gap: 6 },
   fotoPlaceholderText: { fontSize: 13, color: Colors.textSecondary },

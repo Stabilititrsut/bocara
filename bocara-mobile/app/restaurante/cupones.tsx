@@ -2,16 +2,17 @@ import { publicacionVencida } from '@/src/utils/horarioRecogida';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal,
+  SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal, Image,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { bolsasAPI, negociosAPI } from '@/src/services/api';
+import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
+import { pickImage } from '@/src/utils/pickImage';
 import { Colors } from '@/constants/Colors';
 import type { Bolsa, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
 import {
   estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
-  horaParaFormulario,
+  horaParaFormulario, faltaFotoParaGuardar, MENSAJE_FOTO_PUBLICACION,
 } from '@/src/utils/estadoPublicacion';
 
 // Promoción tal como la devuelve GET /bolsas?mi_negocio=true: incluye el estado
@@ -35,6 +36,7 @@ interface CuponForm {
   cantidad_disponible: string;
   hora_recogida_inicio: string;
   hora_recogida_fin: string;
+  imagen_url: string;
 }
 
 const FORM_INIT: CuponForm = {
@@ -47,6 +49,7 @@ const FORM_INIT: CuponForm = {
   cantidad_disponible: '1',
   hora_recogida_inicio: '18:00',
   hora_recogida_fin: '20:00',
+  imagen_url: '',
 };
 
 // Alert.alert no hace nada en react-native-web: en web se usa el diálogo del
@@ -68,6 +71,7 @@ function construirPayload(form: CuponForm, horaInicio: string, horaFin: string):
     cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
     hora_recogida_inicio: horaInicio,
     hora_recogida_fin: horaFin,
+    imagen_url: form.imagen_url || null,
     tipo: 'cupon',
     // fecha_disponible (fecha de publicación) es obligatoria en el backend
     // (ver routes/bolsas.js). Esta pantalla no tiene selector propio de
@@ -102,6 +106,10 @@ export default function CuponesRestauranteScreen() {
   // Payload que el formulario cargó al abrir "Editar": base para mandar solo
   // los campos que el usuario cambió (ver payloadDeEdicion).
   const cargadoAlEditar = useRef<CrearBolsaPayload | null>(null);
+  // Foto obligatoria: subida en curso / se intentó guardar sin foto.
+  const [subiendoFoto, setSubiendoFoto] = useState(false);
+  const [fotoFaltante, setFotoFaltante] = useState(false);
+  const modalScrollRef = useRef<ScrollView>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -125,6 +133,7 @@ export default function CuponesRestauranteScreen() {
   function abrirNuevo() {
     setEditando(null);
     setErrorGuardar('');
+    setFotoFaltante(false);
     cargadoAlEditar.current = null;
     setForm({ ...FORM_INIT });
     setModal(true);
@@ -133,6 +142,7 @@ export default function CuponesRestauranteScreen() {
   function abrirEditar(c: CuponRestaurante) {
     setEditando(c);
     setErrorGuardar('');
+    setFotoFaltante(false);
     const cargado: CuponForm = {
       nombre: c.nombre || '',
       contenido: c.contenido || '',
@@ -143,6 +153,7 @@ export default function CuponesRestauranteScreen() {
       cantidad_disponible: String(c.cantidad_disponible || '1'),
       hora_recogida_inicio: horaParaFormulario(c.hora_recogida_inicio, '18:00'),
       hora_recogida_fin: horaParaFormulario(c.hora_recogida_fin, '20:00'),
+      imagen_url: c.imagen_url || '',
     };
     cargadoAlEditar.current = construirPayload(cargado,
       normalizarHora(cargado.hora_recogida_inicio) || cargado.hora_recogida_inicio,
@@ -151,8 +162,37 @@ export default function CuponesRestauranteScreen() {
     setModal(true);
   }
 
+  // Mismo flujo de subida que restaurante/perfil.tsx (pickImage resuelve web y nativo).
+  async function seleccionarFoto() {
+    const picked = await pickImage();
+    if (!picked) return;
+    setSubiendoFoto(true);
+    setErrorGuardar('');
+    try {
+      const ext = picked.mimeType.split('/')[1] || 'jpg';
+      const { data } = await uploadsAPI.uploadBase64(picked.base64, `bolsas/${negocioId}_${Date.now()}.${ext}`, picked.mimeType);
+      if (data?.publicUrl) {
+        setForm(f => ({ ...f, imagen_url: data.publicUrl }));
+        setFotoFaltante(false);
+      }
+    } catch (e: any) {
+      setErrorGuardar(e.message || 'No se pudo subir la foto');
+    } finally {
+      setSubiendoFoto(false);
+    }
+  }
+
+  function marcarFotoFaltante() {
+    setFotoFaltante(true);
+    setErrorGuardar(MENSAJE_FOTO_PUBLICACION);
+    modalScrollRef.current?.scrollTo({ y: 0, animated: true });
+    avisar('Falta la foto', MENSAJE_FOTO_PUBLICACION);
+  }
+
   async function guardar() {
     if (saving) return;
+    if (subiendoFoto) return avisar('Subiendo foto', 'Espera a que termine de subir la foto.');
+    if (!editando && faltaFotoParaGuardar(form.imagen_url, null)) return marcarFotoFaltante();
     if (publicacionVencida(form)) {
       return avisar('Publicación vencida', 'El horario de recogida ya venció. Corrígelo antes de publicar.');
     }
@@ -175,6 +215,7 @@ export default function CuponesRestauranteScreen() {
       setModal(false);
       return avisar('Sin cambios', 'No modificaste ningún dato.');
     }
+    if (editando && faltaFotoParaGuardar(form.imagen_url, { bolsa: editando, cambios })) return marcarFotoFaltante();
     setSaving(true);
     setErrorGuardar('');
     try {
@@ -344,10 +385,25 @@ export default function CuponesRestauranteScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+          <ScrollView ref={modalScrollRef} contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
             {editando && avisoAlEditar(editando) ? <Text style={s.avisoEdicion}>{avisoAlEditar(editando)}</Text> : null}
             {editando?.motivo_rechazo ? <Text style={s.motivo}>Motivo del administrador: {editando.motivo_rechazo}</Text> : null}
             {errorGuardar ? <Text style={s.errorGuardar}>{errorGuardar}</Text> : null}
+            <Field label="Foto *">
+              <TouchableOpacity
+                style={[s.fotoBtn, fotoFaltante && !form.imagen_url && s.fotoBtnError]}
+                onPress={seleccionarFoto}
+                disabled={subiendoFoto}
+                activeOpacity={0.8}
+              >
+                {form.imagen_url
+                  ? <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
+                  : <Text style={s.fotoPlaceholderText}>🏷️ Toca para agregar foto</Text>}
+                {subiendoFoto ? <ActivityIndicator style={s.fotoSpinner} color={Colors.aqua} /> : null}
+              </TouchableOpacity>
+              {fotoFaltante && !form.imagen_url ? <Text style={s.fotoErrorText}>{MENSAJE_FOTO_PUBLICACION}</Text> : null}
+            </Field>
+
             <Field label="Nombre del cupón *">
               <TextInput style={s.input} value={form.nombre} onChangeText={set('nombre')} placeholder="Ej. Descuento miércoles" placeholderTextColor={Colors.textLight} />
             </Field>
@@ -466,6 +522,12 @@ const s = StyleSheet.create({
   modalTitle: { fontSize: 17, fontWeight: '800', color: Colors.brown },
   saveText: { fontSize: 16, color: Colors.orange, fontWeight: '800' },
   modalScroll: { padding: 20 },
+  fotoBtn: { height: 140, borderRadius: 12, overflow: 'hidden', backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+  fotoBtnError: { borderWidth: 2, borderColor: Colors.error },
+  fotoPreview: { width: '100%', height: '100%' },
+  fotoPlaceholderText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
+  fotoSpinner: { position: 'absolute' },
+  fotoErrorText: { color: Colors.error, fontSize: 12, fontWeight: '700', marginTop: 6 },
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   input: { backgroundColor: Colors.inputBg, borderRadius: 12, padding: 13, fontSize: 15, color: Colors.textPrimary },
   codigoInput: { fontWeight: '800', letterSpacing: 2, color: Colors.brown },

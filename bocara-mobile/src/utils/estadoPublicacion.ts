@@ -117,3 +117,35 @@ export function horaParaFormulario(valor: string | null | undefined, porDefecto:
   const m = /^(\d{1,2}:\d{2})(?::\d{2})?/.exec(String(valor).trim());
   return m ? m[1] : String(valor);
 }
+
+// ── Foto obligatoria ─────────────────────────────────────────────────────────
+// Toda publicación nueva (Promoción y Tiempo limitado) necesita foto — el
+// backend la exige igual (backend/services/fotoObligatoria.js). Una heredada
+// sin foto puede seguir editándose en lo que no vuelve a revisión (unidades,
+// visibilidad), pero un cambio de contenido exige completarla — mismo criterio
+// que decidirRevision en backend/services/publicaciones.js.
+export const MENSAJE_FOTO_PUBLICACION = 'Debes agregar una foto antes de publicar.';
+
+export function tieneFoto(url: string | null | undefined): boolean {
+  return typeof url === 'string' && url.trim() !== '';
+}
+
+const CAMPOS_SIN_REVISION = new Set(['activo', 'cantidad_disponible']);
+
+// ¿Guardar esta edición la manda (o reenvía) a revisión?
+export function edicionVuelveARevision(b: PublicacionConEstado | null | undefined, cambios: object): boolean {
+  const claves = Object.keys(cambios);
+  if (claves.length === 0 || claves.every(c => c === 'activo')) return false;
+  if (b?.estado_aprobacion === 'rechazado') return true;
+  if (b?.estado_aprobacion === 'pendiente') return !!b.motivo_rechazo;
+  return claves.some(c => !CAMPOS_SIN_REVISION.has(c));
+}
+
+// ¿Falta la foto para guardar? `edicion` null = crear (siempre la exige).
+export function faltaFotoParaGuardar(
+  imagenUrl: string | null | undefined,
+  edicion: { bolsa: PublicacionConEstado | null | undefined; cambios: object } | null,
+): boolean {
+  if (tieneFoto(imagenUrl)) return false;
+  return edicion ? edicionVuelveARevision(edicion.bolsa, edicion.cambios) : true;
+}

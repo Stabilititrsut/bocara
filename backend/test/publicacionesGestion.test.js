@@ -19,18 +19,21 @@ const HORARIO_VIGENTE = {
   fecha_disponible: HOY, fecha_caducidad: MANANA,
 };
 
+// Toda publicación nueva exige foto (services/fotoObligatoria.js).
+const FOTO = 'https://cdn.bocara.test/publicaciones/foto.jpg';
+
 function promo(extra = {}) {
   return {
     nombre: '2x1 Ceviche', contenido: 'OLA2X1', tipo: 'cupon', categoria: '2x1',
     descripcion: 'Dos ceviches por el precio de uno', precio_original: 120, precio_descuento: 60,
-    cantidad_disponible: 5, ...HORARIO_VIGENTE, ...extra,
+    cantidad_disponible: 5, imagen_url: FOTO, ...HORARIO_VIGENTE, ...extra,
   };
 }
 function bolsaTiempoLimitado(extra = {}) {
   return {
     nombre: 'Bolsa sorpresa', tipo: 'bolsa', descripcion: 'Pan del día', precio_original: 80,
     precio_descuento: 35, cantidad_disponible: 3, peso_estimado_kg: 1.2,
-    categoria_alimento: 'cereales', ...HORARIO_VIGENTE, ...extra,
+    categoria_alimento: 'cereales', imagen_url: FOTO, ...HORARIO_VIGENTE, ...extra,
   };
 }
 

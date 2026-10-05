@@ -234,6 +234,12 @@ export default function PerfilRestauranteScreen() {
       const lng = parseFloat(form.longitud);
 
       if (negocio?.estado_verificacion === 'rechazado') {
+        // Sin foto del negocio la solicitud no puede aprobarse (el admin
+        // recibiría un 409): no se reenvía hasta que la agregue.
+        if (!negocio?.imagen_url?.trim()) {
+          showToast('Debes agregar una foto del negocio para continuar.', false);
+          return;
+        }
         // Si fue rechazado: actualizar directamente + reenviar a revisión
         const payload: any = {};
         camposPendientes.forEach(k => { payload[k] = form[k]; });
@@ -407,8 +413,9 @@ export default function PerfilRestauranteScreen() {
           </View>
         )}
 
-        {/* Foto del negocio */}
-        <TouchableOpacity style={s.imgContainer} onPress={seleccionarImagen} disabled={uploadingImg}>
+        {/* Foto del negocio (obligatoria: sin ella el negocio no puede aprobarse ni activarse) */}
+        <Text style={s.fotoLabel}>Foto del negocio *</Text>
+        <TouchableOpacity style={[s.imgContainer, !negocio?.imagen_url && s.imgContainerError]} onPress={seleccionarImagen} disabled={uploadingImg}>
           {negocio?.imagen_url ? (
             <Image source={{ uri: negocio.imagen_url }} style={s.imgNegocio} contentFit="cover" transition={200} />
           ) : (
@@ -427,6 +434,11 @@ export default function PerfilRestauranteScreen() {
         {imgError ? (
           <View style={s.errorInline}>
             <Text style={s.errorInlineText}>⚠️ {imgError}</Text>
+          </View>
+        ) : null}
+        {negocio && !negocio.imagen_url && !uploadingImg ? (
+          <View style={s.errorInline}>
+            <Text style={s.errorInlineText}>⚠️ Debes agregar una foto del negocio para continuar.</Text>
           </View>
         ) : null}
 
@@ -649,6 +661,8 @@ const s = StyleSheet.create({
   toastErr: { backgroundColor: '#FEE2E2' },
   toastText: { fontSize: 13, fontWeight: '600', color: Colors.brown },
   imgContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 160 },
+  imgContainerError: { borderWidth: 2, borderColor: Colors.error },
+  fotoLabel: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary, marginBottom: 6 },
   imgNegocio: { width: '100%', height: '100%' },
   imgPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, justifyContent: 'center', alignItems: 'center', gap: 8 },
   imgPlaceholderText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },

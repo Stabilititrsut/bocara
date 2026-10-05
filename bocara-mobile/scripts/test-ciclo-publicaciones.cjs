@@ -88,6 +88,7 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     'expo-router': { useRouter: () => ({ push() {}, replace() {} }), useFocusEffect: cb => focos.push(cb), useLocalSearchParams: () => params },
     '@/constants/Colors': { Colors: {} },
     '@/src/utils/estadoPublicacion': estadoReal,
+    '@/src/utils/pickImage': { pickImage: async () => null },
     // Dobles de las pantallas del cliente (tienda, detalle): los mismos módulos
     // reales que usan scripts/test-cart.cjs y test-tipo-publicacion.cjs.
     '@/src/utils/horarioRecogida': horarioReal,
@@ -180,7 +181,7 @@ const cupon = (extra = {}) => ({
   precio_original: 120, precio_descuento: 60, cantidad_disponible: 5, activo: true,
   estado_aprobacion: 'aprobado', motivo_rechazo: null,
   hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
-  fecha_disponible: '2026-01-01', ...extra,
+  fecha_disponible: '2026-01-01', imagen_url: 'https://cdn.bocara.test/foto.jpg', ...extra,
 });
 
 function pantallaCupones(lista, api = {}) {
@@ -239,7 +240,7 @@ test('Promociones (restaurante): al guardar una corrección avisa que vuelve a r
   const form = {
     nombre: '2x1 Ceviche', contenido: 'ola2x1', categoria: '2x1', descripcion: '',
     precio_original: '120', precio_descuento: '60', cantidad_disponible: '5',
-    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59',
+    hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg',
   };
   const app = montar('app/restaurante/cupones.tsx', {
     forcedStates: [[], false, false, true, cupon({ estado_aprobacion: 'rechazado' }), false, 'n1', form],
@@ -781,7 +782,7 @@ const horaMock = () => load('src/utils/hora.ts');
 const formPromo = (extra = {}) => ({
   nombre: '2x1 Ceviche', contenido: 'ola2x1', categoria: '2x1', descripcion: 'Dos ceviches por uno',
   precio_original: '120', precio_descuento: '60', cantidad_disponible: '5',
-  hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', ...extra,
+  hora_recogida_inicio: '00:00', hora_recogida_fin: '23:59', imagen_url: 'https://cdn.bocara.test/foto.jpg', ...extra,
 });
 
 // ── Actores, cada uno con su pantalla real ──────────────────────────────────
@@ -1040,4 +1041,108 @@ integracion('Tipos (integración): cupon solo en Promociones; bolsa (Tiempo limi
   assert.deepEqual((await clienteTienda('tiempo_limitado')).map(b => b.id), ['tl']);
   assert.match((await clienteDetalle('promo')).texto, /Promoción/);
   assert.match((await clienteDetalle('tl')).texto, /Tiempo limitado/);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// Foto obligatoria (PHOTO-PUB-1/2/7, PHOTO-LEGACY-1) — formularios reales de
+// restaurante/bolsas.tsx y restaurante/cupones.tsx.
+// ════════════════════════════════════════════════════════════════════════════
+
+const MSG_FOTO = 'Debes agregar una foto antes de publicar.';
+const botonFoto = tree => walk(tree).find(n => n.type === 'Button' && n.props.onPress?.name === 'seleccionarFotoBolsa');
+const estiloPlano = st => Object.assign({}, ...[st].flat(Infinity).filter(Boolean));
+
+async function nuevaSinFoto(tipo) {
+  const llamadas = [];
+  const app = pantallaDisponibles([], { crear: async (p) => { llamadas.push(p); return { data: { id: 'x', ...p } }; } });
+  boton(app.tree, /^\+ Nueva$/).onPress();
+  if (tipo === 'cupon') boton(app.render(), /Promoción/).onPress();
+  const tree = app.render();
+  await guardarDe(tree).props.onPress(); await tick();
+  return { app, llamadas, tree: app.render() };
+}
+
+for (const [id, tipo, nombre] of [['PHOTO-PUB-1', 'cupon', 'Promoción'], ['PHOTO-PUB-2', 'bolsa', 'Tiempo limitado']]) {
+  test(`${id}: crear ${nombre} sin foto se bloquea al Guardar — mensaje claro, bloque marcado, sin request`, async () => {
+    const { app, llamadas, tree } = await nuevaSinFoto(tipo);
+    assert.equal(llamadas.length, 0, 'no llega al backend');
+    assert.ok(app.alerts.some(a => a[1] === MSG_FOTO), JSON.stringify(app.alerts));
+    assert.match(textOf(tree), /Debes agregar una foto antes de publicar\./, 'el mensaje queda visible junto a la foto');
+    assert.equal(estiloPlano(botonFoto(tree).props.style).borderWidth, 2, 'el bloque de foto queda marcado como error');
+    assert.ok(walk(tree).some(n => typeof n.props?.onLayout === 'function' && /Foto \*/.test(textOf(n))),
+      'el bloque de foto registra su posición para llevar el scroll hasta él');
+  });
+}
+
+test('PHOTO-PUB: el formulario rotula la foto como obligatoria ("Foto *")', () => {
+  const app = pantallaDisponibles([]);
+  boton(app.tree, /^\+ Nueva$/).onPress();
+  assert.match(textOf(app.render()), /📷 Foto \*/);
+});
+
+test('PHOTO-PUB: cupones.tsx (Promociones) tampoco crea sin foto', async () => {
+  const llamadas = [];
+  const app = pantallaCupones([], { crear: async (p) => { llamadas.push(p); return { data: {} }; } });
+  boton(app.tree, /^\+ Nueva$/).onPress();
+  const tree = app.render();
+  assert.ok(walk(tree).some(n => n.type?.name === 'Field' && n.props.label === 'Foto *'), 'rotulada como obligatoria');
+  await guardarDe(tree).props.onPress(); await tick();
+  assert.equal(llamadas.length, 0);
+  assert.ok(app.alerts.some(a => a[1] === MSG_FOTO), JSON.stringify(app.alerts));
+  assert.match(textOf(app.render()), /Debes agregar una foto antes de publicar\./);
+});
+
+test('PHOTO-PUB-7: editar una publicación con foto no obliga a subirla de nuevo ni la manda vacía', async () => {
+  const llamadas = [];
+  const app = pantallaDisponibles([deBD({ nombre: 'Viejo' })], {
+    actualizar: async (id, body) => { llamadas.push(body); return { data: { ...deBD(), ...body, id } }; },
+  });
+  boton(app.tree, /^Editar$/).onPress();
+  inputs(app.render()).find(i => i.props.value === 'Viejo').props.onChangeText('Nuevo');
+  await guardarDe(app.render()).props.onPress(); await tick();
+  assert.equal(llamadas.length, 1, JSON.stringify(app.alerts));
+  assert.equal(llamadas[0].nombre, 'Nuevo');
+  assert.equal(llamadas[0].imagen_url, undefined, 'la foto no cambió: no viaja (el backend conserva la guardada)');
+});
+
+test('PHOTO-LEGACY-1: heredada sin foto — cambiar unidades se permite; cambiar contenido exige foto', async () => {
+  const llamadas = [];
+  const app = pantallaDisponibles([deBD({ imagen_url: null, nombre: 'Heredada', cantidad_disponible: 7 })], {
+    actualizar: async (id, body) => { llamadas.push(body); return { data: { ...deBD(), ...body, id } }; },
+  });
+  // Unidades: no vuelve a revisión → no exige foto.
+  boton(app.tree, /^Editar$/).onPress();
+  inputs(app.render()).find(i => i.props.value === '7').props.onChangeText('9');
+  await guardarDe(app.render()).props.onPress(); await tick();
+  assert.equal(JSON.stringify(llamadas), JSON.stringify([{ cantidad_disponible: 9 }]));
+
+  // Contenido: volvería a revisión → bloquea hasta agregar la foto.
+  const app2 = pantallaDisponibles([deBD({ imagen_url: null, nombre: 'Heredada' })], {
+    actualizar: async (id, body) => { llamadas.push(body); return { data: {} }; },
+  });
+  boton(app2.tree, /^Editar$/).onPress();
+  inputs(app2.render()).find(i => i.props.value === 'Heredada').props.onChangeText('Heredada v2');
+  await guardarDe(app2.render()).props.onPress(); await tick();
+  assert.equal(llamadas.length, 1, 'el cambio de contenido no se envió');
+  assert.ok(app2.alerts.some(a => a[1] === MSG_FOTO), JSON.stringify(app2.alerts));
+});
+
+test('PHOTO-LEGACY-1: la lista del restaurante muestra una heredada sin foto sin romperse (placeholder)', () => {
+  const app = pantallaDisponibles([deBD({ imagen_url: null, nombre: 'Sin foto' })]);
+  assert.match(textOf(app.tree), /Sin foto/);
+});
+
+test('faltaFotoParaGuardar: crear siempre exige; editar solo si vuelve a revisión (mismo criterio que el backend)', () => {
+  const { faltaFotoParaGuardar, tieneFoto } = estadoReal;
+  assert.equal(tieneFoto('   '), false);
+  assert.equal(tieneFoto(null), false);
+  assert.equal(tieneFoto('https://x/y.jpg'), true);
+  assert.equal(faltaFotoParaGuardar('', null), true);
+  assert.equal(faltaFotoParaGuardar('https://x/y.jpg', null), false);
+  const aprobada = { estado_aprobacion: 'aprobado' };
+  assert.equal(faltaFotoParaGuardar(null, { bolsa: aprobada, cambios: { cantidad_disponible: 3 } }), false);
+  assert.equal(faltaFotoParaGuardar(null, { bolsa: aprobada, cambios: { activo: false } }), false);
+  assert.equal(faltaFotoParaGuardar(null, { bolsa: aprobada, cambios: { nombre: 'x' } }), true);
+  assert.equal(faltaFotoParaGuardar(null, { bolsa: { estado_aprobacion: 'rechazado' }, cambios: { cantidad_disponible: 3 } }), true,
+    'una rechazada vuelve a revisión con cualquier cambio');
 });

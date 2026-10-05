@@ -16,6 +16,7 @@ const {
   MENSAJE_HORARIO_VENCIDO,
 } = require('../services/horarioGuatemala');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { MENSAJE_FOTO_PUBLICACION, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const {
   TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
   estaEliminada, activarSinAprobacionEsInvalido,
@@ -413,6 +414,13 @@ router.post('/', authMiddleware, async (req, res) => {
   if (!fecha_disponible) {
     return res.status(400).json({ error: 'fecha_disponible es requerida' });
   }
+  // Foto obligatoria para toda publicación nueva (Promoción y Tiempo
+  // limitado) — el formulario ya la exige, pero el backend no confía en eso.
+  // null, '' y solo espacios cuentan como "sin foto" (services/fotoObligatoria.js).
+  if (!tieneFoto(imagen_url)) {
+    return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
+  }
+  const imagenFinal = imagen_url.trim();
   const tipoFinal = tipo || 'bolsa';
   // Promoción nunca tiene fecha fin: se publica desde fecha_disponible y su
   // disponibilidad posterior depende de activo/stock/aprobación/horario, no
@@ -509,7 +517,7 @@ router.post('/', authMiddleware, async (req, res) => {
       peso_estimado_kg: pesoKg,
       co2_salvado_kg: co2Unidad,
       categoria_alimento: categoria_alimento || null,
-      imagen_url: imagen_url || null,
+      imagen_url: imagenFinal,
       estado_aprobacion: estadoAprobacion,
       fecha_disponible,
       fecha_caducidad: fechaCaducidadFinal,
@@ -545,7 +553,7 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_fin,
         permite_envio: permite_envio || false,
         peso_estimado_kg: pesoKg,
-        imagen_url: imagen_url || null,
+        imagen_url: imagenFinal,
         estado_aprobacion: estadoAprobacion,
         es_tiempo_limitado: es_tiempo_limitado ?? false,
         es_promocion: es_promocion ?? false,
@@ -632,6 +640,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
+  // Una edición nunca puede quitar la foto de una publicación que la tiene.
+  // Una heredada sin foto que recibe vacío otra vez no es un cambio (se
+  // descarta); si además la edición la manda a revisión, se exige foto abajo.
+  const errorFoto = normalizarFotoEnEdicion(updates, bolsa.imagen_url, MENSAJE_FOTO_PUBLICACION);
+  if (errorFoto) return res.status(400).json({ error: errorFoto });
+
   // Promoción nunca tiene fecha fin (igual que al crear, ver POST /api/bolsas):
   // si el tipo resultante es 'cupon', cualquier fecha_caducidad que venga en
   // el body se descarta — ANTES de decidirRevision, para que comparar contra
@@ -665,6 +679,14 @@ router.put('/:id', authMiddleware, async (req, res) => {
   else if (req.body.estado_aprobacion !== undefined) updates.estado_aprobacion = req.body.estado_aprobacion;
 
   const datosResultantes = { ...bolsa, ...updates };
+
+  // Publicación heredada sin foto: puede seguir leyéndose, ocultándose,
+  // reponiendo unidades o eliminándose (cambios que no vuelven a revisión),
+  // pero un cambio de contenido que la manda a revisión exige completar la
+  // foto — el mismo formulario de edición permite agregarla.
+  if (revision?.reenvio && !tieneFoto(datosResultantes.imagen_url)) {
+    return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
+  }
 
   // Red de seguridad para el caso raro de convertir el tipo a 'cupon' en esta
   // misma edición SIN tocar fecha_caducidad explícitamente: el valor viejo

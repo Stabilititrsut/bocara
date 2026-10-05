@@ -9,6 +9,7 @@ const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
@@ -326,8 +327,20 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
   }
 }
 
+// Un negocio sin foto (registro incompleto o dato heredado) no se puede
+// aprobar: quedaría activo y visible para los clientes sin imagen. 404 si no
+// existe; 409 si existe pero le falta la foto. null si se puede aprobar.
+async function bloqueoAprobacionSinFoto(id) {
+  const { data: negocio } = await supabase.from('negocios').select('id,imagen_url').eq('id', id).maybeSingle();
+  if (!negocio) return { status: 404, error: 'Negocio no encontrado' };
+  if (!tieneFoto(negocio.imagen_url)) return { status: 409, error: MENSAJE_APROBAR_NEGOCIO_SIN_FOTO };
+  return null;
+}
+
 // PUT /api/admin/negocios/:id/verificar (alias de /aprobar)
 router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res) => {
+  const bloqueo = await bloqueoAprobacionSinFoto(req.params.id);
+  if (bloqueo) return res.status(bloqueo.status).json({ error: bloqueo.error });
   // Una sola escritura atómica: verificado, activo y estado_verificacion deben
   // quedar consistentes juntos o no quedar aplicados en absoluto. Antes eran dos
   // updates separados y el segundo (estado_verificacion) no verificaba su error,
@@ -346,6 +359,8 @@ router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res
 
 // PUT /api/admin/negocios/:id/aprobar
 router.put('/negocios/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
+  const bloqueo = await bloqueoAprobacionSinFoto(req.params.id);
+  if (bloqueo) return res.status(bloqueo.status).json({ error: bloqueo.error });
   const { data, error } = await supabase
     .from('negocios')
     .update({ verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null })
@@ -375,9 +390,13 @@ router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res)
 // PUT /api/admin/negocios/:id/toggle
 router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) => {
   const { motivo } = req.body || {};
-  const { data: negocio } = await supabase.from('negocios').select('activo,propietario_id,nombre').eq('id', req.params.id).single();
+  const { data: negocio } = await supabase.from('negocios').select('activo,propietario_id,nombre,imagen_url').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
   const nuevoActivo = !negocio.activo;
+  // Suspender siempre se puede; reactivar un negocio sin foto, no.
+  if (nuevoActivo && !tieneFoto(negocio.imagen_url)) {
+    return res.status(409).json({ error: MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO });
+  }
   const { data, error } = await supabase
     .from('negocios').update({ activo: nuevoActivo }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });

@@ -497,6 +497,7 @@ test('Publicar desde ambos formularios bloquea horario vencido antes de API y pe
       const form = { nombre: 'Producto', contenido: 'CODE', descripcion: '', categoria: 'Porcentaje',
         tipo_form: 'cupon', categoria_alimento: 'otro', precio_original: '40', precio_descuento: '20',
         fecha_disponible: '2026-01-01',
+        imagen_url: 'https://cdn.bocara.test/foto.jpg',
         hora_recogida_inicio: '00:00', hora_recogida_fin: expired ? '00:00' : '23:59' };
       const states = file.includes('bolsas') ? [[], false, false, true, form, null, 'n', false, '', 'todos', false]
         : [[], false, false, true, null, false, 'n', form];
