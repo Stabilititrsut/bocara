@@ -19,7 +19,7 @@ const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { MENSAJE_FOTO_PUBLICACION, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const {
   TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
-  estaEliminada, activarSinAprobacionEsInvalido,
+  estaEliminada, activarSinAprobacionEsInvalido, esVisibleParaCliente,
 } = require('../services/publicaciones');
 const router = express.Router();
 
@@ -777,6 +777,15 @@ router.put('/:id', authMiddleware, async (req, res) => {
     columnasOmitidas.push(columnaFaltante);
   }
   if (error) return res.status(400).json({ error: error.message });
+
+  // La edición la volvió visible para el cliente sin pasar por el admin
+  // (reactivó el switch, repuso unidades de una agotada): es el momento en
+  // que "queda disponible". Sin transición no se emite nada, y si ese ciclo
+  // ya se avisó, la clave geo:<bolsa>:<ciclo>:<usuario> descarta duplicados.
+  // El negocio y la foto los revalida el handler antes de avisar.
+  if (!esVisibleParaCliente(bolsa) && esVisibleParaCliente(data)) {
+    encolarPublicacionVisible(data);
+  }
   if (columnasOmitidas.length) {
     console.warn('[PUT /bolsas/:id] columnas omitidas por no existir en la BD:', columnasOmitidas.join(', '));
   }

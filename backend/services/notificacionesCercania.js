@@ -11,6 +11,8 @@
 const { enqueueEventBestEffort } = require('./eventosDominio');
 const { enviarPushEnLotes, construirMensaje } = require('./notificaciones');
 const { motivosNoVisible } = require('./publicaciones');
+const { tieneFoto } = require('./fotoObligatoria');
+const { ahoraGuatemala, sumarDias } = require('./horarioGuatemala');
 const { validarCoordenadasEntrada } = require('../utils/geo');
 
 const EVENTO_PUBLICACION_VISIBLE = 'publicacion.visible';
@@ -51,11 +53,15 @@ function encolarPublicacionVisible(bolsa) {
   });
 }
 
-function textos(bolsa, nombreNegocio) {
+// Copy por producto (tipo 'cupon' = Promoción, 'bolsa' = Tiempo limitado):
+// nunca "bolsa" para una Promoción. "Cerca de ti" solo si el cliente entró
+// por radio; a un favorito que está lejos se le nombra el negocio.
+function textos(bolsa, nombreNegocio, { cercano = true } = {}) {
   const esPromocion = bolsa.tipo === 'cupon';
+  const donde = cercano ? 'cerca de ti' : `en ${nombreNegocio}`;
   return {
     tipoPayload: esPromocion ? 'promocion' : 'tiempo_limitado',
-    titulo: esPromocion ? '🏷️ Nueva promoción cerca de ti' : '⏱️ Tiempo limitado cerca de ti',
+    titulo: esPromocion ? `🏷️ Nueva promoción ${donde}` : `⏱️ Tiempo limitado ${donde}`,
     cuerpo: `${nombreNegocio} publicó: ${bolsa.nombre}`,
   };
 }
@@ -79,19 +85,31 @@ async function clientesEnRadio(cliente, lat, lng) {
   return filas.filter(f => f?.usuario_id && f.expo_push_token && Number(f.distancia_km) <= RADIO_KM);
 }
 
+// Esquema real de favoritos (routes/favoritos.js): (usuario_id, tipo,
+// referencia_id) — un negocio favorito es tipo='negocio' con referencia_id =
+// negocio. No hay FK hacia usuarios, así que no se puede embeber
+// `usuarios(...)`: dos consultas (favoritos → usuarios por id), no N+1.
 async function favoritosNotificables(cliente, negocioId) {
   const { data, error } = await cliente
     .from('favoritos')
-    .select('usuario_id, usuarios(id,rol,activo,notif_promociones,expo_push_token)')
-    .eq('negocio_id', negocioId);
+    .select('usuario_id')
+    .eq('tipo', 'negocio')
+    .eq('referencia_id', negocioId);
   if (error) {
     // Tabla ausente en despliegues viejos: no hay favoritos que avisar.
     if (error.code === '42P01') return [];
     throw new Error(`favoritos falló: ${error.message}`);
   }
-  return (data || [])
-    .filter(f => f.usuario_id && esClienteNotificable(f.usuarios))
-    .map(f => ({ usuario_id: f.usuario_id, expo_push_token: f.usuarios.expo_push_token }));
+  const ids = [...new Set((data || []).map(f => f.usuario_id).filter(Boolean))];
+  if (!ids.length) return [];
+  const { data: usuarios, error: errU } = await cliente
+    .from('usuarios')
+    .select('id,rol,activo,notif_promociones,expo_push_token')
+    .in('id', ids);
+  if (errU) throw new Error(`usuarios de favoritos falló: ${errU.message}`);
+  return (usuarios || [])
+    .filter(esClienteNotificable)
+    .map(u => ({ usuario_id: u.id, expo_push_token: u.expo_push_token }));
 }
 
 // Inserta una fila por destinatario con concurrencia acotada. Devuelve qué
@@ -139,6 +157,12 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
     console.warn('[CERCANIA] Publicación %s ya no es visible (%s): sin envío', bolsaId, motivos.join(','));
     return { omitido: 'no_visible', motivos };
   }
+  // Foto obligatoria (services/fotoObligatoria.js): una heredada sin foto no
+  // se aprueba, pero si alguna llegara aquí no se anuncia.
+  if (!tieneFoto(bolsa.imagen_url)) {
+    console.warn('[CERCANIA] Publicación %s sin foto: sin envío', bolsaId);
+    return { omitido: 'sin_foto' };
+  }
 
   const negocio = bolsa.negocios || {};
   const negocioId = bolsa.negocio_id;
@@ -155,27 +179,31 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
   }
   const favoritos = await favoritosNotificables(cliente, negocioId);
 
+  // Un usuario elegible por radio Y por favorito es UNA entrada: la clave
+  // geo:<bolsa>:<ciclo>:<usuario> no depende de la razón.
   const porUsuario = new Map();
-  for (const f of [...cercanos, ...favoritos]) {
-    if (!porUsuario.has(f.usuario_id)) porUsuario.set(f.usuario_id, f.expo_push_token);
+  for (const f of cercanos) porUsuario.set(f.usuario_id, { token: f.expo_push_token, cercano: true });
+  for (const f of favoritos) {
+    if (!porUsuario.has(f.usuario_id)) porUsuario.set(f.usuario_id, { token: f.expo_push_token, cercano: false });
   }
-  const destinatarios = [...porUsuario].map(([usuarioId, token]) => ({ usuarioId, token }));
-
-  const { tipoPayload, titulo, cuerpo } = textos(bolsa, negocio.nombre || 'Un restaurante cercano');
-  const data = { tipo: tipoPayload, bolsaId, negocioId };
+  const nombreNegocio = negocio.nombre || 'Un restaurante cercano';
+  const destinatarios = [...porUsuario].map(([usuarioId, { token, cercano }]) => ({
+    usuarioId, token, ...textos(bolsa, nombreNegocio, { cercano }),
+  }));
+  const dataDe = (d) => ({ tipo: d.tipoPayload, bolsaId, negocioId });
 
   const { ganadores, duplicadas, errores } = await insertarIdempotentes(cliente, destinatarios, (d) => ({
     usuario_id: d.usuarioId,
     tipo: TIPO_NOTIFICACION,
-    titulo,
-    cuerpo,
-    data,
+    titulo: d.titulo,
+    cuerpo: d.cuerpo,
+    data: dataDe(d),
     leida: false,
     clave_idempotencia: claveNotificacion(bolsaId, ciclo, d.usuarioId),
   }));
 
   const push = ganadores.length
-    ? await enviarPush(ganadores.map(d => construirMensaje(d.token, titulo, cuerpo, data, CANAL_CERCANIA)), { cliente })
+    ? await enviarPush(ganadores.map(d => construirMensaje(d.token, d.titulo, d.cuerpo, dataDe(d), CANAL_CERCANIA)), { cliente })
     : null;
 
   const resumen = {
@@ -192,7 +220,38 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
   return resumen;
 }
 
+// Publicaciones aprobadas cuya fecha_disponible llegó (hoy, o ayer si el
+// proceso estuvo caído a medianoche). Al aprobarlas con fecha futura no eran
+// visibles y no se emitió nada; aquí se emite cuando de verdad lo son.
+// fecha_disponible tiene granularidad de día (horarioGuatemala#noHaIniciado),
+// así que un barrido cada pocos minutos es exacto sin polling agresivo.
+// Volver a encolar es inocuo: la clave del evento
+// (bolsa:<id>:publicacion.visible:<ciclo>) es UNIQUE en eventos_dominio.
+async function emitirPublicacionesQueInician({ cliente = db(), ahora = ahoraGuatemala(), encolar = encolarPublicacionVisible } = {}) {
+  const { data, error } = await cliente
+    .from('bolsas')
+    .select('*, negocios(id,activo,estado_verificacion)')
+    .eq('estado_aprobacion', 'aprobado')
+    .eq('activo', true)
+    .is('eliminado_en', null)
+    .gte('fecha_disponible', sumarDias(ahora.fecha, -1))
+    .lte('fecha_disponible', ahora.fecha)
+    .limit(200);
+  if (error) {
+    console.warn('[CERCANIA] Barrido de publicaciones que inician falló:', error.message);
+    return { revisadas: 0, encoladas: 0, error: error.message };
+  }
+  let encoladas = 0;
+  for (const bolsa of data || []) {
+    if (motivosNoVisible(bolsa, { ahora }).length || !tieneFoto(bolsa.imagen_url)) continue;
+    encolar(bolsa);
+    encoladas += 1;
+  }
+  return { revisadas: (data || []).length, encoladas };
+}
+
 module.exports = {
   EVENTO_PUBLICACION_VISIBLE, RADIO_KM, MAX_EDAD_UBICACION_DIAS, PAGINA_RPC, TIPO_NOTIFICACION, CANAL_CERCANIA,
   cicloPublicacion, claveNotificacion, encolarPublicacionVisible, manejarPublicacionVisible,
+  emitirPublicacionesQueInician,
 };

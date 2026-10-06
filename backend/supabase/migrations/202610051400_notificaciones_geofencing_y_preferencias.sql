@@ -27,9 +27,12 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS notif_promociones boolean DEFAULT 
 COMMENT ON COLUMN usuarios.notif_promociones IS
   'Recibir push de Promociones/Tiempo limitado de negocios cercanos. false = opt-out explícito; NULL se trata como true.';
 
--- ── 2. Índice geográfico parcial ─────────────────────────────────────────────
--- Solo filas notificables (con ubicación y token). La RPC repite este mismo
--- predicado para que el planificador pueda usar el índice.
+-- ── 2. Índice B-tree compuesto (latitud, longitud), parcial ──────────────────
+-- NO es un índice espacial (no hay PostGIS ni GiST): es un B-tree normal que
+-- sirve al prefiltro de caja delimitadora de la RPC (rango en latitud); la
+-- distancia exacta la decide Haversine. Solo filas notificables (con
+-- ubicación y token); la RPC repite este predicado para que el planificador
+-- pueda usar el índice.
 CREATE INDEX IF NOT EXISTS usuarios_geo_idx
   ON usuarios (latitud, longitud)
   WHERE latitud IS NOT NULL AND expo_push_token IS NOT NULL;

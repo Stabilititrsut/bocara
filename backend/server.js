@@ -50,6 +50,7 @@ const { procesarEventosFallidos } = require('./services/pagoEventos');
 const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 const { enqueueEventBestEffort } = require('./services/eventosDominio');
 const { ejecutarDespachador } = require('./services/despachadorEventos');
+const { emitirPublicacionesQueInician } = require('./services/notificacionesCercania');
 const { resolverRequestId } = require('./utils/requestId');
 
 const app = express();
@@ -210,6 +211,16 @@ app.listen(PORT, () => {
   setInterval(() => ejecutarDespachador(), 30 * 1000);
   setTimeout(() => ejecutarDespachador(), 15 * 1000);
   console.log('📣 Despachador de eventos de dominio activo (cada 30 s)');
+
+  // Publicaciones aprobadas con fecha de inicio futura: al aprobarlas no eran
+  // visibles y no se emitió el aviso. Este barrido lo emite cuando llega su
+  // día (fecha_disponible es por día: cada 5 min es exacto y barato). Encolar
+  // dos veces colapsa en la clave única del evento.
+  const emitirQueInician = () => emitirPublicacionesQueInician()
+    .catch(err => console.error('[CERCANIA] barrido de inicio falló:', err.message));
+  setInterval(emitirQueInician, 5 * 60 * 1000);
+  setTimeout(emitirQueInician, 20 * 1000);
+  console.log('📅 Barrido de publicaciones que inician hoy activo (cada 5 min)');
 
   setInterval(async () => {
     try {
