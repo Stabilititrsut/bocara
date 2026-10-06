@@ -147,7 +147,7 @@ async function procesarFila(tabla, id, {
     // preparada (archivo aparte). El original no se toca nunca.
     const prep = await prepararEntrada(buffer);
     let urlEntrada = original;
-    if (prep.requiereCopia && proveedor.ia) {
+    if (prep.requiereCopia && proveedor.necesitaUrl) {
       urlEntrada = await almacenamiento.subir(`preparadas/${tabla}/${id}/${Date.now()}.jpg`, prep.buffer, prep.contentType);
     }
 

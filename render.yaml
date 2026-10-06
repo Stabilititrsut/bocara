@@ -65,7 +65,13 @@ services:
 
       # Pipeline de imágenes (docs/PIPELINE_IMAGENES.md)
       - key: IMAGE_AI_PROVIDER
-        value: replicate
+        value: openai
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_IMAGE_MODEL
+        value: gpt-image-1-mini
+      - key: OPENAI_IMAGE_QUALITY
+        value: medium
       - key: REPLICATE_API_TOKEN
         sync: false
 

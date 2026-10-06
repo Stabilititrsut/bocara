@@ -1,52 +1,37 @@
 // Proveedores de mejora de imagen (patrón adapter).
 //
 // Contrato:
-//   { nombre, ia, modelo?, mejorar({ buffer, urlEntrada, urlOriginal, contexto })
+//   { nombre, ia, modelo?, necesitaUrl?, mejorar({ buffer, urlEntrada, urlOriginal, contexto })
 //       → { buffer, contentType, meta } }
-// Debe LANZAR si no pudo mejorar: el pipeline decide reintento / fallida y la
-// publicación sigue mostrando la original.
+// Debe LANZAR si no pudo mejorar (ErrorProveedor con reintentable true/false):
+// el pipeline decide reintento / fallida y la publicación sigue mostrando la
+// original.
 //
 // IMAGE_AI_PROVIDER:
-//   replicate (principal) — IA REAL de edición de imagen: FLUX.1 Kontext [pro]
-//              de Black Forest Labs vía Replicate, image-to-image sobre la foto
-//              original con un prompt estricto de fidelidad.
+//   openai     (principal) — IA real: OpenAI GPT Image (gpt-image-1-mini por
+//              defecto) vía images.edit sobre la foto original (proveedorOpenAI.js).
+//   replicate  (opcional)  — IA real: FLUX.1 Kontext [pro] vía Replicate.
 //   local      — ajuste técnico con sharp (contraste/color/nitidez). NO es IA y
-//              no logra un acabado comercial: sirve para desarrollo sin costo,
-//              pruebas y como respaldo explícito.
+//              no logra un acabado comercial: desarrollo sin costo, pruebas y
+//              respaldo explícito.
 //   none       — pipeline apagado.
-//   (sin definir) — replicate si hay REPLICATE_API_TOKEN; si no, local.
+//   (sin definir) — openai si hay OPENAI_API_KEY; si no, replicate si hay
+//              REPLICATE_API_TOKEN; si no, local.
+// Todos los proveedores de IA usan el mismo prompt (prompts.js).
 const axios = require('axios');
+const { promptMejora, PROMPT_FOTO_COMIDA } = require('./prompts');
+const { ErrorProveedor } = require('./errores');
+const { crearProveedorOpenAI, MODELO_POR_DEFECTO: MODELO_OPENAI } = require('./proveedorOpenAI');
 
 const LADO_MAX = 1600;
 const CALIDAD_WEBP = 88;
-const MODELO_POR_DEFECTO = 'black-forest-labs/flux-kontext-pro';
+const MODELO_REPLICATE = 'black-forest-labs/flux-kontext-pro';
 // Con imagen de entrada, FLUX Kontext acepta safety_tolerance ≤ 2.
 const SAFETY_TOLERANCE = 2;
 // Solo se descargan resultados de la CDN de Replicate (anti-SSRF).
 const HOSTS_SALIDA = /(^|\.)replicate\.delivery$/;
 
 function sharp() { return require('sharp'); }
-
-// Prompt de fotografía gastronómica comercial. Pide una mejora VISIBLE de
-// presentación y prohíbe explícitamente todo lo que cambiaría el producto.
-// Sobrescribible con IMAGE_AI_PROMPT.
-const PROMPT_COMIDA = [
-  'Enhance this real food photograph for a professional restaurant marketplace.',
-  'Preserve exactly the same food, ingredients, portions, packaging, plates, text, logos and physical composition, in the same positions and from the same camera angle.',
-  'Do not add, remove or replace any food item or ingredient. Do not change quantities or portion sizes.',
-  'Do not invent garnishes, sauces, steam, props or decorations that are not in the original.',
-  'Do not alter branding, labels or written text; keep them legible and identical.',
-  'Do not replace the background; you may only make the existing surroundings look slightly cleaner and less distracting.',
-  'Improve only presentation quality: natural soft restaurant lighting, correct white balance, balanced exposure that recovers shadows and highlights,',
-  'appetizing but realistic color, improved clarity and texture definition, subtle contrast, cleaner visual appearance, natural depth,',
-  'and the look of professional commercial food photography.',
-  'Keep the image photorealistic and faithful to the original product.',
-  'Avoid artificial HDR, oversaturation, plastic-looking food, unrealistic textures, cartoon or illustration style.',
-].join(' ');
-
-class ErrorProveedor extends Error {
-  constructor(mensaje, { reintentable = true } = {}) { super(mensaje); this.reintentable = reintentable; }
-}
 
 async function aWebp(buffer) {
   const { data, info } = await sharp()(buffer, { failOn: 'none' })
@@ -81,8 +66,8 @@ const proveedorNinguno = { nombre: 'none', ia: false, async mejorar() { throw ne
 // ── replicate: IA real (FLUX.1 Kontext [pro]) ──────────────────────────────
 function crearProveedorReplicate({
   token = process.env.REPLICATE_API_TOKEN,
-  modelo = process.env.REPLICATE_IMAGE_MODEL || MODELO_POR_DEFECTO,
-  prompt = process.env.IMAGE_AI_PROMPT || PROMPT_COMIDA,
+  modelo = process.env.REPLICATE_IMAGE_MODEL || MODELO_REPLICATE,
+  prompt = promptMejora(),
   timeoutMs = Number(process.env.IMAGE_AI_TIMEOUT_MS) || 120000,
   http = axios,
   dormir = (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -104,6 +89,7 @@ function crearProveedorReplicate({
     nombre: 'replicate',
     ia: true,
     modelo,
+    necesitaUrl: true, // FLUX recibe la imagen por URL (input_image)
     async mejorar({ urlEntrada }) {
       if (!urlEntrada) throw new ErrorProveedor('replicate: falta la URL de la imagen de entrada', { reintentable: false });
       const inicio = Date.now();
@@ -154,19 +140,24 @@ function crearProveedorReplicate({
   };
 }
 
+// IA configurada pero sin credencial → ajuste local, con error en el log y
+// trazado como 'local' (la app lo muestra como ajuste, nunca como IA).
+function respaldoSinCredencial(variable, proveedor) {
+  console.error('[IMAGENES] IMAGE_AI_PROVIDER=%s SIN %s — se usa el ajuste técnico local (NO es IA). Configura la credencial.', proveedor, variable);
+  return proveedorLocal;
+}
+
 function obtenerProveedor(nombre = process.env.IMAGE_AI_PROVIDER) {
-  const n = String(nombre || (process.env.REPLICATE_API_TOKEN ? 'replicate' : 'local')).toLowerCase();
+  const porDefecto = process.env.OPENAI_API_KEY ? 'openai' : process.env.REPLICATE_API_TOKEN ? 'replicate' : 'local';
+  const n = String(nombre || porDefecto).toLowerCase();
   if (n === 'none' || n === 'off') return proveedorNinguno;
-  if (n === 'replicate') {
-    if (process.env.REPLICATE_API_TOKEN) return crearProveedorReplicate();
-    console.error('[IMAGENES] IMAGE_AI_PROVIDER=replicate SIN REPLICATE_API_TOKEN — se usa el ajuste técnico local (NO es IA). Configura el token.');
-    return proveedorLocal;
-  }
+  if (n === 'openai') return process.env.OPENAI_API_KEY ? crearProveedorOpenAI() : respaldoSinCredencial('OPENAI_API_KEY', n);
+  if (n === 'replicate') return process.env.REPLICATE_API_TOKEN ? crearProveedorReplicate() : respaldoSinCredencial('REPLICATE_API_TOKEN', n);
   if (n !== 'local') console.warn('[IMAGENES] proveedor desconocido "%s" — se usa el ajuste técnico local (no IA)', n);
   return proveedorLocal;
 }
 
 module.exports = {
-  PROMPT_COMIDA, LADO_MAX, MODELO_POR_DEFECTO, SAFETY_TOLERANCE, ErrorProveedor,
-  proveedorLocal, proveedorNinguno, crearProveedorReplicate, obtenerProveedor,
+  PROMPT_FOTO_COMIDA, LADO_MAX, MODELO_REPLICATE, MODELO_OPENAI, SAFETY_TOLERANCE, ErrorProveedor,
+  proveedorLocal, proveedorNinguno, crearProveedorReplicate, crearProveedorOpenAI, obtenerProveedor,
 };

@@ -21,10 +21,11 @@ export interface EstadoImagen {
   puedeComparar: boolean;
 }
 
-// Solo Replicate (FLUX Kontext) es IA. El ajuste técnico local no se presenta
-// como IA ante el restaurante.
+// Proveedores de IA real (OpenAI GPT Image, Replicate FLUX Kontext). El
+// ajuste técnico local nunca se presenta como IA ante el restaurante.
+const PROVEEDORES_IA = new Set(['openai', 'replicate']);
 export function esMejoraConIA(fila: FilaImagen | null | undefined): boolean {
-  return fila?.proveedor_imagen_ia === 'replicate';
+  return PROVEEDORES_IA.has(String(fila?.proveedor_imagen_ia || ''));
 }
 
 export function estadoImagenIA(fila: FilaImagen | null | undefined): EstadoImagen {
@@ -41,11 +42,13 @@ function estadoBase(fila: FilaImagen | null | undefined): Omit<EstadoImagen, 'pu
     case 'completada':
       return {
         clave: 'completada',
-        etiqueta: esMejoraConIA(fila) ? '✨ Foto mejorada con IA' : '✨ Foto ajustada automáticamente',
+        etiqueta: esMejoraConIA(fila)
+          ? '✨ Foto mejorada con IA · se muestra la mejorada'
+          : '✨ Foto ajustada automáticamente · se muestra la ajustada',
         accion: 'usar-original', textoAccion: 'Usar mi original', enCurso: false,
       };
     case 'fallida':
-      return { clave: 'fallida', etiqueta: '⚠️ No se pudo mejorar · se muestra tu original', accion: 'reintentar', textoAccion: 'Reintentar', enCurso: false };
+      return { clave: 'fallida', etiqueta: '⚠️ No se pudo mejorar, se muestra tu original', accion: 'reintentar', textoAccion: 'Reintentar', enCurso: false };
     case 'descartada':
       return {
         clave: 'descartada', etiqueta: '📷 Se muestra tu foto original',
