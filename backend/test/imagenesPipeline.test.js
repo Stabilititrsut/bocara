@@ -14,7 +14,7 @@ const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba'
 const { crearFakeSupabase } = require('./helpers/fakeSupabase');
 const pipeline = require('../services/imagenes/pipeline');
 const {
-  proveedorLocal, crearProveedorReplicate, obtenerProveedor, PROMPT_COMIDA, LADO_MAX, MODELO_POR_DEFECTO,
+  proveedorLocal, crearProveedorReplicate, obtenerProveedor, PROMPT_FOTO_COMIDA, LADO_MAX, MODELO_REPLICATE,
 } = require('../services/imagenes/proveedores');
 const { escena, PLATO, OTRO_PLATO } = require('./helpers/escenaComida');
 
@@ -132,7 +132,7 @@ test('AI-2: usa el modelo black-forest-labs/flux-kontext-pro y lo deja trazado (
   const env = await entornoIA();
   await encolar(env);
   await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
-  assert.equal(MODELO_POR_DEFECTO, 'black-forest-labs/flux-kontext-pro');
+  assert.equal(MODELO_REPLICATE, 'black-forest-labs/flux-kontext-pro');
   assert.equal(env.falso.llamadas[0].url, 'https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions');
   assert.equal(env.falso.llamadas[0].cfg.headers.Authorization, 'Bearer r8_prueba');
   const f = env.fila();
@@ -153,22 +153,17 @@ test('AI-3: aspect_ratio = match_input_image y safety_tolerance ≤ 2 (límite c
   assert.equal(input.prompt_upsampling, false, 'sin reescritura automática del prompt (puede inventar)');
 });
 
-test('AI-4: el prompt exige fidelidad y prohíbe inventar', async () => {
+test('AI-4: Replicate usa el prompt compartido de fidelidad (prompts.js)', async () => {
   for (const frase of [
-    /Preserve exactly the same food, ingredients, portions, packaging, plates, text, logos/,
-    /Do not add, remove or replace any food item or ingredient/,
-    /Do not change quantities/, /Do not invent garnishes/, /steam/, /Do not alter branding/,
-    /Do not replace the background/, /faithful to the original product/,
-    /Avoid artificial HDR, oversaturation, plastic-looking food/,
-    /natural soft restaurant lighting/, /white balance/, /professional commercial food photography/,
-  ]) assert.match(PROMPT_COMIDA, frase);
-  for (const prohibido of [/add (some )?garnish/i, /bigger portion/i, /generate steam/i, /new background/i]) {
-    assert.doesNotMatch(PROMPT_COMIDA.replace(/Do not [^.]*\./g, ''), prohibido);
-  }
+    /Keep exactly the same food or product/, /same ingredients, same quantities and portion size/,
+    /Do not add or remove any ingredient/, /Do not change quantities/, /Do not add steam/,
+    /Do not alter, invent or translate any text, logo/, /without replacing the setting/,
+    /natural restaurant lighting/, /white balance/, /no artificial HDR look, no oversaturated colors/,
+  ]) assert.match(PROMPT_FOTO_COMIDA, frase);
   const env = await entornoIA();
   await encolar(env);
   await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
-  assert.equal(env.falso.llamadas[0].body.input.prompt, PROMPT_COMIDA);
+  assert.equal(env.falso.llamadas[0].body.input.prompt, PROMPT_FOTO_COMIDA);
 });
 
 test('AI-5: el resultado se guarda como archivo NUEVO (mejoradas/…webp) y pasa a ser la imagen visible', async () => {
