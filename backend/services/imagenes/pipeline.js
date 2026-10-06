@@ -17,6 +17,7 @@
 //     periódico (o dos instancias) nunca procesan la misma foto dos veces.
 const axios = require('axios');
 const { obtenerProveedor } = require('./proveedores');
+const { prepararEntrada, validarResultado, ErrorValidacion } = require('./validacion');
 
 const ESTADOS = Object.freeze({
   PENDIENTE: 'pendiente', PROCESANDO: 'procesando', COMPLETADA: 'completada',
@@ -28,12 +29,8 @@ const ESPERA_REINTENTO_MS = 2 * 60 * 1000;
 const ABANDONO_MS = 10 * 60 * 1000;
 const MAX_BYTES_ORIGINAL = 10 * 1024 * 1024;
 const BUCKET = 'bocara-images';
-// La IA puede devolver otro encuadre, pero no otra foto: si la proporción
-// cambia más que esto, el resultado se descarta (protege contra "inventar").
-const TOLERANCIA_PROPORCION = 0.12;
 
 function db() { return require('../../config/supabase'); }
-function sharp() { return require('sharp'); }
 const ahoraIso = () => new Date().toISOString();
 
 function validarTabla(tabla) {
@@ -79,24 +76,6 @@ const almacenamientoPorDefecto = {
   },
 };
 
-// Validación de fidelidad básica: decodificable, tamaño razonable y misma
-// proporción que el original (±12%).
-async function validarResultado(original, mejorada) {
-  const [a, b] = await Promise.all([
-    sharp()(original, { failOn: 'none' }).rotate().metadata(),
-    sharp()(mejorada).metadata(),
-  ]);
-  // rotate() en metadata no aplica EXIF: se corrige a mano la orientación 5–8.
-  const girada = a.orientation >= 5;
-  const anchoO = girada ? a.height : a.width;
-  const altoO = girada ? a.width : a.height;
-  if (!b.width || !b.height || b.width < 200 || b.height < 200) throw new ErrorDefinitivo('resultado demasiado pequeño');
-  const pO = anchoO / altoO, pM = b.width / b.height;
-  if (Math.abs(pM - pO) / pO > TOLERANCIA_PROPORCION) {
-    throw new ErrorDefinitivo(`resultado descartado: cambió la proporción (${pO.toFixed(2)} → ${pM.toFixed(2)})`);
-  }
-  return { ancho: b.width, alto: b.height };
-}
 
 // Inicia (o reinicia) el ciclo para la foto actual de la fila. Best-effort:
 // nunca lanza. Devuelve { ok, motivo? }.
@@ -163,10 +142,27 @@ async function procesarFila(tabla, id, {
     const { buffer } = await descargar(original);
     if (!buffer?.length || buffer.length > MAX_BYTES_ORIGINAL) throw new ErrorDefinitivo('imagen original vacía o demasiado grande');
 
-    const resultado = await proveedor.mejorar({ buffer, urlOriginal: original, contexto: { tabla, id } });
-    const dims = await validarResultado(buffer, resultado.buffer);
-    const ruta = `mejoradas/${tabla}/${id}/${Date.now()}.webp`;
+    // Preprocesamiento mínimo (sharp): si la foto trae rotación EXIF, es muy
+    // grande o tiene un formato que la IA no acepta, se manda una COPIA
+    // preparada (archivo aparte). El original no se toca nunca.
+    const prep = await prepararEntrada(buffer);
+    let urlEntrada = original;
+    if (prep.requiereCopia && proveedor.ia) {
+      urlEntrada = await almacenamiento.subir(`preparadas/${tabla}/${id}/${Date.now()}.jpg`, prep.buffer, prep.contentType);
+    }
+
+    const resultado = await proveedor.mejorar({ buffer: prep.buffer, urlEntrada, urlOriginal: original, contexto: { tabla, id } });
+    const metricas = await validarResultado(prep.buffer, resultado.buffer);
+    const ts = Date.now();
+    const ruta = `mejoradas/${tabla}/${id}/${ts}.webp`;
     const urlMejorada = await almacenamiento.subir(ruta, resultado.buffer, resultado.contentType || 'image/webp');
+    const dims = {
+      ...metricas,
+      ia: proveedor.ia === true,
+      modelo: proveedor.modelo || null,
+      entrada_preparada: prep.requiereCopia ? prep.motivos : null,
+      procesada_en: new Date(ts).toISOString(),
+    };
 
     // CAS: solo publica si nadie cambió la foto ni el estado mientras tanto.
     const { data: publicada, error: errPub } = await cliente.from(tabla).update({
@@ -187,7 +183,11 @@ async function procesarFila(tabla, id, {
     console.log('[IMAGENES] %s/%s mejorada con %s', tabla, id, proveedor.nombre);
     return { reclamada: true, resultado: ESTADOS.COMPLETADA, url: urlMejorada };
   } catch (err) {
-    const definitivo = err instanceof ErrorDefinitivo || intentos >= MAX_INTENTOS;
+    // Definitivo = reintentar no lo arregla (origen inválido, resultado que no
+    // pasa la validación, petición rechazada por el proveedor) o se agotaron
+    // los intentos. Timeouts y caídas del proveedor sí se reintentan.
+    const definitivo = err instanceof ErrorDefinitivo || err instanceof ErrorValidacion
+      || err?.reintentable === false || intentos >= MAX_INTENTOS;
     const estado = definitivo ? ESTADOS.FALLIDA : ESTADOS.PENDIENTE;
     // La original sigue visible: imagen_url se restaura por si acaso.
     await cliente.from(tabla).update({
@@ -195,6 +195,10 @@ async function procesarFila(tabla, id, {
       imagen_url: original,
       proveedor_imagen_ia: proveedor.nombre,
       error_procesamiento_imagen: String(err.message || err).slice(0, 300),
+      imagen_procesamiento_meta: {
+        ia: proveedor.ia === true, modelo: proveedor.modelo || null, intento: intentos,
+        metricas: err.metricas || null, fallo_en: ahoraIso(),
+      },
     }).eq('id', id).eq('estado_procesamiento_imagen', ESTADOS.PROCESANDO).eq('imagen_original_url', original);
     console.warn('[IMAGENES] %s/%s intento %d falló (%s): %s', tabla, id, intentos, estado, err.message);
     return { reclamada: true, resultado: estado, error: err.message };
@@ -301,7 +305,7 @@ async function usarMejorada(tabla, id, { cliente = db() } = {}) {
 }
 
 module.exports = {
-  ESTADOS, MAX_INTENTOS, ESPERA_REINTENTO_MS, ABANDONO_MS, TOLERANCIA_PROPORCION,
+  ESTADOS, MAX_INTENTOS, ESPERA_REINTENTO_MS, ABANDONO_MS,
   origenPermitido, esFotoNueva, pipelineActivo,
   solicitarMejora, procesarFila, procesarPendientes, programarMejora, esperarMejorasEnCurso,
   reintentar, usarOriginal, usarMejorada,

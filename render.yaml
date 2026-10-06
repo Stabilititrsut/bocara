@@ -65,7 +65,7 @@ services:
 
       # Pipeline de imágenes (docs/PIPELINE_IMAGENES.md)
       - key: IMAGE_AI_PROVIDER
-        value: local
+        value: replicate
       - key: REPLICATE_API_TOKEN
         sync: false
 

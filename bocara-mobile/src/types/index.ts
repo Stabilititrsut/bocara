@@ -68,6 +68,7 @@ export interface Bolsa {
   imagen_original_url?: string | null;
   imagen_mejorada_url?: string | null;
   estado_procesamiento_imagen?: 'pendiente' | 'procesando' | 'completada' | 'fallida' | 'descartada' | null;
+  proveedor_imagen_ia?: string | null;
   hora_recogida_inicio: string;
   hora_recogida_fin: string;
   fecha_disponible?: string;
