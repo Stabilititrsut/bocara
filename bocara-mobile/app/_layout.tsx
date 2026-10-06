@@ -10,6 +10,8 @@ import { notificacionesAPI } from '@/src/services/api';
 import { OnboardingProvider, useOnboarding } from '@/src/context/OnboardingContext';
 import { RealtimeProvider } from '@/src/context/RealtimeContext';
 import { resolverRutaNotificacion } from '@/src/utils/resolverRutaNotificacion';
+import { recordarPushToken } from '@/src/services/pushToken';
+import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 
 // Mantener el splash nativo visible hasta que la app esté lista
@@ -34,18 +36,75 @@ if (Platform.OS !== 'web') {
 }
 
 if (Notifications) {
+  // SDK 54: shouldShowAlert está obsoleto; banner (aviso flotante) y list
+  // (centro de notificaciones) lo reemplazan.
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
-      shouldShowAlert: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
       shouldPlaySound: true,
       shouldSetBadge: true,
     }),
   });
 }
 
+// projectId de EAS para getExpoPushTokenAsync. El valor de app.json
+// (extra.eas.projectId) viaja en el bundle; EXPO_PUBLIC_PROJECT_ID queda como
+// respaldo explícito (solo las variables EXPO_PUBLIC_* llegan al cliente).
+function resolverProjectId(): string | undefined {
+  return Constants.expoConfig?.extra?.eas?.projectId
+    ?? Constants.easConfig?.projectId
+    ?? process.env.EXPO_PUBLIC_PROJECT_ID;
+}
+
+// Canales de Android. Van ANTES de pedir permiso: en Android 13+ el diálogo de
+// permiso no aparece si la app todavía no creó ningún canal.
+//   · default     — intacto: es el que usan los push que el backend ya envía.
+//   · pedidos     — estado de pedidos: urgente, con sonido y vibración.
+//   · promociones — publicaciones cercanas: importancia normal, sin interrumpir.
+// El backend nunca debe apuntar a un canal que esta versión no cree: Android
+// no muestra esa notificación.
+async function crearCanalesAndroid() {
+  if (Platform.OS !== 'android') return;
+  await Notifications.setNotificationChannelAsync('default', {
+    name: 'Bocara',
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: Colors.orange,
+    sound: 'default',
+  });
+  await Notifications.setNotificationChannelAsync('pedidos', {
+    name: 'Pedidos',
+    description: 'Confirmación, preparación y recogida de tus pedidos',
+    importance: Notifications.AndroidImportance.HIGH,
+    vibrationPattern: [0, 250, 250, 250],
+    lightColor: Colors.orange,
+    sound: 'default',
+  });
+  await Notifications.setNotificationChannelAsync('promociones', {
+    name: 'Promociones cercanas',
+    description: 'Promociones y publicaciones de tiempo limitado cerca de ti',
+    importance: Notifications.AndroidImportance.DEFAULT,
+    sound: 'default',
+  });
+}
+
+// Pide el Expo push token y lo registra. Se usa al iniciar sesión y cuando el
+// token nativo rota (addPushTokenListener entrega el token NATIVO FCM/APNs, no
+// el de Expo, así que siempre se vuelve a derivar el de Expo desde aquí).
+async function obtenerYGuardarExpoToken() {
+  const tokenData = await Notifications.getExpoPushTokenAsync({ projectId: resolverProjectId() });
+  const token = tokenData?.data;
+  if (!token) return;
+  recordarPushToken(token);
+  await notificacionesAPI.guardarToken(token).catch(() => { });
+}
+
 async function registrarPushToken() {
   if (!Notifications || !Device) return;
   if (!Device.isDevice) return;
+
+  await crearCanalesAndroid();
 
   const { status: existente } = await Notifications.getPermissionsAsync();
   let finalStatus = existente;
@@ -55,23 +114,7 @@ async function registrarPushToken() {
   }
   if (finalStatus !== 'granted') return;
 
-  const tokenData = await Notifications.getExpoPushTokenAsync({
-    projectId: process.env.EXPO_PROJECT_ID,
-  });
-  const token = tokenData.data;
-  if (token) {
-    await notificacionesAPI.guardarToken(token).catch(() => { });
-  }
-
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'Bocara',
-      importance: Notifications.AndroidImportance.HIGH,
-      vibrationPattern: [0, 250, 250, 250],
-      lightColor: Colors.orange,
-      sound: 'default',
-    });
-  }
+  await obtenerYGuardarExpoToken();
 }
 
 // ── Splash animado de Bocara ──────────────────────────────────────────────────
@@ -159,6 +202,18 @@ function AuthGuard() {
     // usuario anterior a la sesión nueva.
     if (!usuario) { pushRegistered.current = false; pendingNotifRef.current = null; }
   }, [usuario]);
+
+  // Rotación del token: FCM/APNs pueden reemplazar el token nativo en
+  // cualquier momento (reinstalación de servicios, restauración de backup).
+  // Solo con sesión: sin usuario no hay cuenta a la que asociarlo.
+  const usuarioId = usuario?.id;
+  useEffect(() => {
+    if (!usuarioId || !Notifications?.addPushTokenListener) return undefined;
+    const subToken = Notifications.addPushTokenListener(() => {
+      obtenerYGuardarExpoToken().catch(() => { });
+    });
+    return () => subToken.remove();
+  }, [usuarioId]);
 
   // Listeners de notificaciones — solo nativo, se registran una única vez por
   // vida de la app (deps vacías) para no duplicarlos en cada render/relogin.

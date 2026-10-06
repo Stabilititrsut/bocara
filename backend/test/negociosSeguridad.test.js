@@ -12,11 +12,12 @@ const assert = require('node:assert/strict');
 const {
   fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
 } = require('./helpers/appPublicaciones');
+const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba');
 
 const FOTO = 'https://cdn.bocara.test/publicaciones/foto.jpg';
 const FOTO_NEGOCIO = 'https://cdn.bocara.test/negocios/foto.jpg';
 const HORARIO = {
-  hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00',
+  hora_recogida_inicio: HORA_INICIO_PRUEBA, hora_recogida_fin: horaFinVigente(),
   fecha_disponible: fechaGuatemala(0), fecha_caducidad: fechaGuatemala(1),
 };
 

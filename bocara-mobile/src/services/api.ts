@@ -220,6 +220,9 @@ export const notificacionesAPI = {
   marcarLeida: (id: string) => api.put(`/notificaciones/${id}/leer`),
   guardarToken: (token: string) =>
     api.post('/notificaciones/token', { expo_push_token: token }),
+  // Logout: solo borra el token si sigue siendo el de este dispositivo.
+  eliminarToken: (token: string) =>
+    api.delete('/notificaciones/token', { data: { expo_push_token: token }, timeout: 5000 }),
 };
 
 export const favoritosAPI = {

@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const {
   fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
 } = require('./helpers/appPublicaciones');
+const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba');
 
 const HOY = fechaGuatemala(0);
 const MANANA = fechaGuatemala(1);
@@ -19,7 +20,7 @@ const MSG_NEGOCIO = 'Debes agregar una foto del negocio para continuar.';
 const MSG_APROBAR = 'No se puede aprobar el negocio porque no tiene foto.';
 
 const HORARIO = {
-  hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00', fecha_disponible: HOY, fecha_caducidad: MANANA,
+  hora_recogida_inicio: HORA_INICIO_PRUEBA, hora_recogida_fin: horaFinVigente(), fecha_disponible: HOY, fecha_caducidad: MANANA,
 };
 const promo = (extra = {}) => ({
   nombre: '2x1 Ceviche', contenido: 'OLA2X1', tipo: 'cupon', categoria: '2x1', descripcion: 'Dos por uno',
