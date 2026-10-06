@@ -11,11 +11,12 @@ const assert = require('node:assert/strict');
 const {
   fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
 } = require('./helpers/appPublicaciones');
+const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba');
 
 const HOY = fechaGuatemala(0);
 const MANANA = fechaGuatemala(1);
 const HORARIO_VIGENTE = {
-  hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00',
+  hora_recogida_inicio: HORA_INICIO_PRUEBA, hora_recogida_fin: horaFinVigente(),
   fecha_disponible: HOY, fecha_caducidad: MANANA,
 };
 
@@ -230,8 +231,8 @@ test('TIME-2: crear sin hora_recogida_fin responde 400, no crea nada', async () 
 
 test('TIME: con ambas horas presentes, crear sigue funcionando igual que antes', async () => {
   const p = await crear(promo());
-  assert.equal(p.hora_recogida_inicio, '08:00');
-  assert.equal(p.hora_recogida_fin, '22:00');
+  assert.equal(p.hora_recogida_inicio, HORARIO_VIGENTE.hora_recogida_inicio);
+  assert.equal(p.hora_recogida_fin, HORARIO_VIGENTE.hora_recogida_fin);
 });
 
 test('TIME: una hora vacía explícita ("") se rechaza igual que ausente', async () => {

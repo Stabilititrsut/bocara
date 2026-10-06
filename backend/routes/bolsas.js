@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { haversine, coordenadasValidas, validarCoordenadasEntrada, resolverCoordenadasCliente } = require('../utils/geo');
-const { enviarNotificacionesMultiples, guardarNotificacion } = require('../services/notificaciones');
+const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const {
   getReservasMap, getDisponibilidadRealBolsa, disponibilidadReal, RESERVA_TTL_MINUTOS,
 } = require('../services/stock');
@@ -569,9 +569,10 @@ router.post('/', authMiddleware, async (req, res) => {
 
   if (error) return res.status(400).json({ error: error.message });
 
-  // Notificar favoritos solo si la bolsa está aprobada (no pendiente)
+  // Solo nace aprobada si la crea un admin. El handler vuelve a comprobar la
+  // visibilidad completa (negocio, vigencia, stock) antes de avisar a nadie.
   if (!data.estado_aprobacion || data.estado_aprobacion === 'aprobado') {
-    notificarFavoritos(nId, data.nombre, data.id).catch(() => {});
+    encolarPublicacionVisible(data);
   }
 
   enqueueEventBestEffort({
@@ -858,40 +859,5 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 
   res.json({ ok: true, tipo: 'eliminada', data });
 });
-
-async function notificarFavoritos(negocioId, bolsaNombre, bolsaId) {
-  try {
-    const { data: negocio } = await supabase.from('negocios').select('nombre').eq('id', negocioId).single();
-    const nombreNegocio = negocio?.nombre || 'Tu restaurante favorito';
-
-    const { data: favs } = await supabase
-      .from('favoritos')
-      .select('usuario_id, usuarios(expo_push_token)')
-      .eq('negocio_id', negocioId);
-
-    if (!favs?.length) return;
-
-    const tokens = favs.map(f => f.usuarios?.expo_push_token).filter(Boolean);
-    if (tokens.length) {
-      await enviarNotificacionesMultiples(
-        tokens,
-        '🛍️ ¡Nueva bolsa disponible!',
-        `${nombreNegocio} publicó: ${bolsaNombre}`,
-        { negocioId, bolsaId, screen: 'home' }
-      );
-    }
-
-    for (const fav of favs) {
-      await guardarNotificacion(
-        supabase, fav.usuario_id, 'nueva_bolsa',
-        '🛍️ Nueva bolsa disponible',
-        `${nombreNegocio} publicó: ${bolsaNombre}`,
-        { negocioId, bolsaId }
-      );
-    }
-  } catch {
-    // tabla favoritos puede no existir aún — fallo silencioso
-  }
-}
 
 module.exports = router;

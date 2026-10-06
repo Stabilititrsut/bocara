@@ -49,6 +49,7 @@ const { enviarNotificacionPush, guardarNotificacion } = require('./services/noti
 const { procesarEventosFallidos } = require('./services/pagoEventos');
 const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 const { enqueueEventBestEffort } = require('./services/eventosDominio');
+const { ejecutarDespachador } = require('./services/despachadorEventos');
 const { resolverRequestId } = require('./utils/requestId');
 
 const app = express();
@@ -190,7 +191,7 @@ app.listen(PORT, () => {
   // backend/.env.local.template); sin la variable, todo sigue igual.
   if (process.env.BOCARA_DISABLE_JOBS === 'true') {
     console.warn('⏸ Tareas en segundo plano DESACTIVADAS (BOCARA_DISABLE_JOBS=true): '
-      + 'recordatorios, reintentos post-pago y barridos de pedidos/reservas no corren en este proceso.');
+      + 'recordatorios, reintentos post-pago, despachador de eventos y barridos de pedidos/reservas no corren en este proceso.');
     return;
   }
 
@@ -202,6 +203,13 @@ app.listen(PORT, () => {
   setInterval(() => procesarEventosFallidos(20), 60 * 1000);
   setTimeout(() => procesarEventosFallidos(20), 5 * 1000);
   console.log('🔁 Reintentos post-pago activos (cada minuto)');
+
+  // Consumidor de eventos_dominio (hoy: avisos de publicaciones cercanas).
+  // Idempotente por diseño: el CAS de reclamo y la clave de cada notificación
+  // impiden duplicados aunque haya dos instancias.
+  setInterval(() => ejecutarDespachador(), 30 * 1000);
+  setTimeout(() => ejecutarDespachador(), 15 * 1000);
+  console.log('📣 Despachador de eventos de dominio activo (cada 30 s)');
 
   setInterval(async () => {
     try {

@@ -9,6 +9,7 @@ const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
@@ -1001,37 +1002,10 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
       );
     }
 
-    // Notificar a favoritos solo si hay algo que el cliente pueda ver de verdad
-    if (visible) {
-      try {
-        const { data: negocio } = await supabase.from('negocios').select('nombre').eq('id', bolsa.negocio_id).single();
-        const nombreNegocio = negocio?.nombre || 'Tu restaurante favorito';
-        const { data: favs } = await supabase
-          .from('favoritos')
-          .select('usuario_id, usuarios(expo_push_token)')
-          .eq('negocio_id', bolsa.negocio_id);
-        if (favs?.length) {
-          const { enviarNotificacionesMultiples } = require('../services/notificaciones');
-          const tokens = favs.map(f => f.usuarios?.expo_push_token).filter(Boolean);
-          if (tokens.length) {
-            await enviarNotificacionesMultiples(
-              tokens,
-              '🛍️ ¡Nueva bolsa disponible!',
-              `${nombreNegocio} publicó: ${bolsa.nombre}`,
-              { negocioId: bolsa.negocio_id, bolsaId: bolsa.id, screen: 'home' }
-            );
-          }
-          for (const fav of favs) {
-            await guardarNotificacion(
-              supabase, fav.usuario_id, 'nueva_bolsa',
-              '🛍️ Nueva bolsa disponible',
-              `${nombreNegocio} publicó: ${bolsa.nombre}`,
-              { negocioId: bolsa.negocio_id, bolsaId: bolsa.id }
-            );
-          }
-        }
-      } catch { /* tabla favoritos puede no existir aún — fallo silencioso */ }
-    }
+    // Avisar a clientes cercanos (≤ 10 km) y favoritos solo si hay algo que el
+    // cliente pueda ver de verdad. Lo hace el despachador de eventos
+    // (services/notificacionesCercania.js), con una notificación por usuario y ciclo.
+    if (visible) encolarPublicacionVisible(data);
 
     // Una fila por cada aprobación real: la misma publicación puede aprobarse
     // varias veces a lo largo de su vida (rechazo → corrección → aprobación), y
