@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   ahoraGuatemala, hoyGuatemala, estaVencida, filtrarVigentes,
   validarHorarioFuturo, finVentanaRecogida, normalizarHora, MENSAJE_HORARIO_VENCIDO,
+  noHaIniciado, rangoDiaGuatemalaUTC, rangoMesGuatemalaUTC, sumarDias,
 } = require('../services/horarioGuatemala');
 
 // Guatemala es UTC-6 todo el año (sin horario de verano).
@@ -196,4 +197,50 @@ test('filtrarVigentes descarta las vencidas sea cual sea el formato de la hora',
     { id: 'abierta-timetz', hora_recogida_inicio: '08:00:00-06', hora_recogida_fin: '20:00:00-06' },
   ];
   assert.deepEqual(filtrarVigentes(lote, ahora).map(b => b.id), ['abierta', 'abierta-timetz']);
+});
+
+// ── fecha_disponible: "todavía no empieza" ──────────────────────────────────
+
+test('noHaIniciado: true solo si fecha_disponible es estrictamente futura', () => {
+  const ahora = { fecha: '2026-09-10', hora: '12:00:00' };
+  assert.equal(noHaIniciado({ fecha_disponible: '2026-09-11' }, ahora), true, 'mañana: no ha iniciado');
+  assert.equal(noHaIniciado({ fecha_disponible: '2026-09-10' }, ahora), false, 'hoy: ya inició');
+  assert.equal(noHaIniciado({ fecha_disponible: '2026-09-09' }, ahora), false, 'ayer: ya inició');
+  assert.equal(noHaIniciado({ fecha_disponible: null }, ahora), false, 'sin fecha: legado, ya iniciada');
+  assert.equal(noHaIniciado({}, ahora), false);
+});
+
+// ── Rangos UTC para filtrar `created_at` por día/mes de Guatemala ──────────
+
+test('rangoDiaGuatemalaUTC: cubre exactamente un día de calendario de Guatemala (00:00 a 00:00 del siguiente)', () => {
+  const r = rangoDiaGuatemalaUTC('2026-09-10');
+  assert.equal(r.desde, '2026-09-10T06:00:00.000Z', '00:00 Guatemala = 06:00 UTC (UTC-6)');
+  assert.equal(r.hasta, '2026-09-11T06:00:00.000Z');
+});
+
+test('rangoDiaGuatemalaUTC: formato inválido devuelve null, no lanza', () => {
+  assert.equal(rangoDiaGuatemalaUTC('10-09-2026'), null);
+  assert.equal(rangoDiaGuatemalaUTC(''), null);
+  assert.equal(rangoDiaGuatemalaUTC(undefined), null);
+});
+
+test('rangoMesGuatemalaUTC: cubre el mes completo, incluido el desborde de diciembre a enero', () => {
+  const r = rangoMesGuatemalaUTC('2026-09');
+  assert.equal(r.desde, '2026-09-01T06:00:00.000Z');
+  assert.equal(r.hasta, '2026-10-01T06:00:00.000Z');
+
+  const dic = rangoMesGuatemalaUTC('2026-12');
+  assert.equal(dic.desde, '2026-12-01T06:00:00.000Z');
+  assert.equal(dic.hasta, '2027-01-01T06:00:00.000Z', 'diciembre → enero del año siguiente');
+});
+
+test('rangoMesGuatemalaUTC: formato inválido devuelve null', () => {
+  assert.equal(rangoMesGuatemalaUTC('2026-9'), null);
+  assert.equal(rangoMesGuatemalaUTC('2026'), null);
+});
+
+test('sumarDias sigue funcionando igual (regresión: usado ahora también por los rangos de pedidos)', () => {
+  assert.equal(sumarDias('2026-09-10', 1), '2026-09-11');
+  assert.equal(sumarDias('2026-09-10', -1), '2026-09-09');
+  assert.equal(sumarDias('2026-12-31', 1), '2027-01-01');
 });

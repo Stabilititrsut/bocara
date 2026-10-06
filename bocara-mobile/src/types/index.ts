@@ -106,6 +106,10 @@ export interface CrearBolsaPayload {
   permite_envio?: boolean;
   imagen_url?: string | null;
   peso_estimado_kg?: number;
+  // Fecha de publicación/inicio de vigencia (Promoción y Tiempo limitado).
+  // fecha_caducidad es la fecha fin — solo aplica a Tiempo limitado; una
+  // Promoción nunca la tiene (backend la ignora si llega, ver routes/bolsas.js).
+  fecha_disponible?: string;
   fecha_caducidad?: string | null;
   categoria_alimento?: string | null;
   categoria_menu?: string | null;

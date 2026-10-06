@@ -220,6 +220,8 @@ test('_layout: rutaParaNotificacion nunca manda un rol a la sección de otro rol
     '@/src/utils/resolverRutaNotificacion': resolverReal,
     '@/constants/Colors': { Colors: {} },
     '@/src/services/api': { notificacionesAPI: {} },
+    '@/src/services/pushToken': { recordarPushToken() {} },
+    'expo-constants': {},
     '@/src/context/OnboardingContext': { OnboardingProvider: 'OnboardingProvider', useOnboarding: () => ({}) },
     'expo-splash-screen': { preventAutoHideAsync: () => Promise.resolve() },
   });

@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, RefreshControl,
+  SafeAreaView, RefreshControl, AppState,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { negociosAPI, pedidosAPI, bolsasAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
+import CalendarioPicker from '@/components/CalendarioPicker';
 
 const PRIMARY = '#2C4A2E';
 const GOLD    = '#E8820C';
@@ -21,6 +22,52 @@ const ESTADO_COLOR: Record<string, { bg: string; text: string }> = {
   cancelado:  { bg: '#FEE2E2', text: '#991B1B' },
 };
 
+// 'YYYY-MM-DD' ± días, sin pasar por zona horaria del dispositivo (aritmética
+// entera de calendario). Usado solo para mover el día que se le PIDE al
+// backend — el backend decide qué pedidos hay ese día en hora de Guatemala.
+function sumarDiasISO(fechaISO: string, dias: number): string {
+  const [a, m, d] = fechaISO.split('-').map(Number);
+  const base = new Date(Date.UTC(a, m - 1, d));
+  base.setUTCDate(base.getUTCDate() + dias);
+  return base.toISOString().slice(0, 10);
+}
+
+// 'YYYY-MM' ± meses.
+function sumarMesesISO(mesISO: string, meses: number): string {
+  const [a, m] = mesISO.split('-').map(Number);
+  const base = new Date(Date.UTC(a, m - 1 + meses, 1));
+  return `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function etiquetaMes(mesISO: string): string {
+  const [a, m] = mesISO.split('-').map(Number);
+  const nombres = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  return `${nombres[m - 1]} ${a}`;
+}
+
+function etiquetaDia(fechaISO: string, hoyISO: string): string {
+  if (fechaISO === hoyISO) return 'Hoy';
+  if (fechaISO === sumarDiasISO(hoyISO, -1)) return 'Ayer';
+  const [a, m, d] = fechaISO.split('-').map(Number);
+  return new Date(Date.UTC(a, m - 1, d)).toLocaleDateString('es-GT', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
+// Hora/fecha de un `created_at` (instante UTC) en hora de Guatemala — UTC-6
+// fijo, sin horario de verano (igual que backend/services/horarioGuatemala.js).
+// Se desplaza el instante y se lee con getters UTC: no depende de la zona del
+// dispositivo ni del soporte de `timeZone` en Intl (Hermes).
+const OFFSET_GT_MS = 6 * 60 * 60 * 1000;
+function horaGt(iso: string): string {
+  const d = new Date(new Date(iso).getTime() - OFFSET_GT_MS);
+  const h24 = d.getUTCHours();
+  const h12 = h24 % 12 || 12;
+  return `${h12}:${String(d.getUTCMinutes()).padStart(2, '0')} ${h24 < 12 ? 'a. m.' : 'p. m.'}`;
+}
+function diaCortoGt(iso: string): string {
+  const d = new Date(new Date(iso).getTime() - OFFSET_GT_MS);
+  return d.toLocaleDateString('es-GT', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+}
+
 function MetricCard({ emoji, label, value, accent }: { emoji: string; label: string; value: string | number; accent?: string }) {
   return (
     <View style={s.metricCard}>
@@ -31,55 +78,58 @@ function MetricCard({ emoji, label, value, accent }: { emoji: string; label: str
   );
 }
 
+type VistaPedidos = 'dia' | 'mes';
+
 export default function DashboardRestauranteScreen() {
   const { usuario } = useAuth();
   const router = useRouter();
   const [negocio, setNegocio] = useState<any>(null);
-  const [pedidos, setPedidos] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
-  const [impacto, setImpacto] = useState<{ kg_rescatados: number; unidades_rescatadas: number; pedidos_completados: number; ventas_recuperadas: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // "Hoy" tal como lo resuelve el backend en hora de Guatemala (nunca el
+  // reloj del dispositivo) — se captura una vez al cargar el resumen y sirve
+  // para no permitir navegar el explorador de pedidos hacia el futuro.
+  const [hoyGt, setHoyGt] = useState<string | null>(null);
+
+  // Explorador de pedidos por día/mes, debajo de "Últimos pedidos". Por
+  // defecto día = hoy (resuelto por el backend, ver pedidosAPI.restaurante).
+  const [vista, setVista] = useState<VistaPedidos>('dia');
+  const [fechaVista, setFechaVista] = useState<string | null>(null); // null = "hoy" (backend resuelve)
+  const [mesVista, setMesVista] = useState<string | null>(null);     // null = "actual"
+  const [pedidosVista, setPedidosVista] = useState<any[]>([]);
+  const [loadingVista, setLoadingVista] = useState(true);
+  const [errorVista, setErrorVista] = useState(false);
+
   const cargar = useCallback(async () => {
     try {
-      const [negRes, pedRes, bolRes] = await Promise.allSettled([
+      const [negRes, resumenRes, bolRes] = await Promise.allSettled([
         negociosAPI.miNegocio(),
-        pedidosAPI.restaurante(),
+        pedidosAPI.restaurante({ fecha: 'hoy' }),
         bolsasAPI.listar({ mi_negocio: true }),
       ]);
 
       const neg = negRes.status === 'fulfilled' ? negRes.value.data : null;
       setNegocio(neg);
 
-      if (neg?.id) {
-        negociosAPI.impacto(neg.id).then(r => setImpacto(r.data)).catch(() => {});
-      }
-
-      // pedidosAPI.restaurante() ya viene filtrado a pagos verificados por Cubo,
-      // pero incluye cancelados (un pedido puede pagarse y luego cancelarse) —
-      // "Últimos pedidos" no debe mostrarlos: contradice el resumen de arriba,
-      // que sí los excluye. Para ver el historial de cancelados está la pestaña
-      // dedicada en la pantalla de gestión de pedidos, no el dashboard.
-      const allPedidos = pedRes.status === 'fulfilled' ? (pedRes.value.data || []) : [];
-      const pedidosReales = allPedidos.filter((p: any) => p.estado !== 'cancelado');
-      const today = pedidosReales.filter((p: any) => {
-        return new Date(p.created_at).toDateString() === new Date().toDateString();
-      });
-      setPedidos(pedidosReales);
-
+      // { fecha, pedidos } — "fecha" es el día resuelto en Guatemala; nunca se
+      // calcula "hoy" en el dispositivo (podría ser otro día que en Guatemala).
+      const resumen = resumenRes.status === 'fulfilled' ? resumenRes.value.data : null;
+      if (resumen?.fecha) setHoyGt(resumen.fecha);
+      const pedidosHoy = (resumen?.pedidos || []).filter((p: any) => p.estado !== 'cancelado');
       // Solo pedidos realmente pagados cuentan para las métricas de ventas/ganancias del día
-      const todayPagados = today.filter((p: any) => p.estado_pago === 'pagado');
+      const pagados = pedidosHoy.filter((p: any) => p.estado_pago === 'pagado');
 
       const bolsas = bolRes.status === 'fulfilled' ? (bolRes.value?.data || []) : [];
       const activas = bolsas.filter((b: any) => b.activo && (b.estado_aprobacion == null || b.estado_aprobacion === 'aprobado')).length;
 
       setStats({
-        hoy:     todayPagados.length,
+        hoy: pagados.length,
         // Ganancias = lo que le corresponde al restaurante (75% de la venta + propina
         // íntegra), no el total que pagó el cliente — ese incluye la comisión de
         // Bocara y el cargo de plataforma, que nunca son del restaurante.
-        ingresos: todayPagados.reduce((s: number, p: any) => s + (p.monto_neto_restaurante || 0), 0),
+        ingresos: pagados.reduce((s: number, p: any) => s + (p.monto_neto_restaurante || 0), 0),
         activas,
       });
     } catch { } finally {
@@ -88,7 +138,54 @@ export default function DashboardRestauranteScreen() {
     }
   }, []);
 
+  // Explorador de pedidos: independiente del resumen de arriba — el
+  // restaurante puede estar viendo un día o mes distinto al de hoy. Siempre
+  // manda `fecha` o `mes` (filtro en el backend, hora de Guatemala): sin
+  // ellos el endpoint devolvería todo el historial (contrato antiguo).
+  const cargarVista = useCallback(async () => {
+    setLoadingVista(true);
+    setErrorVista(false);
+    try {
+      const params = vista === 'dia'
+        ? { fecha: fechaVista || 'hoy' }
+        : { mes: mesVista || 'actual' };
+      const res = await pedidosAPI.restaurante(params);
+      // Al pedir "hoy", la respuesta trae el día resuelto en Guatemala — se
+      // actualiza siempre (no solo la primera vez) para que, si la app quedó
+      // abierta pasada la medianoche, la etiqueta y los límites usen el día nuevo.
+      if (vista === 'dia' && !fechaVista && res.data?.fecha) setHoyGt(res.data.fecha);
+      const lista = (res.data?.pedidos || []).filter((p: any) => p.estado !== 'cancelado');
+      setPedidosVista(lista);
+    } catch {
+      // Un array vacío NO es error (estado vacío abajo); esto es solo para un
+      // fallo real de red/backend — aviso breve con "Reintentar".
+      setPedidosVista([]);
+      setErrorVista(true);
+    } finally {
+      setLoadingVista(false);
+    }
+  }, [vista, fechaVista, mesVista]);
+
   useEffect(() => { cargar(); }, [cargar]);
+  useEffect(() => { cargarVista(); }, [cargarVista]);
+
+  // Al volver a la app (p. ej. al día siguiente con la app en segundo plano)
+  // se recarga: con día/mes "por defecto" (null) el backend resuelve el nuevo
+  // hoy/mes actual sin que el usuario tenga que hacer nada.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (estado) => {
+      if (estado === 'active') { cargar(); cargarVista(); }
+    });
+    return () => sub.remove();
+  }, [cargar, cargarVista]);
+
+  // Elegir explícitamente hoy (o el mes actual) vuelve al modo automático
+  // (null), para que al cambiar de día no quede anclado a una fecha vieja.
+  const mesActualGt = hoyGt ? hoyGt.slice(0, 7) : null;
+  const elegirDia = (f: string) => setFechaVista(f && f !== hoyGt ? f : null);
+  const elegirMes = (m: string) => setMesVista(m && m !== mesActualGt ? m : null);
+  const diaMostrado = fechaVista || hoyGt || '';
+  const mesMostrado = mesVista || mesActualGt || '';
 
   // ─── Pendiente ───────────────────────────────────────────────────────────────
   if (!loading && (negocio?.estado_verificacion === 'pendiente' || (!negocio?.activo && negocio?.estado_verificacion !== 'rechazado'))) {
@@ -191,14 +288,13 @@ export default function DashboardRestauranteScreen() {
   }
 
   // ─── Dashboard normal ────────────────────────────────────────────────────────
-  const ultimos5 = pedidos.slice(0, 5);
   const faltaDpi = negocio && !negocio.dpi_foto_url && !negocio.datos_bancarios?.dpi_foto_url;
 
   return (
     <SafeAreaView style={s.root}>
       <ScrollView
         contentContainerStyle={s.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={GOLD} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); cargarVista(); }} tintColor={GOLD} />}
         showsVerticalScrollIndicator={false}
       >
         {/* BUG 5: Advertencia DPI faltante */}
@@ -222,7 +318,9 @@ export default function DashboardRestauranteScreen() {
             )}
           </View>
           <Text style={s.headerFecha}>
-            {new Date().toLocaleDateString('es-GT', { weekday: 'long', day: 'numeric', month: 'long' })}
+            {hoyGt
+              ? new Date(`${hoyGt}T12:00:00Z`).toLocaleDateString('es-GT', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' })
+              : ''}
           </Text>
         </View>
 
@@ -234,60 +332,126 @@ export default function DashboardRestauranteScreen() {
           <MetricCard emoji="⏱️" label="Activas"  value={loading ? '—' : (stats?.activas || 0)}                      accent='#60A5FA' />
         </View>
 
-        {/* Contribución al aprovechamiento */}
-        {impacto && (
-          <View style={s.impactoCard}>
-            <Text style={s.impactoTitle}>🍽️ Tu contribución</Text>
-            {impacto.pedidos_completados === 0 ? (
-              <Text style={s.impactoEmpty}>Aún no tienes ventas registradas. ¡Tu contribución empieza con la primera venta!</Text>
-            ) : (
-              <>
-                <View style={s.impactoRow}>
-                  <View style={s.impactoItem}>
-                    <Text style={s.impactoNum}>{impacto.kg_rescatados.toFixed(1)}</Text>
-                    <Text style={s.impactoLbl}>kg aprox.{'\n'}aprovechados</Text>
-                  </View>
-                  <View style={s.impactoDivider} />
-                  <View style={s.impactoItem}>
-                    <Text style={s.impactoNum}>{impacto.unidades_rescatadas}</Text>
-                    <Text style={s.impactoLbl}>unidades{'\n'}rescatadas</Text>
-                  </View>
-                </View>
-                <View style={[s.impactoRow, { marginTop: 10 }]}>
-                  <View style={s.impactoItem}>
-                    <Text style={s.impactoNum}>{impacto.pedidos_completados}</Text>
-                    <Text style={s.impactoLbl}>pedidos{'\n'}completados</Text>
-                  </View>
-                  <View style={s.impactoDivider} />
-                  <View style={s.impactoItem}>
-                    <Text style={s.impactoNum}>Q{impacto.ventas_recuperadas.toFixed(2)}</Text>
-                    <Text style={s.impactoLbl}>ventas{'\n'}recuperadas</Text>
-                  </View>
-                </View>
-                <Text style={s.impactoFooter}>Calculado a partir de pedidos efectivamente recogidos mediante Bocara.</Text>
-              </>
-            )}
+        {/* Pedidos por día / mes — reemplaza "Últimos pedidos" fijo. Por
+            defecto el día de hoy (resuelto en el backend, hora de Guatemala);
+            el restaurante puede moverse a días anteriores o a un mes completo,
+            sin recargar la app ni depender del reloj del dispositivo. */}
+        <Text style={s.sectionTitle}>Pedidos</Text>
+        <View style={s.vistaTabsRow}>
+          <TouchableOpacity
+            style={[s.vistaTab, vista === 'dia' && s.vistaTabActive]}
+            onPress={() => setVista('dia')}
+          >
+            <Text style={[s.vistaTabText, vista === 'dia' && s.vistaTabTextActive]}>Día</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.vistaTab, vista === 'mes' && s.vistaTabActive]}
+            onPress={() => setVista('mes')}
+          >
+            <Text style={[s.vistaTabText, vista === 'mes' && s.vistaTabTextActive]}>Mes</Text>
+          </TouchableOpacity>
+        </View>
+
+        {vista === 'dia' ? (
+          <View style={s.navRow}>
+            <TouchableOpacity
+              style={[s.navBtn, !diaMostrado && s.navBtnDisabled]}
+              onPress={() => elegirDia(sumarDiasISO(diaMostrado, -1))}
+              disabled={!diaMostrado}
+              accessibilityLabel="Día anterior"
+            >
+              <Text style={s.navBtnText}>‹</Text>
+            </TouchableOpacity>
+            <View style={s.navPicker}>
+              <CalendarioPicker
+                label=""
+                value={diaMostrado}
+                onChange={elegirDia}
+                placeholder="Elegir día"
+                maxDate={hoyGt || undefined}
+              />
+            </View>
+            <TouchableOpacity
+              style={[s.navBtn, !fechaVista && s.navBtnDisabled]}
+              disabled={!fechaVista}
+              onPress={() => elegirDia(sumarDiasISO(diaMostrado, 1))}
+              accessibilityLabel="Día siguiente"
+            >
+              <Text style={s.navBtnText}>›</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={s.navRow}>
+            <TouchableOpacity
+              style={[s.navBtn, !mesMostrado && s.navBtnDisabled]}
+              onPress={() => elegirMes(sumarMesesISO(mesMostrado, -1))}
+              disabled={!mesMostrado}
+              accessibilityLabel="Mes anterior"
+            >
+              <Text style={s.navBtnText}>‹</Text>
+            </TouchableOpacity>
+            <View style={s.navPicker}>
+              <CalendarioPicker
+                label=""
+                modo="mes"
+                value={mesMostrado}
+                onChange={elegirMes}
+                placeholder="Elegir mes"
+                maxDate={mesActualGt || undefined}
+              />
+            </View>
+            <TouchableOpacity
+              style={[s.navBtn, !mesVista && s.navBtnDisabled]}
+              disabled={!mesVista}
+              onPress={() => elegirMes(sumarMesesISO(mesMostrado, 1))}
+              accessibilityLabel="Mes siguiente"
+            >
+              <Text style={s.navBtnText}>›</Text>
+            </TouchableOpacity>
           </View>
         )}
 
-        {/* Últimos pedidos */}
-        <Text style={s.sectionTitle}>Últimos pedidos</Text>
-        {ultimos5.length === 0 ? (
+        <View style={s.vistaEtiquetaRow}>
+          <Text style={s.vistaEtiqueta}>
+            {vista === 'dia'
+              ? (diaMostrado ? etiquetaDia(diaMostrado, hoyGt || '') : '')
+              : (mesMostrado ? etiquetaMes(mesMostrado) : '')}
+            {!loadingVista && !errorVista ? ` · ${pedidosVista.length} ${pedidosVista.length === 1 ? 'pedido' : 'pedidos'}` : ''}
+          </Text>
+          {(vista === 'dia' ? !!fechaVista : !!mesVista) && (
+            <TouchableOpacity onPress={() => (vista === 'dia' ? setFechaVista(null) : setMesVista(null))}>
+              <Text style={s.volverHoyText}>{vista === 'dia' ? 'Ir a hoy' : 'Ir a este mes'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {loadingVista ? (
+          <View style={s.emptyCard}>
+            <Text style={s.emptyText}>Cargando pedidos…</Text>
+          </View>
+        ) : errorVista ? (
+          <View style={s.emptyCard}>
+            <Text style={s.emptyText}>No se pudieron cargar los pedidos.</Text>
+            <TouchableOpacity style={s.reintentarBtn} onPress={cargarVista}>
+              <Text style={s.reintentarText}>Reintentar</Text>
+            </TouchableOpacity>
+          </View>
+        ) : pedidosVista.length === 0 ? (
           <View style={s.emptyCard}>
             <Text style={{ fontSize: 32, marginBottom: 8 }}>🥡</Text>
-            <Text style={s.emptyText}>Aún no tienes pedidos.</Text>
-            <Text style={[s.emptyText, { marginTop: 4, fontSize: 12 }]}>¡Crea tu primera bolsa sorpresa!</Text>
+            <Text style={s.emptyText}>
+              {vista === 'dia' ? 'No hay pedidos para este día.' : 'No hay pedidos para este mes.'}
+            </Text>
           </View>
         ) : (
-          ultimos5.map((p: any) => {
+          pedidosVista.map((p: any) => {
             const est = ESTADO_COLOR[p.estado] || { bg: '#F3F4F6', text: '#6B7280' };
             return (
               <View key={p.id} style={s.pedidoCard}>
                 <View style={{ flex: 1 }}>
                   <Text style={s.pedidoNombre} numberOfLines={1}>{p.bolsas?.nombre || 'Bolsa sorpresa'}</Text>
                   <Text style={s.pedidoHora}>
-                    {new Date(p.created_at).toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit' })}
-                    {' · '}{new Date(p.created_at).toLocaleDateString('es-GT', { day: 'numeric', month: 'short' })}
+                    {vista === 'mes' ? `${diaCortoGt(p.created_at)} · ` : ''}{horaGt(p.created_at)}
                   </Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
@@ -301,7 +465,7 @@ export default function DashboardRestauranteScreen() {
           })
         )}
 
-        {pedidos.length > 5 && (
+        {pedidosVista.length > 0 && (
           <TouchableOpacity style={s.verTodosBtn} onPress={() => router.push('/restaurante/pedidos' as any)}>
             <Text style={s.verTodosBtnText}>Ver todos los pedidos →</Text>
           </TouchableOpacity>
@@ -385,13 +549,20 @@ const s = StyleSheet.create({
   dpiBanner: { backgroundColor: '#FEF3C7', borderRadius: 12, padding: 12, marginBottom: 12, borderWidth: 1.5, borderColor: '#FDE68A' },
   dpiBannerText: { fontSize: 13, color: '#92400E', fontWeight: '700', lineHeight: 19 },
 
-  impactoCard:    { backgroundColor: '#F0FFF4', borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1.5, borderColor: '#A5D6A7' },
-  impactoTitle:   { fontSize: 14, fontWeight: '800', color: '#2E7D32', marginBottom: 10 },
-  impactoEmpty:   { fontSize: 13, color: '#4CAF50', lineHeight: 20 },
-  impactoRow:     { flexDirection: 'row', alignItems: 'center' },
-  impactoItem:    { flex: 1, alignItems: 'center' },
-  impactoDivider: { width: 1, height: 44, backgroundColor: '#A5D6A7' },
-  impactoNum:     { fontSize: 24, fontWeight: '900', color: '#2E7D32', marginBottom: 4 },
-  impactoLbl:     { fontSize: 11, color: '#4CAF50', textAlign: 'center', lineHeight: 16 },
-  impactoFooter:  { fontSize: 10, color: '#6B9D6B', marginTop: 10, textAlign: 'center', lineHeight: 14 },
+  // ─── Explorador de pedidos (día/mes) ───
+  vistaTabsRow:  { flexDirection: 'row', backgroundColor: WHITE, borderRadius: 12, padding: 4, marginBottom: 10, borderWidth: 1, borderColor: BORDER },
+  vistaTab:      { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 9 },
+  vistaTabActive:{ backgroundColor: PRIMARY },
+  vistaTabText:  { fontSize: 13, fontWeight: '700', color: Colors.textSecondary },
+  vistaTabTextActive: { color: WHITE },
+  navRow:        { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  navPicker:     { flex: 1, marginHorizontal: 8 },
+  navBtn:        { width: 36, height: 36, borderRadius: 18, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center' },
+  navBtnDisabled:{ opacity: 0.4 },
+  navBtnText:    { fontSize: 18, fontWeight: '800', color: PRIMARY },
+  vistaEtiquetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  vistaEtiqueta: { fontSize: 12, fontWeight: '700', color: Colors.textSecondary },
+  volverHoyText: { fontSize: 12, fontWeight: '800', color: GOLD },
+  reintentarBtn: { marginTop: 12, borderRadius: 10, borderWidth: 1.5, borderColor: GOLD, paddingHorizontal: 18, paddingVertical: 8 },
+  reintentarText: { color: GOLD, fontWeight: '800', fontSize: 13 },
 });

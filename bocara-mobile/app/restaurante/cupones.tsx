@@ -1,14 +1,26 @@
 import { publicacionVencida } from '@/src/utils/horarioRecogida';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal,
+  SafeAreaView, TextInput, Alert, Platform, RefreshControl, ActivityIndicator, Modal, Image,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
-import { bolsasAPI, negociosAPI } from '@/src/services/api';
+import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
+import { pickImage } from '@/src/utils/pickImage';
 import { Colors } from '@/constants/Colors';
 import type { Bolsa, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
+import {
+  estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
+  horaParaFormulario, faltaFotoParaGuardar, MENSAJE_FOTO_PUBLICACION,
+} from '@/src/utils/estadoPublicacion';
+
+// Promoción tal como la devuelve GET /bolsas?mi_negocio=true: incluye el estado
+// de revisión del admin, igual que BolsaRestaurante en restaurante/bolsas.tsx.
+interface CuponRestaurante extends Bolsa {
+  estado_aprobacion?: 'pendiente' | 'aprobado' | 'rechazado' | null;
+  motivo_rechazo?: string | null;
+}
 
 // `categoria` no tiene enum en backend (validarDatosBolsa no lo restringe) —
 // es una lista fija solo para esta UI, no un contrato de backend.
@@ -24,6 +36,7 @@ interface CuponForm {
   cantidad_disponible: string;
   hora_recogida_inicio: string;
   hora_recogida_fin: string;
+  imagen_url: string;
 }
 
 const FORM_INIT: CuponForm = {
@@ -36,7 +49,40 @@ const FORM_INIT: CuponForm = {
   cantidad_disponible: '1',
   hora_recogida_inicio: '18:00',
   hora_recogida_fin: '20:00',
+  imagen_url: '',
 };
+
+// Alert.alert no hace nada en react-native-web: en web se usa el diálogo del
+// navegador (mismo criterio que restaurante/bolsas.tsx). Sin esto, en la app web
+// no se veían ni los errores del backend ni la confirmación de guardado.
+function avisar(titulo: string, mensaje: string) {
+  if (Platform.OS === 'web' && typeof window !== 'undefined') window.alert(mensaje);
+  else Alert.alert(titulo, mensaje);
+}
+
+function construirPayload(form: CuponForm, horaInicio: string, horaFin: string): CrearBolsaPayload {
+  return {
+    nombre: form.nombre.trim(),
+    contenido: form.contenido.trim().toUpperCase(),
+    categoria: form.categoria,
+    descripcion: form.descripcion.trim(),
+    precio_original: parseFloat(form.precio_original) || 0,
+    precio_descuento: parseFloat(form.precio_descuento),
+    cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
+    hora_recogida_inicio: horaInicio,
+    hora_recogida_fin: horaFin,
+    imagen_url: form.imagen_url || null,
+    tipo: 'cupon',
+    // fecha_disponible (fecha de publicación) es obligatoria en el backend
+    // (ver routes/bolsas.js). Esta pantalla no tiene selector propio de
+    // fecha — se publica siempre a partir de hoy en Guatemala (UTC-6 fijo,
+    // sin horario de verano — igual que services/horarioGuatemala.js en el
+    // backend). Restar 6h antes de tomar la fecha evita que, cerca de la
+    // medianoche UTC, esto calcule "mañana" y la publicación nazca con
+    // motivo "no_iniciada" hasta el día siguiente.
+    fecha_disponible: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().slice(0, 10),
+  };
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -48,14 +94,22 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export default function CuponesRestauranteScreen() {
-  const [cupones, setCupones] = useState<Bolsa[]>([]);
+  const [cupones, setCupones] = useState<CuponRestaurante[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modal, setModal] = useState(false);
-  const [editando, setEditando] = useState<Bolsa | null>(null);
+  const [editando, setEditando] = useState<CuponRestaurante | null>(null);
   const [saving, setSaving] = useState(false);
   const [negocioId, setNegocioId] = useState<string>('');
   const [form, setForm] = useState<CuponForm>({ ...FORM_INIT });
+  const [errorGuardar, setErrorGuardar] = useState('');
+  // Payload que el formulario cargó al abrir "Editar": base para mandar solo
+  // los campos que el usuario cambió (ver payloadDeEdicion).
+  const cargadoAlEditar = useRef<CrearBolsaPayload | null>(null);
+  // Foto obligatoria: subida en curso / se intentó guardar sin foto.
+  const [subiendoFoto, setSubiendoFoto] = useState(false);
+  const [fotoFaltante, setFotoFaltante] = useState(false);
+  const modalScrollRef = useRef<ScrollView>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -64,7 +118,7 @@ export default function CuponesRestauranteScreen() {
       setNegocioId(nid || '');
       if (!nid) return;
       const res = await bolsasAPI.listar({ negocio_id: nid, mi_negocio: 'true' });
-      setCupones((res.data || []).filter((b: Bolsa) => b.tipo === 'cupon'));
+      setCupones((res.data || []).filter((b: CuponRestaurante) => b.tipo === 'cupon'));
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
@@ -78,13 +132,18 @@ export default function CuponesRestauranteScreen() {
 
   function abrirNuevo() {
     setEditando(null);
+    setErrorGuardar('');
+    setFotoFaltante(false);
+    cargadoAlEditar.current = null;
     setForm({ ...FORM_INIT });
     setModal(true);
   }
 
-  function abrirEditar(c: Bolsa) {
+  function abrirEditar(c: CuponRestaurante) {
     setEditando(c);
-    setForm({
+    setErrorGuardar('');
+    setFotoFaltante(false);
+    const cargado: CuponForm = {
       nombre: c.nombre || '',
       contenido: c.contenido || '',
       categoria: c.categoria || 'Porcentaje',
@@ -92,64 +151,121 @@ export default function CuponesRestauranteScreen() {
       precio_original: String(c.precio_original || ''),
       precio_descuento: String(c.precio_descuento || ''),
       cantidad_disponible: String(c.cantidad_disponible || '1'),
-      hora_recogida_inicio: c.hora_recogida_inicio || '18:00',
-      hora_recogida_fin: c.hora_recogida_fin || '20:00',
-    });
+      hora_recogida_inicio: horaParaFormulario(c.hora_recogida_inicio, '18:00'),
+      hora_recogida_fin: horaParaFormulario(c.hora_recogida_fin, '20:00'),
+      imagen_url: c.imagen_url || '',
+    };
+    cargadoAlEditar.current = construirPayload(cargado,
+      normalizarHora(cargado.hora_recogida_inicio) || cargado.hora_recogida_inicio,
+      normalizarHora(cargado.hora_recogida_fin) || cargado.hora_recogida_fin);
+    setForm(cargado);
     setModal(true);
+  }
+
+  // Mismo flujo de subida que restaurante/perfil.tsx (pickImage resuelve web y nativo).
+  async function seleccionarFoto() {
+    const picked = await pickImage();
+    if (!picked) return;
+    setSubiendoFoto(true);
+    setErrorGuardar('');
+    try {
+      const ext = picked.mimeType.split('/')[1] || 'jpg';
+      const { data } = await uploadsAPI.uploadBase64(picked.base64, `bolsas/${negocioId}_${Date.now()}.${ext}`, picked.mimeType);
+      if (data?.publicUrl) {
+        setForm(f => ({ ...f, imagen_url: data.publicUrl }));
+        setFotoFaltante(false);
+      }
+    } catch (e: any) {
+      setErrorGuardar(e.message || 'No se pudo subir la foto');
+    } finally {
+      setSubiendoFoto(false);
+    }
+  }
+
+  function marcarFotoFaltante() {
+    setFotoFaltante(true);
+    setErrorGuardar(MENSAJE_FOTO_PUBLICACION);
+    modalScrollRef.current?.scrollTo({ y: 0, animated: true });
+    avisar('Falta la foto', MENSAJE_FOTO_PUBLICACION);
   }
 
   async function guardar() {
     if (saving) return;
+    if (subiendoFoto) return avisar('Subiendo foto', 'Espera a que termine de subir la foto.');
+    if (!editando && faltaFotoParaGuardar(form.imagen_url, null)) return marcarFotoFaltante();
     if (publicacionVencida(form)) {
-      const mensaje = 'El horario de recogida ya venció. Corrígelo antes de publicar.';
-      if (Platform.OS === 'web' && typeof window !== 'undefined') window.alert(mensaje);
-      else Alert.alert('Publicación vencida', mensaje);
-      return;
+      return avisar('Publicación vencida', 'El horario de recogida ya venció. Corrígelo antes de publicar.');
     }
     if (!form.nombre.trim() || !form.contenido.trim()) {
-      return Alert.alert('Campos requeridos', 'Nombre y código del cupón son obligatorios');
+      return avisar('Campos requeridos', 'Nombre y código del cupón son obligatorios');
     }
     if (form.precio_descuento == null || form.precio_descuento === '') {
-      return Alert.alert('Campos requeridos', 'El precio con descuento es obligatorio');
+      return avisar('Campos requeridos', 'El precio con descuento es obligatorio');
     }
     const horaInicio = normalizarHora(form.hora_recogida_inicio);
-    if (!horaInicio) return Alert.alert('Error', 'Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+    if (!horaInicio) return avisar('Error', 'Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     const horaFin = normalizarHora(form.hora_recogida_fin);
-    if (!horaFin) return Alert.alert('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
-    setSaving(true);
+    if (!horaFin) return avisar('Error', 'Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
     // negocio_id solo se manda al crear: PUT /bolsas/:id lo ignora (no está en
     // su allowlist de campos editables), así que mandarlo al editar no
     // cambiaría nada — ver ActualizarBolsaPayload en src/types/index.ts.
-    const payload: CrearBolsaPayload = {
-      nombre: form.nombre.trim(),
-      contenido: form.contenido.trim().toUpperCase(),
-      categoria: form.categoria,
-      descripcion: form.descripcion.trim(),
-      precio_original: parseFloat(form.precio_original) || 0,
-      precio_descuento: parseFloat(form.precio_descuento),
-      cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-      hora_recogida_inicio: horaInicio,
-      hora_recogida_fin: horaFin,
-      tipo: 'cupon',
-    };
+    const payload = construirPayload(form, horaInicio, horaFin);
+    const cambios = editando ? payloadDeEdicion(editando, payload, cargadoAlEditar.current) : payload;
+    if (editando && Object.keys(cambios).length === 0) {
+      setModal(false);
+      return avisar('Sin cambios', 'No modificaste ningún dato.');
+    }
+    if (editando && faltaFotoParaGuardar(form.imagen_url, { bolsa: editando, cambios })) return marcarFotoFaltante();
+    setSaving(true);
+    setErrorGuardar('');
     try {
-      if (editando) {
-        await bolsasAPI.actualizar(editando.id, payload);
-        Alert.alert('Listo', 'Cupón actualizado');
-      } else {
-        await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
-        Alert.alert('Listo', 'Cupón publicado');
+      // Siempre se edita la MISMA publicación (PUT /bolsas/:id), nunca se crea
+      // una copia: corregir una rechazada la devuelve a Pendiente.
+      const res = editando
+        ? await bolsasAPI.actualizar(editando.id, cambios)
+        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
+      // La tarjeta refleja el estado devuelto por el backend al instante (p. ej.
+      // Rechazada → Pendiente), sin esperar a la recarga de abajo.
+      const guardada: CuponRestaurante | undefined = res.data?.id ? res.data : undefined;
+      if (guardada) {
+        setCupones(prev => editando
+          ? prev.map(c => (c.id === guardada.id ? { ...c, ...guardada } : c))
+          : [guardada, ...prev]);
       }
       setModal(false);
+      avisar('Listo', mensajeTrasGuardar(res.data?.estado_aprobacion, !!editando));
       cargar();
     } catch (e: any) {
-      Alert.alert('Error', e.message);
+      // El formulario queda abierto con lo que el usuario escribió.
+      const mensaje = e?.message || 'No se pudo guardar la promoción';
+      setErrorGuardar(mensaje);
+      avisar('Error', mensaje);
     } finally {
       setSaving(false);
     }
   }
 
+  // Volver a mostrar una promoción aprobada que el restaurante ocultó. Mismo
+  // endpoint que el switch de restaurante/bolsas.tsx: solo cambia `activo`, no
+  // la manda a revisión.
+  async function activar(c: CuponRestaurante) {
+    if (publicacionVencida(c)) {
+      return avisar('Promoción vencida', 'El horario ya venció. Edítala para actualizarlo antes de activarla.');
+    }
+    try {
+      await bolsasAPI.actualizar(c.id, { activo: true });
+      cargar();
+    } catch (e: any) {
+      avisar('Error', e.message || 'No se pudo activar la promoción');
+    }
+  }
+
   async function desactivar(id: string) {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (!window.confirm('¿Seguro que quieres desactivar este cupón?')) return;
+      try { await bolsasAPI.eliminar(id); cargar(); } catch (e: any) { avisar('Error', e.message || 'No se pudo desactivar'); }
+      return;
+    }
     Alert.alert('Desactivar cupón', '¿Seguro que quieres desactivar este cupón?', [
       { text: 'Cancelar', style: 'cancel' },
       {
@@ -188,10 +304,13 @@ export default function CuponesRestauranteScreen() {
           </View>
         )}
 
-        {cupones.map((c: Bolsa) => {
+        {cupones.map((c: CuponRestaurante) => {
           const descuento = c.precio_original > 0
             ? Math.round((1 - c.precio_descuento / c.precio_original) * 100)
             : 0;
+          const aprobada = c.estado_aprobacion === 'aprobado' || !c.estado_aprobacion;
+          const rechazada = c.estado_aprobacion === 'rechazado';
+          const estado = estadoPublicacion(c);
           return (
             <View key={c.id} style={s.card}>
               <View style={s.cardTop}>
@@ -209,6 +328,12 @@ export default function CuponesRestauranteScreen() {
                     <Text style={s.codigoValor}>{c.contenido}</Text>
                   </View>
                   <Text style={s.tipo}>{c.categoria}</Text>
+                  <View style={s.estadoRow}>
+                    <Text style={[s.estado, ESTILO_ESTADO[estado.clave]]}>{estado.etiqueta}</Text>
+                    {estado.visible && <Text style={[s.estado, s.estadoVisible]}>Visible para clientes</Text>}
+                  </View>
+                  {estado.ayuda ? <Text style={s.ayuda}>{estado.ayuda}</Text> : null}
+                  {c.motivo_rechazo ? <Text style={s.motivo}>Motivo: {c.motivo_rechazo}</Text> : null}
                   {c.descripcion ? <Text style={s.descripcion}>{c.descripcion}</Text> : null}
                 </View>
                 <View style={s.precioCol}>
@@ -225,12 +350,22 @@ export default function CuponesRestauranteScreen() {
                 <Text style={s.footerText}>📦 {c.cantidad_disponible} disponibles</Text>
               </View>
               <View style={s.cardActions}>
-                <TouchableOpacity style={s.btnEditar} onPress={() => abrirEditar(c)}>
-                  <Text style={s.btnEditarText}>✏️ Editar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.btnEliminar} onPress={() => desactivar(c.id)}>
-                  <Text style={s.btnEliminarText}>Desactivar</Text>
-                </TouchableOpacity>
+                {/* En revisión inicial el backend responde 409 a cualquier edición. */}
+                {!bloqueadaParaEditar(c) && (
+                  <TouchableOpacity style={s.btnEditar} onPress={() => abrirEditar(c)}>
+                    <Text style={s.btnEditarText}>✏️ {textoBotonEditar(c)}</Text>
+                  </TouchableOpacity>
+                )}
+                {c.activo && !rechazada && (
+                  <TouchableOpacity style={s.btnEliminar} onPress={() => desactivar(c.id)}>
+                    <Text style={s.btnEliminarText}>Desactivar</Text>
+                  </TouchableOpacity>
+                )}
+                {aprobada && !c.activo && (
+                  <TouchableOpacity style={s.btnActivar} onPress={() => activar(c)}>
+                    <Text style={s.btnActivarText}>Activar</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           );
@@ -250,7 +385,25 @@ export default function CuponesRestauranteScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+          <ScrollView ref={modalScrollRef} contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+            {editando && avisoAlEditar(editando) ? <Text style={s.avisoEdicion}>{avisoAlEditar(editando)}</Text> : null}
+            {editando?.motivo_rechazo ? <Text style={s.motivo}>Motivo del administrador: {editando.motivo_rechazo}</Text> : null}
+            {errorGuardar ? <Text style={s.errorGuardar}>{errorGuardar}</Text> : null}
+            <Field label="Foto *">
+              <TouchableOpacity
+                style={[s.fotoBtn, fotoFaltante && !form.imagen_url && s.fotoBtnError]}
+                onPress={seleccionarFoto}
+                disabled={subiendoFoto}
+                activeOpacity={0.8}
+              >
+                {form.imagen_url
+                  ? <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
+                  : <Text style={s.fotoPlaceholderText}>🏷️ Toca para agregar foto</Text>}
+                {subiendoFoto ? <ActivityIndicator style={s.fotoSpinner} color={Colors.aqua} /> : null}
+              </TouchableOpacity>
+              {fotoFaltante && !form.imagen_url ? <Text style={s.fotoErrorText}>{MENSAJE_FOTO_PUBLICACION}</Text> : null}
+            </Field>
+
             <Field label="Nombre del cupón *">
               <TextInput style={s.input} value={form.nombre} onChangeText={set('nombre')} placeholder="Ej. Descuento miércoles" placeholderTextColor={Colors.textLight} />
             </Field>
@@ -352,11 +505,29 @@ const s = StyleSheet.create({
   btnEditarText: { color: Colors.brown, fontWeight: '700', fontSize: 13 },
   btnEliminar: { flex: 1, borderWidth: 1.5, borderColor: Colors.error, borderRadius: 10, padding: 9, alignItems: 'center' },
   btnEliminarText: { color: Colors.error, fontWeight: '700', fontSize: 13 },
+  btnActivar: { flex: 1, borderWidth: 1.5, borderColor: Colors.green, borderRadius: 10, padding: 9, alignItems: 'center' },
+  btnActivarText: { color: Colors.green, fontWeight: '700', fontSize: 13 },
+  estadoRow: { flexDirection: 'row', gap: 6, marginTop: 6 },
+  estado: { fontSize: 11, fontWeight: '800', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 2, overflow: 'hidden' },
+  estadoRevision: { backgroundColor: '#FEF3C7', color: '#92400E' },
+  estadoRechazada: { backgroundColor: '#FEE2E2', color: Colors.error },
+  estadoVisible: { backgroundColor: '#DCFCE7', color: '#166534' },
+  estadoOculta: { backgroundColor: Colors.border, color: Colors.textSecondary },
+  ayuda: { fontSize: 12, color: Colors.textSecondary, marginTop: 4 },
+  motivo: { fontSize: 12, color: Colors.error, marginTop: 4, fontWeight: '600' },
+  avisoEdicion: { fontSize: 13, color: '#92400E', backgroundColor: '#FEF3C7', borderRadius: 10, padding: 10, marginBottom: 12 },
+  errorGuardar: { fontSize: 13, color: Colors.error, backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12, fontWeight: '600' },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: Colors.border, backgroundColor: Colors.white },
   cancelText: { fontSize: 16, color: Colors.textSecondary },
   modalTitle: { fontSize: 17, fontWeight: '800', color: Colors.brown },
   saveText: { fontSize: 16, color: Colors.orange, fontWeight: '800' },
   modalScroll: { padding: 20 },
+  fotoBtn: { height: 140, borderRadius: 12, overflow: 'hidden', backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center', justifyContent: 'center' },
+  fotoBtnError: { borderWidth: 2, borderColor: Colors.error },
+  fotoPreview: { width: '100%', height: '100%' },
+  fotoPlaceholderText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
+  fotoSpinner: { position: 'absolute' },
+  fotoErrorText: { color: Colors.error, fontSize: 12, fontWeight: '700', marginTop: 6 },
   label: { fontSize: 13, fontWeight: '600', color: Colors.textSecondary, marginBottom: 6 },
   input: { backgroundColor: Colors.inputBg, borderRadius: 12, padding: 13, fontSize: 15, color: Colors.textPrimary },
   codigoInput: { fontWeight: '800', letterSpacing: 2, color: Colors.brown },
@@ -365,3 +536,13 @@ const s = StyleSheet.create({
   tipoChipText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },
   tipoChipTextActive: { color: Colors.white, fontWeight: '800' },
 });
+
+const ESTILO_ESTADO = {
+  pendiente: s.estadoRevision,
+  cambios: s.estadoRevision,
+  rechazada: s.estadoRechazada,
+  inactiva: s.estadoOculta,
+  vencida: s.estadoOculta,
+  agotada: s.estadoOculta,
+  aprobada: s.estadoVisible,
+};

@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { authAPI } from '../services/api';
+import { authAPI, notificacionesAPI } from '../services/api';
+import { pushTokenActual, recordarPushToken } from '../services/pushToken';
 import { onSessionInvalid } from '../services/sessionEvents';
 import { deleteAuthToken, getAuthToken, setAuthToken } from '../services/authTokenStorage';
 import { CART_KEY_PREFIX } from './CartContext';
@@ -139,7 +140,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUsuario(u);
   }, []);
 
+  // Desvincula ESTE dispositivo del push antes de soltar el JWT (el DELETE va
+  // autenticado). Sin token conocido (web, permiso denegado, simulador) no se
+  // llama: un DELETE sin token borraría el del teléfono real de la cuenta.
+  // Nunca bloquea ni rompe el logout: sin red, el siguiente login en este
+  // dispositivo reasigna el token (POST /token lo quita de la cuenta anterior).
+  async function desvincularPushDispositivo() {
+    const pushToken = pushTokenActual();
+    if (!pushToken) return;
+    try {
+      await notificacionesAPI.eliminarToken(pushToken);
+    } catch (error) {
+      console.warn('logout: no se pudo desvincular el push de este dispositivo', error);
+    } finally {
+      recordarPushToken(null);
+    }
+  }
+
  async function logout() {
+    await desvincularPushDispositivo();
     try {
       await Promise.all([
         deleteAuthToken(),

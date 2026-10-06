@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { negociosAPI, favoritosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -34,7 +34,10 @@ export default function TiendasScreen() {
     finally { setLoading(false); setRefreshing(false); }
   }, []);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  // Al recuperar el foco (no solo al montar): las pestañas quedan montadas, así
+  // que sin esto una publicación aprobada por el admin no aparecía hasta un
+  // pull-to-refresh manual o reiniciar la app.
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   async function toggleFav(negocioId: string) {
     const isFav = favIds.has(negocioId);

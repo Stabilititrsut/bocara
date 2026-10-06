@@ -7,6 +7,7 @@ const { validarTransicion, esEstadoValido, ESTADOS_ENTREGADOS } = require('../se
 const { liberarInventarioPedido } = require('../services/stock');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { hoyGuatemala, rangoDiaGuatemalaUTC, rangoMesGuatemalaUTC } = require('../services/horarioGuatemala');
 const router = express.Router();
 
 // Ruta heredada retirada: ningún cliente puede crear un pedido pagado sin una
@@ -77,26 +78,70 @@ router.get('/', authMiddleware, async (req, res) => {
 // mostraba pedidos "iniciados" pero nunca cobrados. Ya no: el restaurante debe
 // ver únicamente lo que de verdad se pagó, para que sus cifras coincidan con
 // las de Finanzas del admin.
+// Filtros opcionales por día o mes — resueltos en el backend, en hora de
+// Guatemala (nunca en el navegador). Aditivos: sin `fecha` ni `mes`, el
+// endpoint se comporta exactamente igual que antes (array plano, sin
+// filtrar) — lo siguen usando restaurante/pedidos.tsx (gestión de pedidos
+// activos) y restaurante/historial.tsx (histórico con sus propios filtros de
+// cliente). Con `fecha`/`mes`, la respuesta cambia de forma a propósito
+// ({ fecha, pedidos } / { mes, pedidos }) para que quien los pide sepa
+// exactamente qué día/mes quedó resuelto — así el filtro nunca depende del
+// reloj o la zona horaria del dispositivo.
+//
+// 'hoy' y 'actual' son tokens literales que piden "el día/mes de hoy en
+// Guatemala, que lo resuelva el backend" — el dashboard los manda siempre
+// (nunca calcula "hoy" él mismo), así que al cruzar la medianoche la próxima
+// carga ya trae el día nuevo sin ningún cambio en el cliente.
+function resolverFiltroFecha(req) {
+  const { fecha, mes } = req.query;
+  if (fecha && mes) return { error: 'Usa "fecha" o "mes", no ambos' };
+  if (fecha) {
+    const fechaResuelta = fecha === 'hoy' ? hoyGuatemala() : fecha;
+    const rango = rangoDiaGuatemalaUTC(fechaResuelta);
+    if (!rango) return { error: 'fecha inválida: usa AAAA-MM-DD o "hoy"' };
+    return { tipo: 'fecha', valor: fechaResuelta, rango };
+  }
+  if (mes) {
+    const mesResuelto = mes === 'actual' ? hoyGuatemala().slice(0, 7) : mes;
+    const rango = rangoMesGuatemalaUTC(mesResuelto);
+    if (!rango) return { error: 'mes inválido: usa AAAA-MM o "actual"' };
+    return { tipo: 'mes', valor: mesResuelto, rango };
+  }
+  return { tipo: null };
+}
+
 router.get('/restaurante', authMiddleware, async (req, res) => {
   try {
     if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin')
       return res.status(403).json({ error: 'No autorizado' });
+
+    const filtro = resolverFiltroFecha(req);
+    if (filtro.error) return res.status(400).json({ error: filtro.error });
+
     const { data: negocio } = await supabase
       .from('negocios').select('id').eq('propietario_id', req.usuario.id).single();
     if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
-    let { data, error } = await filtrarSoloPagosCuboVerificados(
+
+    const aplicarRango = (q) => filtro.rango
+      ? q.gte('created_at', filtro.rango.desde).lt('created_at', filtro.rango.hasta)
+      : q;
+
+    let { data, error } = await aplicarRango(filtrarSoloPagosCuboVerificados(
       supabase
         .from('pedidos')
         .select('*, bolsas!bolsa_id(id,nombre), usuarios!usuario_id(id,nombre,telefono)')
         .eq('negocio_id', negocio.id)
-    ).order('created_at', { ascending: false });
+    )).order('created_at', { ascending: false });
     if (error) {
-      const r = await filtrarSoloPagosCuboVerificados(
+      const r = await aplicarRango(filtrarSoloPagosCuboVerificados(
         supabase.from('pedidos').select('*').eq('negocio_id', negocio.id)
-      );
+      ));
       data = r.data; error = r.error;
     }
     if (error) return res.status(500).json({ error: error.message });
+
+    if (filtro.tipo === 'fecha') return res.json({ fecha: filtro.valor, pedidos: data || [] });
+    if (filtro.tipo === 'mes') return res.json({ mes: filtro.valor, pedidos: data || [] });
     res.json(data || []);
   } catch (err) {
     res.status(500).json({ error: err.message });

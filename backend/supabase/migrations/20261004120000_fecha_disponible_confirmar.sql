@@ -1,0 +1,21 @@
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  Confirmación de fecha_disponible (sin columnas nuevas)                 ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
+--
+-- Ejecutar en Supabase Dashboard → SQL Editor. Idempotente.
+--
+-- No se inventa ninguna columna nueva: `fecha_disponible` ya existe en el
+-- esquema (sql/schema_fix.sql: "ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS
+-- fecha_disponible date;") y ya se seleccionaba sin problemas en
+-- CAMPOS_BOLSA_PUBLICOS (routes/bolsas.js). Este archivo solo la reconfirma
+-- de forma idempotente, igual que el resto de columnas "defensivas" del
+-- proyecto, antes de empezar a escribirla activamente desde esta sesión:
+--   · Promoción (tipo='cupon')      → fecha de publicación/inicio.
+--   · Tiempo limitado (tipo='bolsa') → fecha de inicio de vigencia; su fecha
+--     fin sigue siendo la columna `fecha_caducidad`, ya existente y ya usada.
+--
+-- Los registros existentes quedan con fecha_disponible = NULL, que
+-- services/horarioGuatemala.js (noHaIniciado) trata como "ya iniciada" —
+-- ninguna publicación histórica se oculta por este cambio.
+
+ALTER TABLE bolsas ADD COLUMN IF NOT EXISTS fecha_disponible date;

@@ -226,23 +226,36 @@ export default function PerfilRestauranteScreen() {
   }
 
   async function guardar() {
-    if (camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
+    const esRechazado = negocio?.estado_verificacion === 'rechazado';
+    // Un rechazado puede reenviar aunque solo haya cambiado la foto (que se
+    // guarda aparte, al subirla) — por eso no exige campos pendientes.
+    if (!esRechazado && camposPendientes.size === 0) { showToast('No hay cambios para guardar', false); return; }
     setSaving(true);
     setToast(null);
     try {
       const lat = parseFloat(form.latitud);
       const lng = parseFloat(form.longitud);
 
-      if (negocio?.estado_verificacion === 'rechazado') {
-        // Si fue rechazado: actualizar directamente + reenviar a revisión
-        const payload: any = {};
-        camposPendientes.forEach(k => { payload[k] = form[k]; });
-        if (camposPendientes.has('latitud')) payload.latitud = isNaN(lat) ? null : lat;
-        if (camposPendientes.has('longitud')) payload.longitud = isNaN(lng) ? null : lng;
-        payload.estado_verificacion = 'pendiente';
-        await negociosAPI.actualizar(negocio.id, payload);
-        setCamposPendientes(new Set());
-        setNegocio((n: any) => ({ ...n, estado_verificacion: 'pendiente' }));
+      if (esRechazado) {
+        // Sin foto del negocio la solicitud no puede aprobarse (el admin
+        // recibiría un 409): no se reenvía hasta que la agregue.
+        if (!negocio?.imagen_url?.trim()) {
+          showToast('Debes agregar una foto del negocio para continuar.', false);
+          return;
+        }
+        // Si fue rechazado: guardar las correcciones y reenviar a revisión.
+        // La transición rechazado → pendiente la hace el backend (endpoint
+        // propio): el frontend nunca escribe estado_verificacion.
+        if (camposPendientes.size > 0) {
+          const payload: any = {};
+          camposPendientes.forEach(k => { payload[k] = form[k]; });
+          if (camposPendientes.has('latitud')) payload.latitud = isNaN(lat) ? null : lat;
+          if (camposPendientes.has('longitud')) payload.longitud = isNaN(lng) ? null : lng;
+          await negociosAPI.actualizar(negocio.id, payload);
+          setCamposPendientes(new Set());
+        }
+        const res = await negociosAPI.reenviarSolicitud();
+        setNegocio((n: any) => ({ ...n, ...(res.data || {}), estado_verificacion: 'pendiente', motivo_rechazo: null }));
         setRechazoInfo(null);
         showToast('✅ Solicitud re-enviada. El equipo de Bocara la revisará en 24-48h.');
       } else {
@@ -327,8 +340,12 @@ export default function PerfilRestauranteScreen() {
             <Text style={s.pendienteHint}>⏳ Tienes cambios sin enviar</Text>
           )}
         </View>
-        <TouchableOpacity style={[s.saveBtn, camposPendientes.size === 0 && s.saveBtnDisabled]} onPress={guardar} disabled={saving}>
-          <Text style={s.saveBtnText}>{saving ? '...' : 'Enviar cambios'}</Text>
+        <TouchableOpacity
+          style={[s.saveBtn, camposPendientes.size === 0 && negocio?.estado_verificacion !== 'rechazado' && s.saveBtnDisabled]}
+          onPress={guardar}
+          disabled={saving}
+        >
+          <Text style={s.saveBtnText}>{saving ? '...' : negocio?.estado_verificacion === 'rechazado' ? 'Reenviar a revisión' : 'Enviar cambios'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -407,8 +424,9 @@ export default function PerfilRestauranteScreen() {
           </View>
         )}
 
-        {/* Foto del negocio */}
-        <TouchableOpacity style={s.imgContainer} onPress={seleccionarImagen} disabled={uploadingImg}>
+        {/* Foto del negocio (obligatoria: sin ella el negocio no puede aprobarse ni activarse) */}
+        <Text style={s.fotoLabel}>Foto del negocio *</Text>
+        <TouchableOpacity style={[s.imgContainer, !negocio?.imagen_url && s.imgContainerError]} onPress={seleccionarImagen} disabled={uploadingImg}>
           {negocio?.imagen_url ? (
             <Image source={{ uri: negocio.imagen_url }} style={s.imgNegocio} contentFit="cover" transition={200} />
           ) : (
@@ -427,6 +445,11 @@ export default function PerfilRestauranteScreen() {
         {imgError ? (
           <View style={s.errorInline}>
             <Text style={s.errorInlineText}>⚠️ {imgError}</Text>
+          </View>
+        ) : null}
+        {negocio && !negocio.imagen_url && !uploadingImg ? (
+          <View style={s.errorInline}>
+            <Text style={s.errorInlineText}>⚠️ Debes agregar una foto del negocio para continuar.</Text>
           </View>
         ) : null}
 
@@ -649,6 +672,8 @@ const s = StyleSheet.create({
   toastErr: { backgroundColor: '#FEE2E2' },
   toastText: { fontSize: 13, fontWeight: '600', color: Colors.brown },
   imgContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 160 },
+  imgContainerError: { borderWidth: 2, borderColor: Colors.error },
+  fotoLabel: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary, marginBottom: 6 },
   imgNegocio: { width: '100%', height: '100%' },
   imgPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, justifyContent: 'center', alignItems: 'center', gap: 8 },
   imgPlaceholderText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
