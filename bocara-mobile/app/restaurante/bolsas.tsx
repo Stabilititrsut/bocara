@@ -9,6 +9,8 @@ import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 import HoraPicker from '@/components/HoraPicker';
+import EstadoImagenIA from '@/components/EstadoImagenIA';
+import { hayMejoraEnCurso } from '@/src/utils/estadoImagen';
 import CalendarioPicker from '@/components/CalendarioPicker';
 import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
 import { normalizarHora } from '@/src/utils/hora';
@@ -234,6 +236,15 @@ export default function BolsasRestauranteScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  // Mientras alguna foto se esté mejorando, refrescar cada 10 s para mostrar
+  // el resultado sin que el restaurante tenga que recargar.
+  const mejoraEnCurso = hayMejoraEnCurso(items);
+  useEffect(() => {
+    if (!mejoraEnCurso) return undefined;
+    const t = setInterval(cargar, 10000);
+    return () => clearInterval(t);
+  }, [mejoraEnCurso, cargar]);
 
   // Re-sincronizar con el servidor cada vez que la pantalla recupera el foco —
   // sin esto, si el admin aprueba/rechaza/pide cambios (incluso una segunda vez
@@ -517,6 +528,7 @@ export default function BolsasRestauranteScreen() {
                   <Text style={s.cardSub} numberOfLines={1}>{b.descripcion}</Text>
                 )}
                 <Text style={s.cardHora}>⏰ {b.hora_recogida_inicio?.slice(0, 5)} – {b.hora_recogida_fin?.slice(0, 5)}</Text>
+                <EstadoImagenIA tipo="publicacion" id={b.id} fila={b} onCambio={cargar} />
                 {estado.ayuda ? <Text style={s.revisionMsg}>{estado.ayuda}</Text> : null}
                 {b.motivo_rechazo && (
                   <View style={s.motivoBox}><Text style={s.motivoText}>Motivo: {b.motivo_rechazo}</Text></View>

@@ -222,6 +222,12 @@ export const notificacionesAPI = {
     api.post('/notificaciones/token', { expo_push_token: token }),
 };
 
+// Mejora automática de fotos (backend/routes/imagenes.js).
+export const imagenesAPI = {
+  accion: (tipo: 'publicacion' | 'negocio', id: string, accion: 'reintentar' | 'usar-original' | 'usar-mejorada') =>
+    api.post(`/imagenes/${tipo}/${id}/${accion}`),
+};
+
 export const favoritosAPI = {
   listar:       () => api.get('/favoritos/negocios'),
   listarBolsas: () => api.get('/favoritos/bolsas'),

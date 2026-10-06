@@ -63,7 +63,11 @@ export interface Bolsa {
   cantidad_disponible_real?: number;
   tipo: TipoPublicacion;
   categoria?: string;
+  // imagen_url = la mejor versión disponible (mejorada si existe). Pipeline de imágenes:
   imagen_url?: string;
+  imagen_original_url?: string | null;
+  imagen_mejorada_url?: string | null;
+  estado_procesamiento_imagen?: 'pendiente' | 'procesando' | 'completada' | 'fallida' | 'descartada' | null;
   hora_recogida_inicio: string;
   hora_recogida_fin: string;
   fecha_disponible?: string;
