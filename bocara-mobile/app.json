@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "bocara-mobile",
+    "name": "Bocara",
     "slug": "bocara-mobile",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -59,8 +59,8 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/images/icon.png",
-          "color": "#F97316",
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#2C4A2E",
           "defaultChannel": "default",
           "sounds": []
         }
