@@ -88,6 +88,8 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     'expo-router': { useRouter: () => ({ push() {}, replace() {} }), useFocusEffect: cb => focos.push(cb), useLocalSearchParams: () => params },
     '@/constants/Colors': { Colors: {} },
     '@/src/utils/estadoPublicacion': estadoReal,
+    '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+    '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
     '@/src/utils/pickImage': { pickImage: async () => null },
     // Dobles de las pantallas del cliente (tienda, detalle): los mismos módulos
     // reales que usan scripts/test-cart.cjs y test-tipo-publicacion.cjs.
@@ -332,6 +334,8 @@ function pantallaDisponibles(lista, api = {}) {
     forcedStates: [lista, false, false, false],
     mocks: {
       '@/src/utils/hora': load('src/utils/hora.ts'),
+      '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+      '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
       '@/src/utils/pickImage': {},
       '@/src/services/api': {
         bolsasAPI: { listar: () => new Promise(() => {}), ...api },

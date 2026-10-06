@@ -72,6 +72,8 @@ function montar(file, { forzados = {}, mocks = {} } = {}) {
     '@/constants/Colors': { Colors: { error: 'red' } },
     '@/constants/zonas': { ZONAS_GT: [] },
     '@/src/utils/backNavigation': { volver() {} },
+    '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+    '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
     '@/src/utils/pickImage': { pickImage: async () => null },
     ...mocks,
   }).default;
