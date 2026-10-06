@@ -41,6 +41,7 @@ function bolsaVisible(extra = {}) {
   return {
     id: IDS.bolsa, negocio_id: IDS.negocio, nombre: 'Combo almuerzo', tipo: 'cupon',
     activo: true, estado_aprobacion: 'aprobado', eliminado_en: null, cantidad_disponible: 5,
+    imagen_url: 'https://cdn.bocara.test/publicaciones/combo.jpg',
     fecha_disponible: hoy, fecha_caducidad: sumarDias(hoy, 3),
     hora_recogida_inicio: '08:00', hora_recogida_fin: '20:00',
     ...extra,
@@ -149,7 +150,7 @@ for (const [nombre, coords] of [
     const { cliente, notificaciones, llamadasRpc } = crearCliente({
       negocio: coords,
       usuarios: [usuario('vecino', 1), usuario('fan', 50)],
-      favoritos: [{ id: 'f1', usuario_id: 'fan', negocio_id: IDS.negocio }],
+      favoritos: [{ id: 'f1', usuario_id: 'fan', tipo: 'negocio', referencia_id: IDS.negocio }],
     });
     const r = await manejarPublicacionVisible(evento(), { cliente, enviarPush: espiaPush().enviarPush });
     assert.equal(llamadasRpc.length, 0);
@@ -173,8 +174,8 @@ test('un cliente cercano que también es favorito recibe una sola notificación'
   const { cliente, notificaciones } = crearCliente({
     usuarios: [usuario('ambos', 2), usuario('solo_fav', 40)],
     favoritos: [
-      { id: 'f1', usuario_id: 'ambos', negocio_id: IDS.negocio },
-      { id: 'f2', usuario_id: 'solo_fav', negocio_id: IDS.negocio },
+      { id: 'f1', usuario_id: 'ambos', tipo: 'negocio', referencia_id: IDS.negocio },
+      { id: 'f2', usuario_id: 'solo_fav', tipo: 'negocio', referencia_id: IDS.negocio },
     ],
   });
   const push = espiaPush();
@@ -194,7 +195,7 @@ test('favoritos respetan opt-out, rol, cuenta inactiva y token ausente', async (
       usuario('valido', null, { notif_promociones: null }), // NULL = no hizo opt-out
     ],
     favoritos: ['optout', 'restaurante', 'inactivo', 'sin_token', 'valido']
-      .map((u, i) => ({ id: `f${i}`, usuario_id: u, negocio_id: IDS.negocio })),
+      .map((u, i) => ({ id: `f${i}`, usuario_id: u, tipo: 'negocio', referencia_id: IDS.negocio })),
   });
   await manejarPublicacionVisible(evento(), { cliente, enviarPush: espiaPush().enviarPush });
   assert.deepEqual(notificaciones.map(n => n.usuario_id), ['valido']);

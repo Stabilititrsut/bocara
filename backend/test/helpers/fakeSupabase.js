@@ -11,7 +11,8 @@
 //   · la proyección de columnas (un campo que no se selecciona no viaja);
 //   · `.or()` repetido se combina con AND, igual que PostgREST con varios
 //     parámetros `or=` en la misma URL;
-//   · `eventos_dominio.idempotency_key` es UNIQUE (error 23505 al repetir).
+//   · `eventos_dominio.idempotency_key` y `notificaciones.clave_idempotencia`
+//     son UNIQUE (error 23505 al repetir).
 
 const crypto = require('node:crypto');
 
@@ -26,9 +27,16 @@ const DEFAULTS = {
     fecha_caducidad: null,
     created_at: new Date().toISOString(),
   }),
+  // Defaults de la tabla (202609161200 + 20260918000001_fix_eventos_dominio_defaults).
+  eventos_dominio: () => ({
+    status: 'pendiente', attempts: 0, last_error: null, processing_at: null, processed_at: null,
+    created_at: new Date().toISOString(),
+  }),
 };
 
-const UNICOS = { eventos_dominio: ['idempotency_key'] };
+// UNIQUE parciales (WHERE col IS NOT NULL): dos NULL nunca chocan, igual que
+// en PostgreSQL.
+const UNICOS = { eventos_dominio: ['idempotency_key'], notificaciones: ['clave_idempotencia'] };
 
 function dividirNivelSuperior(texto) {
   const partes = [];
@@ -181,17 +189,19 @@ class Query {
     const coincide = (f) => this.filtros.every(fn => fn(f));
 
     if (this.accion === 'insert') {
+      // Atómico como un INSERT multi-fila real: si alguna fila viola un
+      // UNIQUE (contra la tabla o contra otra del mismo lote), no entra ninguna.
       const insertadas = [];
       for (const p of this.payload) {
         const fila = { id: crypto.randomUUID(), ...(DEFAULTS[this.tabla]?.() || {}), ...structuredClone(p) };
         for (const col of UNICOS[this.tabla] || []) {
-          if (todas.some(r => r[col] === fila[col])) {
+          if (fila[col] != null && [...todas, ...insertadas].some(r => r[col] === fila[col])) {
             return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint (${col})` } };
           }
         }
-        todas.push(fila);
         insertadas.push(fila);
       }
+      todas.push(...insertadas);
       return this._resultado(this.devolver ? insertadas.map(f => this._proyectar(f)) : []);
     }
 

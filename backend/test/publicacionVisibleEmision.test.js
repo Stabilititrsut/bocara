@@ -34,7 +34,7 @@ test.after(detener);
 test.beforeEach(() => {
   const datos = datosBase();
   datos.usuarios.find(u => u.id === IDS.cliente).expo_push_token = 'ExponentPushToken[cliente]';
-  datos.favoritos = [{ id: 'fav-1', usuario_id: IDS.cliente, negocio_id: IDS.olaAzul }];
+  datos.favoritos = [{ id: 'fav-1', usuario_id: IDS.cliente, tipo: 'negocio', referencia_id: IDS.olaAzul }];
   fake.reiniciar(datos);
 });
 
