@@ -10,6 +10,7 @@ const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../se
 const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
 const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -334,6 +335,7 @@ router.post('/', authMiddleware, async (req, res) => {
     .select()
     .single();
   if (error) return res.status(400).json({ error: error.message });
+  programarMejora('negocios', data.id, data.imagen_url);
   res.status(201).json(data);
 });
 
@@ -464,6 +466,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // quedar activo por esta vía.
   const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
   if (errorFoto) return res.status(400).json({ error: errorFoto });
+  // Pipeline de imágenes: la original/mejorada de la foto actual no es una
+  // foto nueva. Lectura aparte y tolerante: sin la migración aplicada, las
+  // columnas no existen y se compara solo contra imagen_url.
+  let fotoNueva = false;
+  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url) {
+    const { data: img } = await supabase.from('negocios')
+      .select('imagen_original_url, imagen_mejorada_url').eq('id', req.params.id).maybeSingle();
+    fotoNueva = esFotoNueva(updates.imagen_url, { ...negocio, ...(img || {}) });
+    if (!fotoNueva) delete updates.imagen_url;
+  }
   const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
   if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
     return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
@@ -488,6 +500,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
 
   if (error) return res.status(400).json({ error: error.message });
+  if (fotoNueva) programarMejora('negocios', req.params.id, data.imagen_url);
   res.json(data);
 });
 

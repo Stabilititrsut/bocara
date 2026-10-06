@@ -17,6 +17,7 @@ const {
 } = require('../services/horarioGuatemala');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { MENSAJE_FOTO_PUBLICACION, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
+const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
 const {
   TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
   estaEliminada, activarSinAprobacionEsInvalido,
@@ -585,6 +586,10 @@ router.post('/', authMiddleware, async (req, res) => {
     });
   }
 
+  // Mejora automática de la foto (docs/PIPELINE_IMAGENES.md): asíncrona,
+  // nunca bloquea ni rompe la creación; la original queda visible mientras.
+  programarMejora('bolsas', data.id, data.imagen_url);
+
   res.status(201).json(data);
 });
 
@@ -650,6 +655,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // Una heredada sin foto que recibe vacío otra vez no es un cambio (se
   // descarta); si además la edición la manda a revisión, se exige foto abajo.
   const errorFoto = normalizarFotoEnEdicion(updates, bolsa.imagen_url, MENSAJE_FOTO_PUBLICACION);
+  // Pipeline de imágenes: imagen_url puede ser hoy la versión mejorada. Si el
+  // formulario reenvía la original o la mejorada de ESTA misma foto, no es un
+  // cambio (no reinicia la mejora ni manda a revisión). Solo una foto nueva
+  // reinicia el ciclo, más abajo, después de guardar.
+  const fotoNueva = !errorFoto && updates.imagen_url !== undefined && esFotoNueva(updates.imagen_url, bolsa);
+  if (!errorFoto && updates.imagen_url !== undefined && !fotoNueva) delete updates.imagen_url;
   if (errorFoto) return res.status(400).json({ error: errorFoto });
 
   // Promoción nunca tiene fecha fin (igual que al crear, ver POST /api/bolsas):
@@ -776,6 +787,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     columnasOmitidas.push(columnaFaltante);
   }
   if (error) return res.status(400).json({ error: error.message });
+  if (fotoNueva) programarMejora('bolsas', req.params.id, data.imagen_url);
   if (columnasOmitidas.length) {
     console.warn('[PUT /bolsas/:id] columnas omitidas por no existir en la BD:', columnasOmitidas.join(', '));
   }

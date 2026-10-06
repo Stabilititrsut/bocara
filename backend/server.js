@@ -49,6 +49,7 @@ const { enviarNotificacionPush, guardarNotificacion } = require('./services/noti
 const { procesarEventosFallidos } = require('./services/pagoEventos');
 const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 const { enqueueEventBestEffort } = require('./services/eventosDominio');
+const { procesarPendientes: procesarImagenesPendientes } = require('./services/imagenes/pipeline');
 const { resolverRequestId } = require('./utils/requestId');
 
 const app = express();
@@ -93,6 +94,7 @@ app.use('/api/admin',          require('./routes/admin'));
 app.use('/api/favoritos',      require('./routes/favoritos'));
 app.use('/api/uploads',        require('./routes/uploads'));
 app.use('/api/cupones',        require('./routes/cupones'));
+app.use('/api/imagenes',       require('./routes/imagenes'));
 
 app.get('/', (req, res) => {
   res.json({ status: '✅ Bocara API funcionando', version: '2.0.2', ambiente: process.env.NODE_ENV });
@@ -294,6 +296,19 @@ app.listen(PORT, () => {
   setInterval(cerrarReservasVencidas, 5 * 60 * 1000);
   setTimeout(cerrarReservasVencidas, 10 * 1000);
   console.log(`⏰ Cron de cierre de reservas vencidas activo (cada 5 min, TTL ${RESERVA_TTL_MINUTOS} min)`);
+
+  // Pipeline de imágenes: además del disparo inmediato al guardar, este tick
+  // retoma reintentos, procesos interrumpidos (reinicio) y lo que haya
+  // quedado en cola. Máximo 5 imágenes por tabla y vuelta, una a la vez.
+  let imagenesEnCurso = false;
+  setInterval(async () => {
+    if (imagenesEnCurso) return;
+    imagenesEnCurso = true;
+    try { await procesarImagenesPendientes(); }
+    catch (err) { console.error('[IMAGENES] tick falló:', err.message); }
+    finally { imagenesEnCurso = false; }
+  }, 60 * 1000);
+  console.log('🖼️ Pipeline de imágenes activo (cada minuto, proveedor: %s)', process.env.IMAGE_AI_PROVIDER || 'local');
 
   // Las publicaciones se conservan aunque estén ocultas o rechazadas. Nunca se
   // borran automáticamente: `activo=false` funciona como archivo recuperable.
