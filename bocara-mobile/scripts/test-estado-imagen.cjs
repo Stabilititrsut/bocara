@@ -26,10 +26,26 @@ test('IMG-UI-1: pendiente / procesando → "Mejorando tu foto…", sin acción, 
   }
 });
 
-test('IMG-UI-2: completada → "Foto mejorada" con opción de usar la original', () => {
-  const e = estadoImagenIA({ estado_procesamiento_imagen: 'completada' });
-  assert.match(e.etiqueta, /mejorada/);
+test('IMG-UI-2: completada con Replicate → "Foto mejorada con IA" + usar original + comparar', () => {
+  const e = estadoImagenIA({ estado_procesamiento_imagen: 'completada', proveedor_imagen_ia: 'replicate', imagen_original_url: 'o', imagen_mejorada_url: 'm' });
+  assert.equal(e.etiqueta, '✨ Foto mejorada con IA');
   assert.equal(e.accion, 'usar-original');
+  assert.equal(e.puedeComparar, true);
+});
+
+test('IMG-UI-2b: el ajuste técnico local NUNCA se presenta como IA', () => {
+  const e = estadoImagenIA({ estado_procesamiento_imagen: 'completada', proveedor_imagen_ia: 'local' });
+  assert.equal(e.etiqueta, '✨ Foto ajustada automáticamente');
+  assert.doesNotMatch(e.etiqueta, /IA/);
+});
+
+test('IMG-UI-2c: "Comparar" solo cuando existen original y mejorada', () => {
+  assert.equal(estadoImagenIA({ estado_procesamiento_imagen: 'descartada', imagen_original_url: 'o', imagen_mejorada_url: 'm' }).puedeComparar, true);
+  assert.equal(estadoImagenIA({ estado_procesamiento_imagen: 'fallida', imagen_original_url: 'o' }).puedeComparar, false);
+  const comp = read('components/EstadoImagenIA.tsx');
+  assert.match(comp, /estado\.puedeComparar \? \(/);
+  assert.match(comp, /fila\.imagen_original_url/);
+  assert.match(comp, /fila\.imagen_mejorada_url/);
 });
 
 test('IMG-UI-3: fallida → avisa que se muestra la original y ofrece reintentar', () => {

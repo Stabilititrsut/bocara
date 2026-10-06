@@ -14,8 +14,9 @@ const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba'
 const { crearFakeSupabase } = require('./helpers/fakeSupabase');
 const pipeline = require('../services/imagenes/pipeline');
 const {
-  proveedorLocal, crearProveedorReplicate, obtenerProveedor, PROMPT_COMIDA, LADO_MAX,
+  proveedorLocal, crearProveedorReplicate, obtenerProveedor, PROMPT_COMIDA, LADO_MAX, MODELO_POR_DEFECTO,
 } = require('../services/imagenes/proveedores');
+const { escena, PLATO, OTRO_PLATO } = require('./helpers/escenaComida');
 
 const { ESTADOS, MAX_INTENTOS } = pipeline;
 const HOST = 'proyecto.supabase.co';
@@ -46,7 +47,7 @@ function entorno({ fila = {}, proveedor } = {}) {
   let descargas = 0;
   const opts = {
     cliente, hosts,
-    proveedor: proveedor || { nombre: 'mock', mejorar: async ({ buffer }) => ({ buffer: await sharp(buffer).webp().toBuffer(), contentType: 'image/webp', meta: { mock: true } }) },
+    proveedor: proveedor || { nombre: 'mock', ia: false, mejorar: async ({ buffer }) => ({ buffer: await sharp(buffer).modulate({ brightness: 1.12 }).webp().toBuffer(), contentType: 'image/webp', meta: { mock: true } }) },
     descargar: async () => { descargas += 1; return { buffer: await fotoJpeg(), contentType: 'image/jpeg' }; },
     almacenamiento: { subir: async (ruta, buffer) => { subidas.push({ ruta, bytes: buffer.length }); return `https://${HOST}/storage/v1/object/public/bocara-images/${ruta}`; } },
   };
@@ -59,56 +60,228 @@ async function encolar(env) {
   assert.equal(r.ok, true);
 }
 
-// ── Proveedores ─────────────────────────────────────────────────────────────
+// ── Guardia: ninguna prueba llama a la API real de Replicate (AI-10) ────────
+// Todas las llamadas HTTP del módulo axios pasan por este interceptor: si
+// algo intentara salir a replicate.com / replicate.delivery, falla y se cuenta.
+const axios = require('axios');
+let llamadasReales = 0;
+const interceptor = axios.interceptors.request.use((cfg) => {
+  if (/replicate\.(com|delivery)/.test(String(cfg.url))) { llamadasReales += 1; throw new Error('llamada REAL a Replicate bloqueada en pruebas'); }
+  return cfg;
+});
+test.after(() => axios.interceptors.request.eject(interceptor));
 
-test('IMG-P1: proveedor local (gratis) devuelve WebP mejorado, misma proporción, ≤ 1600 px', async () => {
-  const entrada = await fotoJpeg(2400, 1800);
-  const r = await proveedorLocal.mejorar({ buffer: entrada });
-  const meta = await sharp(r.buffer).metadata();
-  assert.equal(meta.format, 'webp');
-  assert.equal(r.contentType, 'image/webp');
-  assert.ok(meta.width <= LADO_MAX && meta.height <= LADO_MAX);
-  assert.ok(Math.abs(meta.width / meta.height - 4 / 3) < 0.01, 'no recorta ni deforma');
-  assert.equal(r.meta.preset, 'comida_comercial_v1');
+// Doble de la API HTTP de Replicate: registra cada llamada y devuelve como
+// "resultado de la IA" un retoque real de la imagen de entrada (misma escena,
+// más luz y color), o lo que la prueba indique.
+function replicateFalso({ resultado, estadoFinal = 'succeeded', fallarPost, urlSalida = 'https://replicate.delivery/xezq/out.png' } = {}) {
+  const llamadas = [];
+  const http = {
+    post: async (url, body, cfg) => {
+      llamadas.push({ metodo: 'POST', url, body, cfg });
+      if (fallarPost) throw fallarPost;
+      return { data: { id: 'pred-123', status: 'starting', urls: { get: 'https://api.replicate.com/v1/predictions/pred-123' } } };
+    },
+    get: async (url) => {
+      llamadas.push({ metodo: 'GET', url });
+      if (url.includes('/v1/predictions/')) {
+        return { data: { id: 'pred-123', status: estadoFinal, output: estadoFinal === 'succeeded' ? urlSalida : null, error: estadoFinal === 'failed' ? 'input flagged' : null } };
+      }
+      return { data: await resultado() };
+    },
+  };
+  return { http, llamadas };
+}
+
+const retoqueIA = (base) => () => sharp(base).modulate({ brightness: 1.15, saturation: 1.15 }).linear(1.08, -6).png().toBuffer();
+
+async function entornoIA({ base, fila = {}, ...opcionesFalso } = {}) {
+  const env = entorno({ fila });
+  const imagen = base || await escena(PLATO);
+  const falso = replicateFalso({ resultado: retoqueIA(imagen), ...opcionesFalso });
+  const proveedor = crearProveedorReplicate({ token: 'r8_prueba', http: falso.http, dormir: async () => {} });
+  const opts = { ...env.opts, proveedor, descargar: async () => ({ buffer: imagen, contentType: 'image/jpeg' }) };
+  return { ...env, opts, falso, imagen };
+}
+
+// ── IA real: Replicate / FLUX.1 Kontext [pro] (mockeado) ────────────────────
+
+test('AI-1: Replicate recibe la foto ORIGINAL del restaurante como input_image (image-to-image)', async () => {
+  const env = await entornoIA();
+  await encolar(env);
+  const r = await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  assert.equal(r.resultado, ESTADOS.COMPLETADA, JSON.stringify(r));
+  const post = env.falso.llamadas.find(l => l.metodo === 'POST');
+  assert.equal(post.body.input.input_image, ORIGINAL);
 });
 
-test('IMG-P2: el prompt de IA prioriza fidelidad (mismo producto, sin agregar/quitar, texto intacto)', () => {
-  for (const frase of [/same food/i, /Do not add, remove or replace/i, /text and logos/i, /Photorealistic/i, /no exaggeration/i]) {
-    assert.match(PROMPT_COMIDA, frase);
+test('AI-1b: foto con rotación EXIF → Replicate recibe una COPIA preparada (archivo aparte); el original no se toca', async () => {
+  const girada = await sharp(await escena(PLATO)).withMetadata({ orientation: 6 }).jpeg().toBuffer();
+  // El Replicate real recibe la copia ya derecha y devuelve una imagen derecha.
+  const env = await entornoIA({ base: girada, resultado: () => sharp(girada).rotate().modulate({ brightness: 1.15 }).png().toBuffer() });
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  const post = env.falso.llamadas.find(l => l.metodo === 'POST');
+  assert.match(post.body.input.input_image, /\/preparadas\/bolsas\/b1\/\d+\.jpg$/);
+  assert.equal(env.fila().imagen_original_url, ORIGINAL);
+  assert.deepEqual(env.fila().imagen_procesamiento_meta.entrada_preparada, ['orientación EXIF']);
+  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.COMPLETADA, env.fila().error_procesamiento_imagen);
+});
+
+test('AI-2: usa el modelo black-forest-labs/flux-kontext-pro y lo deja trazado (proveedor, modelo, predicción)', async () => {
+  const env = await entornoIA();
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  assert.equal(MODELO_POR_DEFECTO, 'black-forest-labs/flux-kontext-pro');
+  assert.equal(env.falso.llamadas[0].url, 'https://api.replicate.com/v1/models/black-forest-labs/flux-kontext-pro/predictions');
+  assert.equal(env.falso.llamadas[0].cfg.headers.Authorization, 'Bearer r8_prueba');
+  const f = env.fila();
+  assert.equal(f.proveedor_imagen_ia, 'replicate');
+  assert.equal(f.imagen_procesamiento_meta.modelo, 'black-forest-labs/flux-kontext-pro');
+  assert.equal(f.imagen_procesamiento_meta.prediccion, 'pred-123');
+  assert.equal(f.imagen_procesamiento_meta.ia, true);
+  assert.ok(!JSON.stringify(f).includes('r8_prueba'), 'el token nunca se guarda');
+});
+
+test('AI-3: aspect_ratio = match_input_image y safety_tolerance ≤ 2 (límite con imagen de entrada)', async () => {
+  const env = await entornoIA();
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  const { input } = env.falso.llamadas[0].body;
+  assert.equal(input.aspect_ratio, 'match_input_image');
+  assert.ok(input.safety_tolerance <= 2);
+  assert.equal(input.prompt_upsampling, false, 'sin reescritura automática del prompt (puede inventar)');
+});
+
+test('AI-4: el prompt exige fidelidad y prohíbe inventar', async () => {
+  for (const frase of [
+    /Preserve exactly the same food, ingredients, portions, packaging, plates, text, logos/,
+    /Do not add, remove or replace any food item or ingredient/,
+    /Do not change quantities/, /Do not invent garnishes/, /steam/, /Do not alter branding/,
+    /Do not replace the background/, /faithful to the original product/,
+    /Avoid artificial HDR, oversaturation, plastic-looking food/,
+    /natural soft restaurant lighting/, /white balance/, /professional commercial food photography/,
+  ]) assert.match(PROMPT_COMIDA, frase);
+  for (const prohibido of [/add (some )?garnish/i, /bigger portion/i, /generate steam/i, /new background/i]) {
+    assert.doesNotMatch(PROMPT_COMIDA.replace(/Do not [^.]*\./g, ''), prohibido);
+  }
+  const env = await entornoIA();
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  assert.equal(env.falso.llamadas[0].body.input.prompt, PROMPT_COMIDA);
+});
+
+test('AI-5: el resultado se guarda como archivo NUEVO (mejoradas/…webp) y pasa a ser la imagen visible', async () => {
+  const env = await entornoIA();
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  const f = env.fila();
+  assert.match(f.imagen_mejorada_url, /\/mejoradas\/bolsas\/b1\/\d+\.webp$/);
+  assert.equal(f.imagen_url, f.imagen_mejorada_url);
+  assert.deepEqual(env.subidas.map(x => x.ruta.split('/')[0]), ['mejoradas']);
+  assert.ok(f.imagen_procesamiento_meta.diferencia_media >= 1, 'hay un cambio visible');
+  assert.ok(f.imagen_procesamiento_meta.similitud >= 0.9, 'sigue siendo la misma foto');
+});
+
+test('AI-6: el original nunca cambia (fila ni archivo) en éxito, fallo ni rechazo', async () => {
+  for (const variante of [{}, { estadoFinal: 'failed' }, { resultado: async () => sharp(await escena(OTRO_PLATO, { semilla: 3 })).png().toBuffer() }]) {
+    const env = await entornoIA(variante);
+    await encolar(env);
+    await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+    assert.equal(env.fila().imagen_original_url, ORIGINAL);
+    assert.ok(!env.subidas.some(x => x.ruta.includes('n1_foto')), 'nunca se escribe sobre la ruta del original');
   }
 });
 
-test('IMG-P3: adapter Replicate — crea predicción con prompt + imagen original, espera y guarda la salida', async () => {
-  const llamadas = [];
-  const salida = await sharp(await fotoJpeg(1024, 768)).png().toBuffer();
-  const http = {
-    post: async (url, body, cfg) => { llamadas.push({ url, body, cfg }); return { data: { id: 'p1', status: 'processing', urls: { get: 'https://api.replicate.com/v1/predictions/p1' } } }; },
-    get: async (url) => (url.includes('/predictions/')
-      ? { data: { id: 'p1', status: 'succeeded', output: 'https://replicate.delivery/x.png' } }
-      : { data: salida }),
-  };
-  const p = crearProveedorReplicate({ token: 't', http, dormir: async () => {} });
-  const r = await p.mejorar({ urlOriginal: ORIGINAL });
-  assert.match(llamadas[0].url, /models\/black-forest-labs\/flux-kontext-pro\/predictions$/);
-  assert.equal(llamadas[0].body.input.input_image, ORIGINAL);
-  assert.equal(llamadas[0].body.input.prompt, PROMPT_COMIDA);
-  assert.equal(llamadas[0].body.input.aspect_ratio, 'match_input_image');
-  assert.equal(llamadas[0].cfg.headers.Authorization, 'Bearer t');
-  assert.equal((await sharp(r.buffer).metadata()).format, 'webp');
-  assert.equal(r.meta.prediccion, 'p1');
+test('AI-7: Replicate falla (failed / 4xx) → fallida sin reintentos inútiles; la original sigue visible', async () => {
+  const env = await entornoIA({ estadoFinal: 'failed' });
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.FALLIDA);
+  assert.equal(env.fila().imagen_url, ORIGINAL);
+  assert.match(env.fila().error_procesamiento_imagen, /failed/);
+
+  const env401 = await entornoIA({ fallarPost: Object.assign(new Error('Unauthorized'), { response: { status: 401, data: { detail: 'Invalid token' } } }) });
+  await encolar(env401);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env401.opts));
+  assert.equal(env401.fila().estado_procesamiento_imagen, ESTADOS.FALLIDA);
+  assert.equal(env401.fila().imagen_url, ORIGINAL);
 });
 
-test('IMG-P4: Replicate fallido o sin token → error / cae al proveedor local gratis', async () => {
-  const http = { post: async () => ({ data: { status: 'failed', error: 'NSFW' } }), get: async () => ({}) };
-  await assert.rejects(crearProveedorReplicate({ token: 't', http }).mejorar({ urlOriginal: ORIGINAL }), /failed NSFW/);
-  const antes = { ...process.env };
-  process.env.IMAGE_AI_PROVIDER = 'replicate'; delete process.env.REPLICATE_API_TOKEN;
+test('AI-8: timeout / 5xx de Replicate → queda pendiente para reintento y luego completa', async () => {
+  const env = await entornoIA({ fallarPost: Object.assign(new Error('timeout of 75000ms exceeded'), { code: 'ECONNABORTED' }) });
+  await encolar(env);
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.PENDIENTE);
+  assert.equal(env.fila().imagen_intentos, 1);
+  assert.equal(env.fila().imagen_url, ORIGINAL);
+
+  const ok = await entornoIA();
+  await silenciar(() => pipeline.procesarFila('bolsas', 'b1', { ...ok.opts, cliente: env.cliente }));
+  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.COMPLETADA);
+  assert.equal(env.fila().imagen_intentos, 2);
+});
+
+test('AI-9: resultado inválido (otro plato, sobresaturado, sin cambio, no-imagen, host ajeno) → no sustituye al original', async () => {
+  const base = await escena(PLATO);
+  const casos = {
+    otroPlato: { resultado: async () => sharp(await escena(OTRO_PLATO, { semilla: 9 })).png().toBuffer(), error: /no se parece/ },
+    sobresaturado: { resultado: async () => sharp(base).modulate({ saturation: 2.5 }).png().toBuffer(), error: /sobresaturado/ },
+    sinCambio: { resultado: async () => base, error: /mejora visible/ },
+    noImagen: { resultado: async () => Buffer.from('<html>error</html>'), error: /./ },
+    hostAjeno: { urlSalida: 'https://evil.example.com/out.png', resultado: async () => base, error: /URL de salida inesperada/ },
+  };
+  for (const [nombre, c] of Object.entries(casos)) {
+    const env = await entornoIA({ base, ...c });
+    await encolar(env);
+    await silenciar(() => pipeline.procesarFila('bolsas', 'b1', env.opts));
+    const f = env.fila();
+    assert.equal(f.estado_procesamiento_imagen, ESTADOS.FALLIDA, nombre);
+    assert.equal(f.imagen_url, ORIGINAL, nombre);
+    assert.equal(f.imagen_mejorada_url, null, nombre);
+    assert.match(f.error_procesamiento_imagen, c.error, nombre);
+    assert.equal(env.subidas.length, 0, `${nombre}: nada se sube`);
+  }
+});
+
+test('AI-10: las pruebas nunca llaman a la API real (guardia de axios) y sin token nunca se elige Replicate', async () => {
+  const antes = { p: process.env.IMAGE_AI_PROVIDER, t: process.env.REPLICATE_API_TOKEN };
+  delete process.env.REPLICATE_API_TOKEN;
+  delete process.env.IMAGE_AI_PROVIDER;
+  assert.equal(obtenerProveedor().nombre, 'local');
+  process.env.IMAGE_AI_PROVIDER = 'replicate';
   assert.equal((await silenciar(async () => obtenerProveedor())).nombre, 'local');
-  process.env.REPLICATE_API_TOKEN = 'x';
-  assert.equal(obtenerProveedor().nombre, 'replicate');
+  assert.throws(() => crearProveedorReplicate({ token: '' }), /REPLICATE_API_TOKEN/);
+  // Una llamada real quedaría bloqueada y contada:
+  await assert.rejects(axios.post('https://api.replicate.com/v1/models/x/predictions', {}), /bloqueada/);
+  llamadasReales -= 1; // la provocada a propósito en esta línea
+  assert.equal(llamadasReales, 0, 'ninguna otra prueba intentó llamar a Replicate');
+  if (antes.p === undefined) delete process.env.IMAGE_AI_PROVIDER; else process.env.IMAGE_AI_PROVIDER = antes.p;
+  if (antes.t !== undefined) process.env.REPLICATE_API_TOKEN = antes.t;
+});
+
+test('AI-11: selección de proveedor — replicate con token, local explícito (no IA), none apaga', () => {
+  const antes = { p: process.env.IMAGE_AI_PROVIDER, t: process.env.REPLICATE_API_TOKEN };
+  process.env.REPLICATE_API_TOKEN = 'r8_x';
+  delete process.env.IMAGE_AI_PROVIDER;
+  assert.equal(obtenerProveedor().nombre, 'replicate', 'con token, sin variable: IA real');
+  assert.equal(obtenerProveedor().ia, true);
+  process.env.IMAGE_AI_PROVIDER = 'local';
+  assert.equal(obtenerProveedor().nombre, 'local');
+  assert.equal(obtenerProveedor().ia, false, 'local NO se presenta como IA');
   process.env.IMAGE_AI_PROVIDER = 'none';
   assert.equal(obtenerProveedor().nombre, 'none');
-  process.env = antes;
+  if (antes.p === undefined) delete process.env.IMAGE_AI_PROVIDER; else process.env.IMAGE_AI_PROVIDER = antes.p;
+  if (antes.t === undefined) delete process.env.REPLICATE_API_TOKEN; else process.env.REPLICATE_API_TOKEN = antes.t;
+});
+
+test('AI-12: ajuste local (desarrollo/respaldo) produce WebP ≤ 1600 px, misma proporción, marcado ia=false', async () => {
+  const r = await proveedorLocal.mejorar({ buffer: await fotoJpeg(2400, 1800) });
+  const meta = await sharp(r.buffer).metadata();
+  assert.equal(meta.format, 'webp');
+  assert.ok(meta.width <= LADO_MAX && meta.height <= LADO_MAX);
+  assert.ok(Math.abs(meta.width / meta.height - 4 / 3) < 0.01);
+  assert.equal(r.meta.ia, false);
 });
 
 // ── Pipeline ────────────────────────────────────────────────────────────────
