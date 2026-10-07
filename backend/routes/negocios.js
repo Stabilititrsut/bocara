@@ -10,6 +10,7 @@ const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../se
 const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
 const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { esMesValido, urlFirmadaComprobante } = require('../services/liquidaciones');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -413,6 +414,62 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
     },
     liquidaciones: liquidaciones || [],
   });
+});
+
+// Columnas que ve el comercio de sus liquidaciones: sin datos internos de
+// auditoría (creada_por, pagado_por) ni la ruta interna del PDF.
+const CAMPOS_LIQUIDACION_COMERCIO = 'id,mes,periodo_inicio,periodo_fin,folio,estado,monto,ventas_brutas,' +
+  'comision_bocara,comision_plataforma,propinas,costo_envio,total_pedidos,fecha_limite_pago,pagado_en,' +
+  'datos_transferencia,comprobante_generado_en,created_at';
+
+// GET /api/negocios/mi-negocio/liquidaciones?mes=YYYY-MM&estado= — historial del comercio
+router.get('/mi-negocio/liquidaciones', authMiddleware, async (req, res) => {
+  const { mes, estado } = req.query;
+  if (mes && !esMesValido(mes)) return res.status(400).json({ error: 'mes debe tener formato YYYY-MM' });
+  const { data: negocio } = await supabase
+    .from('negocios').select('id').eq('propietario_id', req.usuario.id).maybeSingle();
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  let q = supabase
+    .from('liquidaciones')
+    .select(CAMPOS_LIQUIDACION_COMERCIO)
+    .eq('negocio_id', negocio.id)
+    .neq('estado', 'anulado')
+    .order('created_at', { ascending: false })
+    .limit(36);
+  if (mes) q = q.eq('mes', mes);
+  if (estado) q = q.eq('estado', estado);
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  // Solo la referencia de la transferencia: el resto de datos_transferencia es interno.
+  res.json((data || []).map((l) => ({
+    ...l,
+    datos_transferencia: l.datos_transferencia?.referencia ? { referencia: l.datos_transferencia.referencia } : null,
+  })));
+});
+
+// GET /api/negocios/mi-negocio/liquidaciones/:id/comprobante[?descargar=1]
+// URL firmada (10 min) del PDF. Ownership estricto: la liquidación debe ser del
+// negocio del usuario autenticado; si no, 404 (no revela que existe).
+router.get('/mi-negocio/liquidaciones/:id/comprobante', authMiddleware, async (req, res) => {
+  const { data: negocio } = await supabase
+    .from('negocios').select('id').eq('propietario_id', req.usuario.id).maybeSingle();
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  const { data: liq } = await supabase
+    .from('liquidaciones').select('*')
+    .eq('id', req.params.id)
+    .eq('negocio_id', negocio.id)
+    .maybeSingle();
+  if (!liq || liq.negocio_id !== negocio.id || liq.estado === 'anulado')
+    return res.status(404).json({ error: 'Liquidación no encontrada' });
+
+  try {
+    const { url, expira_en: expiraEn, folio } = await urlFirmadaComprobante(liq, { descargar: req.query.descargar === '1' });
+    res.json({ url, expira_en: expiraEn, folio });
+  } catch (err) {
+    res.status(502).json({ error: 'No se pudo obtener el comprobante, intenta de nuevo' });
+  }
 });
 
 // PUT /api/negocios/:id — actualizar negocio con re-geocodificación si cambia dirección
