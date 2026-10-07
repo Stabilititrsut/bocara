@@ -185,6 +185,7 @@ async function iniciar() {
   app.use('/api/negocios', require('../../routes/negocios'));
   app.use('/api/admin', require('../../routes/admin'));
   app.use('/api/resenas', require('../../routes/resenas'));
+  app.use('/api/pedidos', require('../../routes/pedidos'));
   await new Promise((resolve) => { servidor = app.listen(0, '127.0.0.1', resolve); });
   base = `http://127.0.0.1:${servidor.address().port}`;
 }

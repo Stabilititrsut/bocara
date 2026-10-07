@@ -148,6 +148,32 @@ test('GET /resenas/:negocio_id (público): solo reseñas visibles, con respuesta
   assert.ok(!('usuario_id' in r.body[0]) && !('motivo_moderacion' in r.body[0]), 'no expone datos internos');
 });
 
+test('GET /resenas/:negocio_id: compra_verificada sin exponer el pedido_id', async () => {
+  const p = pedidoEntregado();
+  sembrarResena({ pedido_id: p.id, comentario: 'con pedido' });
+  sembrarResena({ pedido_id: null, comentario: 'histórica sin pedido' });
+  const r = await pedir('GET', `/api/resenas/${IDS.olaAzul}`);
+  const porComentario = Object.fromEntries(r.body.map((x) => [x.comentario, x]));
+  assert.equal(porComentario['con pedido'].compra_verificada, true);
+  assert.equal(porComentario['histórica sin pedido'].compra_verificada, false);
+  assert.ok(r.body.every((x) => !('pedido_id' in x)));
+});
+
+test('GET /pedidos: cada pedido trae resena_id (o null) para que la app no dependa de AsyncStorage', async () => {
+  const calificado = pedidoEntregado();
+  const sinCalificar = pedidoEntregado();
+  const ajeno = pedidoEntregado({ usuario_id: IDS.otroRestaurante });
+  const resena = sembrarResena({ pedido_id: calificado.id });
+  const log = console.log; console.log = () => {};
+  let r;
+  try { r = await pedir('GET', '/api/pedidos', { como: IDS.cliente }); } finally { console.log = log; }
+  assert.equal(r.status, 200);
+  const porId = Object.fromEntries(r.body.map((p) => [p.id, p]));
+  assert.equal(porId[calificado.id].resena_id, resena.id);
+  assert.equal(porId[sinCalificar.id].resena_id, null);
+  assert.ok(!(ajeno.id in porId));
+});
+
 test('GET /resenas/mis-resenas: el cliente ve también las suyas ocultas', async () => {
   sembrarResena({ visible: false });
   sembrarResena();
