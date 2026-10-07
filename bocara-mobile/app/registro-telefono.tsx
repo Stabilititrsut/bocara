@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { authAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 
 const GT_PHONE_REGEX = /^[234567]\d{7}$/;
 
@@ -114,7 +115,7 @@ export default function RegistroTelefonoScreen() {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity onPress={() => step === 'phone' ? router.back() : setStep(step === 'otp' && isNewUser ? 'profile' : 'phone')} style={s.back}>
+        <TouchableOpacity onPress={() => step === 'phone' ? volver(router, '/login') : setStep(step === 'otp' && isNewUser ? 'profile' : 'phone')} style={s.back}>
           <Text style={s.backText}>← Volver</Text>
         </TouchableOpacity>
 

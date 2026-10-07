@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   Linking, ActivityIndicator, Platform, StatusBar,
@@ -6,10 +8,11 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, pedidosAPI, favoritosAPI, resenasAPI } from '@/src/services/api';
-import { useCart } from '@/src/context/CartContext';
+import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
+import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
@@ -25,8 +28,9 @@ const LOGO_R    = LOGO_SIZE / 2;  // 35
 type FilterKey = 'todos' | 'descuentos' | 'vendidos' | 'previos' | 'precio';
 
 // ─── Mini card para "Volver a pedir" ────────────────────────────────────────
-function PrevioCard({ item, onAgregar }: { item: any; onAgregar: (b: any) => void }) {
+function PrevioCard({ item, onAgregar }: { item: any; onAgregar: (b: any) => ResultadoAgregar }) {
   const router = useRouter();
+  const { loaded } = useCart();
   const imgSrc = item.imagen_url;
   return (
     <TouchableOpacity
@@ -48,7 +52,8 @@ function PrevioCard({ item, onAgregar }: { item: any; onAgregar: (b: any) => voi
         <Text style={pv.precio}>Q{item.precio_descuento?.toFixed(2)}</Text>
         <TouchableOpacity
           style={pv.addBtn}
-          onPress={() => onAgregar(item)}
+          onPress={() => mostrarErrorCarrito(onAgregar(item))}
+          disabled={!loaded}
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         >
           <Ionicons name="add" size={16} color="#fff" />
@@ -59,7 +64,7 @@ function PrevioCard({ item, onAgregar }: { item: any; onAgregar: (b: any) => voi
 }
 
 // ─── 2-column grid renderer ──────────────────────────────────────────────────
-function Grid({ items, onAgregar, favBolsaIds }: { items: any[]; onAgregar: (b: any) => void; favBolsaIds?: Set<string> }) {
+function Grid({ items, onAgregar, favBolsaIds }: { items: any[]; onAgregar: (b: any) => ResultadoAgregar; favBolsaIds?: Set<string> }) {
   const rows: React.ReactNode[] = [];
   for (let i = 0; i < items.length; i += 2) {
     rows.push(
@@ -79,14 +84,18 @@ export default function NegocioDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router  = useRouter();
   const insets  = useSafeAreaInsets();
-  const { total, cantidad, agregar } = useCart();
+  const { total, cantidad, agregar, loaded } = useCart();
 
   const [negocio,        setNegocio]        = useState<any>(null);
-  const [tiempoLimitado, setTiempoLimitado] = useState<any[]>([]);
-  const [promocion,      setPromocion]      = useState<any[]>([]);
-  const [previos,        setPrevios]        = useState<any[]>([]);
+  const [tiempoLimitadoGuardadas, setTiempoLimitado] = useState<any[]>([]);
+  const tiempoLimitado = usePublicacionesVigentes(tiempoLimitadoGuardadas);
+  const [promocionGuardadas,      setPromocion]      = useState<any[]>([]);
+  const promocion = usePublicacionesVigentes(promocionGuardadas);
+  const [previosGuardadas,        setPrevios]        = useState<any[]>([]);
+  const previos = usePublicacionesVigentes(previosGuardadas);
   const [filtro,         setFiltro]         = useState<FilterKey>('todos');
-  const [filtradas,      setFiltradas]      = useState<any[]>([]);
+  const [filtradasGuardadas,      setFiltradas]      = useState<any[]>([]);
+  const filtradas = usePublicacionesVigentes(filtradasGuardadas);
   const [favorito,       setFavorito]       = useState(false);
   const [toggling,       setToggling]       = useState(false);
   const [favBolsaIds,    setFavBolsaIds]    = useState<Set<string>>(new Set());
@@ -116,6 +125,19 @@ export default function NegocioDetailScreen() {
       setImpacto(impactoRes.data);
     }).catch(() => {}).finally(() => setLoading(false));
   }, [id]);
+
+  // Al volver a la ficha se re-piden sus publicaciones en silencio (misma regla
+  // que app/tienda/[id].tsx): una recién aprobada aparece sin recargar. La
+  // primera vez ya la cubre la carga inicial. Un error conserva lo último bueno.
+  const primerFoco = useRef(true);
+  useFocusEffect(useCallback(() => {
+    if (primerFoco.current) { primerFoco.current = false; return; }
+    if (!id) return;
+    negociosAPI.detalleCompleto(id).then((r) => {
+      setTiempoLimitado(r.data?.bolsas?.tiempo_limitado || []);
+      setPromocion(r.data?.bolsas?.promocion || []);
+    }).catch(() => {});
+  }, [id]));
 
   // Si previos se vacía y el filtro activo es 'previos', reset
   useEffect(() => {
@@ -218,7 +240,7 @@ export default function NegocioDetailScreen() {
 
             {/* Top buttons */}
             <View style={[s.coverTop, { paddingTop: topPad + 10 }]}>
-              <TouchableOpacity style={s.iconBtn} onPress={() => router.back()}>
+              <TouchableOpacity style={s.iconBtn} onPress={() => volver(router, '/(tabs)/')}>
                 <Ionicons name="arrow-back" size={20} color="#fff" />
               </TouchableOpacity>
               <View style={{ flex: 1 }} />
@@ -438,7 +460,7 @@ export default function NegocioDetailScreen() {
       </ScrollView>
 
       {/* ── Cart bar ───────────────────────────────────────── */}
-      {cantidad > 0 && (
+      {loaded && cantidad > 0 && (
         <View style={[s.cartBar, { paddingBottom: insets.bottom + 10 }]}>
           <View style={s.cartLeft}>
             <View style={s.cartBadge}>

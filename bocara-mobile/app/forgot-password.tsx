@@ -6,6 +6,7 @@ import {
 import { useRouter } from 'expo-router';
 import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 
 type Stage = 'email' | 'verify';
 
@@ -110,7 +111,7 @@ export default function ForgotPasswordScreen() {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity onPress={() => router.back()} style={s.back}>
+        <TouchableOpacity onPress={() => volver(router, '/login')} style={s.back}>
           <Text style={s.backText}>← Volver</Text>
         </TouchableOpacity>
 

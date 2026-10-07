@@ -9,6 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { pedidosAPI, resenasAPI } from '@/src/services/api';
 import { Pedido } from '@/src/types';
 import { Colors } from '@/constants/Colors';
+import { useRealtime } from '@/src/context/RealtimeContext';
+import { useLocalSearchParams } from 'expo-router';
 
 const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
   pendiente:       { label: 'Pendiente',          color: '#FF9800',            bg: '#FFF3E0',       icon: 'time-outline' },
@@ -31,12 +33,15 @@ interface ResenaState {
   error: string | null;
 }
 
-function PedidoCard({ pedido, yaReseno, onResena, onCancelar }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void }) {
+function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosicion }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void; enfocado?: boolean; onPosicion?: (y: number) => void }) {
   const estado = ESTADO_CONFIG[pedido.estado] || ESTADO_CONFIG.pendiente;
   const activo = ['confirmado','en_preparacion','listo'].includes(pedido.estado);
 
   return (
-    <View style={[s.card, activo && { borderLeftColor: Colors.primary, borderLeftWidth: 3 }]}>
+    <View
+      onLayout={onPosicion ? (e) => onPosicion(e.nativeEvent.layout.y) : undefined}
+      style={[s.card, activo && { borderLeftColor: Colors.primary, borderLeftWidth: 3 }, enfocado && s.cardEnfocada]}
+    >
       <View style={s.cardTop}>
         <View style={{ flex: 1 }}>
           <Text style={s.cardNegocio} numberOfLines={1}>{pedido.negocios?.nombre}</Text>
@@ -153,9 +158,24 @@ export default function PedidosScreen() {
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [errorCarga, setErrorCarga] = useState(false);
   const [resenasEnviadas, setResenasEnviadas] = useState<Set<string>>(new Set());
   const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
   const pollingRef = useRef<any>(null);
+  // ?pedidoId=<uuid> llega de un tap en una notificación de pedido
+  // (resolverRutaNotificacion): se resalta esa tarjeta y se hace scroll hasta
+  // ella una sola vez por id, sin volver a saltar en cada refresco del polling.
+  const { pedidoId: pedidoEnfocado } = useLocalSearchParams<{ pedidoId?: string }>();
+  const scrollRef = useRef<ScrollView>(null);
+  const enfocadoRef = useRef<string | null>(null);
+  const alPosicionar = useCallback((id: string, y: number) => {
+    if (id !== pedidoEnfocado || enfocadoRef.current === id) return;
+    enfocadoRef.current = id;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
+  }, [pedidoEnfocado]);
+  const propsEnfoque = (p: Pedido) => (String(p.id) === pedidoEnfocado
+    ? { enfocado: true, onPosicion: (y: number) => alPosicionar(String(p.id), y) }
+    : {});
 
   useEffect(() => {
     AsyncStorage.getItem(RESENAS_KEY).then((val) => {
@@ -167,12 +187,14 @@ export default function PedidosScreen() {
     try {
       const res = await pedidosAPI.listar();
       const data: Pedido[] = res.data || [];
-      console.log('[PEDIDOS] backend rows:', data.length, 'ids:', data.map(p => p.id));
       const dedup = Array.from(new Map(data.map(p => [String(p.id), p])).values())
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      console.log('[PEDIDOS] after dedup:', dedup.length, 'ids:', dedup.map(p => p.id));
       setPedidos(dedup);
-    } catch { setPedidos([]); }
+      setErrorCarga(false);
+    } catch {
+      // No se vacía la lista: un error de red no debe leerse como "no tienes pedidos".
+      setErrorCarga(true);
+    }
     finally { setLoading(false); setRefreshing(false); }
   }, []);
 
@@ -187,6 +209,12 @@ export default function PedidosScreen() {
     }
     return () => clearInterval(pollingRef.current);
   }, [pedidos, cargar]);
+
+  // Realtime: recarga inmediata en cuanto el backend cambia un pedido propio,
+  // sin esperar al próximo tick del polling de arriba (que sigue como
+  // respaldo defensivo — ver src/services/realtime.ts sobre el estado de RLS).
+  const { onPedidoCambiado } = useRealtime();
+  useEffect(() => onPedidoCambiado(() => { cargar(); }), [onPedidoCambiado, cargar]);
 
   async function confirmarCancelacion(pedidoId: string, estadoPedido: string) {
     const estadoLabel = estadoPedido === 'en_preparacion' ? 'en preparación' : 'confirmado';
@@ -247,7 +275,18 @@ export default function PedidosScreen() {
         )}
       </View>
 
-      {pedidos.length === 0 ? (
+      {pedidos.length === 0 && errorCarga ? (
+        <View style={s.empty}>
+          <View style={s.emptyIconWrap}>
+            <Ionicons name="cloud-offline-outline" size={40} color={Colors.textLight} />
+          </View>
+          <Text style={s.emptyTitle}>No pudimos cargar tus pedidos</Text>
+          <Text style={s.emptyText}>Revisa tu conexión e intenta de nuevo.</Text>
+          <TouchableOpacity style={s.btnResena} onPress={() => { setLoading(true); cargar(); }}>
+            <Text style={s.btnResenaText}>Reintentar</Text>
+          </TouchableOpacity>
+        </View>
+      ) : pedidos.length === 0 ? (
         <View style={s.empty}>
           <View style={s.emptyIconWrap}>
             <Ionicons name="receipt-outline" size={40} color={Colors.textLight} />
@@ -257,6 +296,7 @@ export default function PedidosScreen() {
         </View>
       ) : (
         <ScrollView
+          ref={scrollRef}
           contentContainerStyle={s.scroll}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.primary} />}
           showsVerticalScrollIndicator={false}
@@ -264,13 +304,13 @@ export default function PedidosScreen() {
           {activos.length > 0 && (
             <>
               <Text style={s.seccionLabel}>En curso</Text>
-              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} />)}
+              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} {...propsEnfoque(p)} />)}
             </>
           )}
           {historial.length > 0 && (
             <>
               <Text style={s.seccionLabel}>Historial</Text>
-              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} />)}
+              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} {...propsEnfoque(p)} />)}
             </>
           )}
           <View style={{ height: 30 }} />
@@ -301,6 +341,7 @@ const s = StyleSheet.create({
   seccionLabel: { fontSize: 12, fontWeight: '800', color: Colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 14, marginTop: 4 },
 
   card: { backgroundColor: Colors.white, borderRadius: 24, padding: 18, marginBottom: 16, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.09, shadowRadius: 14 },
+  cardEnfocada: { borderWidth: 2, borderColor: Colors.accent },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 },
   cardNegocio: { fontSize: 11, color: Colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 },
   cardNombre: { fontSize: 17, fontWeight: '900', color: Colors.textPrimary, maxWidth: 190 },

@@ -7,6 +7,7 @@ import {
 import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useRealtime } from '@/src/context/RealtimeContext';
 
 // 'cancelado' fuera de las pestañas a propósito: los pedidos cancelados/no
 // confirmados no deben mostrarse en ningún panel — ver filtro en cargar().
@@ -132,11 +133,23 @@ export default function PedidosRestauranteScreen() {
     return () => clearInterval(pollingRef.current);
   }, [cargar]);
 
+  // Realtime: recarga inmediata ante un cambio en los pedidos del propio
+  // negocio, sin esperar al próximo tick del polling de arriba (que se
+  // mantiene como respaldo — ver src/services/realtime.ts sobre el estado de RLS).
+  const { onPedidoCambiado } = useRealtime();
+  useEffect(() => onPedidoCambiado(() => { cargar(); }), [onPedidoCambiado, cargar]);
+
   async function cambiarEstado(id: string, nuevoEstado: string) {
     try {
       await pedidosAPI.actualizarEstado(id, nuevoEstado);
       cargar();
-    } catch (e: any) { Alert.alert('Error', e.message); }
+    } catch (e: any) {
+      // 409 (transición inválida) suele significar que el estado ya cambió por
+      // otra vía (otro dispositivo, el cliente canceló) — refrescar para que el
+      // panel deje de mostrar el estado viejo en vez de solo la alerta.
+      Alert.alert('Error', e.message || 'No se pudo actualizar el pedido.');
+      if (e?.status === 409) cargar();
+    }
   }
 
   function handleCodigoEscaneado(codigo: string) {

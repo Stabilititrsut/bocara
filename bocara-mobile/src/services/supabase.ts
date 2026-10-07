@@ -18,6 +18,13 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
+    // PKCE: el redirect de OAuth llega con ?code= en la URL (querystring), no con
+    // tokens en el hash fragment (#access_token=...). El flow implícito depende
+    // de que window.location.hash sobreviva hasta que el código lo lea, y en web
+    // (Expo Router) el router puede tocar la URL antes de eso — con PKCE el
+    // intercambio de sesión es determinista (exchangeCodeForSession) y nunca deja
+    // el access_token expuesto en la URL. No mezclar con el flow implícito.
+    flowType: 'pkce',
   },
 });
 

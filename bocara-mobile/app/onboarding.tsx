@@ -50,7 +50,7 @@ export default function OnboardingScreen() {
     if (!saved) {
       Alert.alert('Preferencia no guardada', 'Puedes continuar. Es posible que veas esta bienvenida al reiniciar la app.');
     }
-    router.replace('/(tabs)/');
+    router.replace('/(tabs)/' as any);
   }
 
   const esUltimo = slide === SLIDES.length - 1;

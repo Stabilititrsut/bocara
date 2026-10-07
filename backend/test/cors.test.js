@@ -3,6 +3,11 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { esOrigenPermitido, corsMiddleware, corsOptions, ALLOWED_ORIGINS } = require('../middleware/cors');
 
+// ── Pruebas por LAN (auditoría auth local, fix/publication-lifecycle) ───────
+// Objetivo: otra máquina de la red abriendo la app web por IP (no localhost)
+// puede llamar al backend local sin que el navegador bloquee la respuesta por
+// CORS, sin abrir nada en producción.
+
 const PROD = { NODE_ENV: 'production' };
 const DEV = { NODE_ENV: 'development' };
 
@@ -62,6 +67,35 @@ test('orígenes desconocidos se rechazan; CORS_EXTRA_ORIGINS los habilita sin re
   const env = { NODE_ENV: 'production', CORS_EXTRA_ORIGINS: ' https://preview.bocarafood.com , https://otro.com' };
   assert.equal(esOrigenPermitido('https://preview.bocarafood.com', env), true);
   assert.equal(esOrigenPermitido('https://otro.com', env), true);
+});
+
+test('en desarrollo se acepta cualquier IP privada de LAN (192.168.x.x, 10.x, 172.16-31.x) en cualquier puerto', () => {
+  for (const origin of [
+    'http://192.168.1.50:8082',
+    'http://192.168.21.19:8085',
+    'http://10.0.0.5:8085',
+    'http://172.16.0.1:8085',
+    'http://172.31.255.255:8085',
+  ]) {
+    assert.equal(esOrigenPermitido(origin, DEV), true, origin);
+  }
+});
+
+test('las IPs privadas de LAN se rechazan en producción', () => {
+  assert.equal(esOrigenPermitido('http://192.168.1.50:8082', PROD), false);
+  assert.equal(esOrigenPermitido('http://192.168.21.19:8085', PROD), false);
+});
+
+test('una IP pública (no LAN, ej. 198.168.x.x) no se acepta sola: necesita CORS_EXTRA_ORIGINS', () => {
+  assert.equal(esOrigenPermitido('http://198.168.21.19:8085', DEV), false);
+  const env = { NODE_ENV: 'development', CORS_EXTRA_ORIGINS: 'http://198.168.21.19:8085' };
+  assert.equal(esOrigenPermitido('http://198.168.21.19:8085', env), true);
+});
+
+test('rangos fuera de RFC1918 parecidos no se confunden con LAN (172.32.x, 172.15.x, 192.167.x)', () => {
+  for (const origin of ['http://172.32.0.1:8085', 'http://172.15.0.1:8085', 'http://192.167.0.1:8085']) {
+    assert.equal(esOrigenPermitido(origin, DEV), false, origin);
+  }
 });
 
 // ── Integración: preflight real contra Express ───────────────────────────────
@@ -139,4 +173,11 @@ integracion('POST real desde un origen permitido lleva Access-Control-Allow-Orig
     });
     assert.equal(res.status, 200);
     assert.equal(res.headers['access-control-allow-origin'], 'https://www.bocarafood.com');
+  }));
+
+integracion('preflight OPTIONS desde una IP de LAN (192.168.x.x) responde 204 en desarrollo', () =>
+  conServidor(DEV, async base => {
+    const res = await preflight(base, 'http://192.168.21.19:8085');
+    assert.equal(res.status, 204);
+    assert.equal(res.headers['access-control-allow-origin'], 'http://192.168.21.19:8085');
   }));

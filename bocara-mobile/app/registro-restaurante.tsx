@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/src/context/AuthContext';
 import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 import { ZONAS_GT } from '@/constants/zonas';
 import { Image } from 'expo-image';
 
@@ -115,6 +116,10 @@ export default function RegistroRestauranteScreen() {
   const [uploadStatus, setUploadStatus] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  // La cuenta y el negocio se crearon, pero la foto del negocio no se pudo
+  // subir: el negocio queda pendiente y el admin no podrá aprobarlo sin ella
+  // (backend/routes/admin.js) — se avisa para completarla desde "Mi negocio".
+  const [fotoNegocioPendiente, setFotoNegocioPendiente] = useState(false);
   const [rechazoInfo, setRechazoInfo] = useState<{ texto: string; campos: string[] } | null>(null);
   const draftCargado = useRef(false);
 
@@ -144,7 +149,10 @@ export default function RegistroRestauranteScreen() {
         if (!raw) return;
         const draft = JSON.parse(raw);
         if (draft?.form) {
-          setForm(f => ({ ...f, ...draft.form, password: '', confirmPassword: '' }));
+          // Las fotos nunca se restauran: su base64 no se guarda en el
+          // borrador, así que una vista previa restaurada no podría subirse.
+          setForm(f => ({ ...f, ...draft.form, password: '', confirmPassword: '',
+            dpi_foto_uri: '', dpi_foto_base64: '', foto_negocio_uri: '', foto_negocio_base64: '' }));
         }
         if (draft?.step) setStep(draft.step);
       })
@@ -152,10 +160,10 @@ export default function RegistroRestauranteScreen() {
       .finally(() => { draftCargado.current = true; });
   }, []);
 
-  // ── Guardar borrador ante cada cambio (no persiste password ni fotos base64) ──
+  // ── Guardar borrador ante cada cambio (no persiste password ni fotos) ──
   useEffect(() => {
     if (!draftCargado.current || submitted) return;
-    const { password, confirmPassword, dpi_foto_base64, foto_negocio_base64, ...persistible } = form;
+    const { password, confirmPassword, dpi_foto_base64, foto_negocio_base64, dpi_foto_uri, foto_negocio_uri, ...persistible } = form;
     AsyncStorage.setItem(DRAFT_KEY, JSON.stringify({ form: persistible, step })).catch(() => {});
   }, [form, step, submitted]);
 
@@ -237,7 +245,7 @@ export default function RegistroRestauranteScreen() {
           const dataUrl: string = ev.target.result;
           const base64 = dataUrl.split(',')[1] ?? '';
           if (tipo === 'dpi') setForm(f => ({ ...f, dpi_foto_uri: dataUrl, dpi_foto_base64: base64 }));
-          else setForm(f => ({ ...f, foto_negocio_uri: dataUrl, foto_negocio_base64: base64 }));
+          else { setForm(f => ({ ...f, foto_negocio_uri: dataUrl, foto_negocio_base64: base64 })); setErrors(e => ({ ...e, foto_negocio: '' })); }
         };
         reader.readAsDataURL(file);
       };
@@ -252,7 +260,7 @@ export default function RegistroRestauranteScreen() {
     if (result.canceled || !result.assets?.length) return;
     const asset = result.assets[0];
     if (tipo === 'dpi') setForm(f => ({ ...f, dpi_foto_uri: asset.uri, dpi_foto_base64: asset.base64 || '' }));
-    else setForm(f => ({ ...f, foto_negocio_uri: asset.uri, foto_negocio_base64: asset.base64 || '' }));
+    else { setForm(f => ({ ...f, foto_negocio_uri: asset.uri, foto_negocio_base64: asset.base64 || '' })); setErrors(e => ({ ...e, foto_negocio: '' })); }
   }
 
   // ── Validación por paso ───────────────────────────────────────────────────
@@ -284,7 +292,7 @@ export default function RegistroRestauranteScreen() {
       if (!form.categoria)                e.categoria         = 'Selecciona la categoría del negocio';
       else if (form.categoria === 'Otro' && !form.categoria_otro.trim())
         e.categoria_otro = 'Escribe la categoría de tu negocio';
-      if (!form.foto_negocio_uri)         e.foto_negocio      = 'La foto del negocio es obligatoria';
+      if (!form.foto_negocio_uri || !form.foto_negocio_base64) e.foto_negocio = 'Debes agregar una foto del negocio para continuar.';
     }
     if (step === 3) {
       if (!form.banco)                    e.banco            = 'Selecciona un banco';
@@ -323,6 +331,13 @@ export default function RegistroRestauranteScreen() {
   // ── Envío final: crear cuenta + negocio ───────────────────────────────────
   async function handleRegistro() {
     if (!validarPaso()) return;
+    // Defensa extra: el envío final solo valida el paso actual (4). Sin foto
+    // del negocio no se crea la solicitud — se vuelve al paso de la foto.
+    if (!form.foto_negocio_base64) {
+      setErrors({ foto_negocio: 'Debes agregar una foto del negocio para continuar.' });
+      setStep(2);
+      return;
+    }
     setLoading(true);
     setSubmitError('');
     setUploadStatus('Creando cuenta...');
@@ -351,6 +366,7 @@ export default function RegistroRestauranteScreen() {
       let negocioId = '';
       try { negocioId = (await negociosAPI.miNegocio()).data?.id || ''; } catch {}
 
+      let fotoNegocioGuardada = false;
       if (negocioId) {
         let dpi_foto_url: string | null = null;
         let imagen_url:   string | null = null;
@@ -366,9 +382,13 @@ export default function RegistroRestauranteScreen() {
           const updates: Record<string, string> = {};
           if (dpi_foto_url) updates.dpi_foto_url = dpi_foto_url;
           if (imagen_url)   updates.imagen_url   = imagen_url;
-          try { await negociosAPI.actualizar(negocioId, updates); } catch {}
+          try {
+            await negociosAPI.actualizar(negocioId, updates);
+            fotoNegocioGuardada = !!imagen_url;
+          } catch {}
         }
       }
+      setFotoNegocioPendiente(!fotoNegocioGuardada);
       AsyncStorage.removeItem(DRAFT_KEY).catch(() => {});
       setSubmitted(true);
     } catch (e: any) {
@@ -394,6 +414,13 @@ export default function RegistroRestauranteScreen() {
           <Text style={sc.subtitle}>
             Revisaremos tu información en las próximas 24 a 48 horas. Recibirás un correo de confirmación.
           </Text>
+          {fotoNegocioPendiente && (
+            <View style={sc.fotoPendienteCard}>
+              <Text style={sc.fotoPendienteText}>
+                ⚠️ No pudimos subir la foto del negocio. Inicia sesión y agrégala desde “Mi negocio”: sin foto tu solicitud no puede aprobarse.
+              </Text>
+            </View>
+          )}
           <View style={sc.timeCard}>
             <Text style={sc.timeIcon}>⏳</Text>
             <View style={{ flex: 1, marginLeft: 12 }}>
@@ -440,7 +467,7 @@ export default function RegistroRestauranteScreen() {
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       {/* ── Header ── */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => step > 1 ? setStep(n => (n - 1) as Step) : router.back()} style={s.back}>
+        <TouchableOpacity onPress={() => step > 1 ? setStep(n => (n - 1) as Step) : volver(router, '/socios')} style={s.back}>
           <Text style={s.backText}>←</Text>
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
@@ -853,6 +880,8 @@ const sc = StyleSheet.create({
   credEmail:    { fontSize: 13, color: Colors.textPrimary, fontWeight: '700', flex: 1, textAlign: 'right', marginLeft: 8 },
   credWarning:  { backgroundColor: '#FEF3C7', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#F59E0B40' },
   credWarningText: { fontSize: 12, color: '#92400E', lineHeight: 18 },
+  fotoPendienteCard: { backgroundColor: '#FEE2E2', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#FCA5A5' },
+  fotoPendienteText: { fontSize: 13, color: '#991B1B', fontWeight: '700', lineHeight: 19 },
   summaryCard:  { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 20, width: '100%', borderWidth: 1.5, borderColor: Colors.border },
   summaryTitle: { fontSize: 14, fontWeight: '800', color: Colors.primary, marginBottom: 12 },
   row:          { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: Colors.border },

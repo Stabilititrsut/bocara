@@ -93,6 +93,40 @@ function sumarDias(fechaISO, dias) {
   return base.toISOString().slice(0, 10);
 }
 
+// Guatemala no observa horario de verano (UTC-6 todo el año, ver cabecera de
+// este archivo) — para construir el instante UTC exacto de una medianoche
+// LOCAL de Guatemala (dirección inversa a ahoraGuatemala, que va de instante a
+// hora local) ese desfase fijo es un hecho, no un atajo. Hora de pared → +6h = UTC.
+const OFFSET_GUATEMALA_HORAS = 6;
+
+// Instante UTC (string ISO) de las 00:00:00 hora de Guatemala de `fechaISO`.
+function inicioDiaGuatemalaUTC(fechaISO) {
+  const [anio, mes, dia] = fechaISO.split('-').map(Number);
+  return new Date(Date.UTC(anio, mes - 1, dia, OFFSET_GUATEMALA_HORAS, 0, 0, 0));
+}
+
+// Rango [desde, hasta) en UTC que cubre exactamente el día de calendario
+// `fechaISO` en hora de Guatemala — para filtrar `created_at` (timestamptz)
+// por día en SQL sin traer toda la tabla a memoria. null si `fechaISO` no
+// tiene formato YYYY-MM-DD.
+function rangoDiaGuatemalaUTC(fechaISO) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fechaISO || '')) return null;
+  const desde = inicioDiaGuatemalaUTC(fechaISO);
+  const hasta = inicioDiaGuatemalaUTC(sumarDias(fechaISO, 1));
+  return { desde: desde.toISOString(), hasta: hasta.toISOString() };
+}
+
+// Mismo rango que `rangoDiaGuatemalaUTC` pero para un mes completo (`mesISO`
+// 'YYYY-MM'). `Date.UTC` normaliza el desborde de mes (diciembre → enero del
+// año siguiente) sin lógica aparte. null si `mesISO` no tiene formato YYYY-MM.
+function rangoMesGuatemalaUTC(mesISO) {
+  if (!/^\d{4}-\d{2}$/.test(mesISO || '')) return null;
+  const [anio, mes] = mesISO.split('-').map(Number);
+  const desde = new Date(Date.UTC(anio, mes - 1, 1, OFFSET_GUATEMALA_HORAS, 0, 0, 0));
+  const hasta = new Date(Date.UTC(anio, mes, 1, OFFSET_GUATEMALA_HORAS, 0, 0, 0));
+  return { desde: desde.toISOString(), hasta: hasta.toISOString() };
+}
+
 // Instante (fecha + hora de Guatemala) en que termina la ventana de recogida:
 //   · fecha base = `fecha_caducidad`, o el día de hoy en Guatemala si no la tiene
 //   · si `hora_recogida_fin` < `hora_recogida_inicio` la ventana cruza la
@@ -150,6 +184,16 @@ function validarHorarioFuturo(bolsa, ahora = ahoraGuatemala()) {
   return estaVencida(bolsa, ahora) ? MENSAJE_HORARIO_VENCIDO : null;
 }
 
+// `fecha_disponible` = fecha de publicación/inicio de vigencia (Promoción y
+// Tiempo limitado). Antes de esa fecha, la publicación existe pero no debe
+// mostrarse — "la promoción se publica a partir de esa fecha". Sin
+// `fecha_disponible` (el caso de toda fila existente antes de esta regla) se
+// considera ya iniciada, igual que su estado de hoy.
+function noHaIniciado(bolsa, ahora = ahoraGuatemala()) {
+  const inicio = normalizarFecha(bolsa?.fecha_disponible);
+  return inicio ? inicio > ahora.fecha : false;
+}
+
 module.exports = {
   ZONA_GUATEMALA,
   MENSAJE_HORARIO_VENCIDO,
@@ -157,8 +201,12 @@ module.exports = {
   hoyGuatemala,
   normalizarHora,
   normalizarFecha,
+  sumarDias,
+  rangoDiaGuatemalaUTC,
+  rangoMesGuatemalaUTC,
   finVentanaRecogida,
   estaVencida,
+  noHaIniciado,
   filtrarVigentes,
   validarHorarioFuturo,
 };

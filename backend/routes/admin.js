@@ -9,6 +9,11 @@ const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
+const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
+const {
+  ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
+} = require('../services/publicaciones');
 const router = express.Router();
 
 // 2026-08-09: ya no confía en req.usuario.rol (el rol tal como venía en el
@@ -323,8 +328,20 @@ async function notificarPropietario(propietarioId, nombre, tipo, titulo, cuerpo,
   }
 }
 
+// Un negocio sin foto (registro incompleto o dato heredado) no se puede
+// aprobar: quedaría activo y visible para los clientes sin imagen. 404 si no
+// existe; 409 si existe pero le falta la foto. null si se puede aprobar.
+async function bloqueoAprobacionSinFoto(id) {
+  const { data: negocio } = await supabase.from('negocios').select('id,imagen_url').eq('id', id).maybeSingle();
+  if (!negocio) return { status: 404, error: 'Negocio no encontrado' };
+  if (!tieneFoto(negocio.imagen_url)) return { status: 409, error: MENSAJE_APROBAR_NEGOCIO_SIN_FOTO };
+  return null;
+}
+
 // PUT /api/admin/negocios/:id/verificar (alias de /aprobar)
 router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res) => {
+  const bloqueo = await bloqueoAprobacionSinFoto(req.params.id);
+  if (bloqueo) return res.status(bloqueo.status).json({ error: bloqueo.error });
   // Una sola escritura atómica: verificado, activo y estado_verificacion deben
   // quedar consistentes juntos o no quedar aplicados en absoluto. Antes eran dos
   // updates separados y el segundo (estado_verificacion) no verificaba su error,
@@ -343,6 +360,8 @@ router.put('/negocios/:id/verificar', authMiddleware, adminOnly, async (req, res
 
 // PUT /api/admin/negocios/:id/aprobar
 router.put('/negocios/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
+  const bloqueo = await bloqueoAprobacionSinFoto(req.params.id);
+  if (bloqueo) return res.status(bloqueo.status).json({ error: bloqueo.error });
   const { data, error } = await supabase
     .from('negocios')
     .update({ verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null })
@@ -372,9 +391,13 @@ router.put('/negocios/:id/rechazar', authMiddleware, adminOnly, async (req, res)
 // PUT /api/admin/negocios/:id/toggle
 router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) => {
   const { motivo } = req.body || {};
-  const { data: negocio } = await supabase.from('negocios').select('activo,propietario_id,nombre').eq('id', req.params.id).single();
+  const { data: negocio } = await supabase.from('negocios').select('activo,propietario_id,nombre,imagen_url').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
   const nuevoActivo = !negocio.activo;
+  // Suspender siempre se puede; reactivar un negocio sin foto, no.
+  if (nuevoActivo && !tieneFoto(negocio.imagen_url)) {
+    return res.status(409).json({ error: MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO });
+  }
   const { data, error } = await supabase
     .from('negocios').update({ activo: nuevoActivo }).eq('id', req.params.id).select().single();
   if (error) return res.status(400).json({ error: error.message });
@@ -866,6 +889,12 @@ router.get('/contenido/pendiente', authMiddleware, adminOnly, async (req, res) =
     return res.json([]);
   }
 
+  // Eliminada nunca entra a la cola del admin, aunque haya quedado pendiente
+  // justo antes de eliminarse. Filtro en JS (no en la query SQL): así sigue
+  // funcionando igual si `eliminado_en` todavía no existe en este despliegue
+  // (estaEliminada trata una columna ausente como "no eliminada").
+  data = (data || []).filter(b => !estaEliminada(b));
+
   const bolsas = data || [];
 
   // Enriquecer con datos del propietario
@@ -889,21 +918,56 @@ router.get('/contenido/pendiente', authMiddleware, adminOnly, async (req, res) =
   res.json(bolsas);
 });
 
+// Texto para el restaurante cuando su publicación queda aprobada pero el cliente
+// todavía no la ve (services/publicaciones.js → motivosNoVisible).
+const EXPLICACION_NO_VISIBLE = {
+  inactiva: 'está oculta: actívala desde tu panel para que los clientes la vean',
+  vencida: 'su horario o fecha de vigencia ya venció: actualízalos desde tu panel',
+  sin_unidades: 'no tiene unidades disponibles: agrégalas desde tu panel',
+  negocio_no_disponible: 'tu negocio no está activo en este momento',
+  no_aprobada: 'aún no está aprobada',
+};
+
 // PUT /api/admin/bolsas/:id/aprobar
+//
+// Respuesta: la fila actualizada + `visible_cliente` (boolean) y
+// `motivos_no_visible` (string[]) — si el cliente la verá de verdad, con la misma
+// regla que los endpoints públicos. Antes aprobar respondía éxito aunque la
+// publicación quedara oculta (p. ej. activo=false heredado de un rechazo), y el
+// admin no tenía forma de saberlo.
 router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) => {
   const { data: bolsa, error: fetchErr } = await supabase
     .from('bolsas')
-    .select('*, negocios(id,nombre,propietario_id)')
+    .select('*, negocios(id,nombre,propietario_id,activo,estado_verificacion)')
     .eq('id', req.params.id)
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
+  // Eliminada = permanente, no reactivable por ningún camino (ver DELETE
+  // /api/bolsas/:id) — ni siquiera "aprobarla" si el admin la tenía abierta
+  // en otra pestaña justo cuando el restaurante la eliminó.
+  if (estaEliminada(bolsa)) {
+    return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede aprobarse.' });
+  }
+
+  // Ninguna publicación se aprueba sin foto, tampoco una heredada: sigue
+  // legible y el restaurante puede editarla para agregarla (PUT /bolsas/:id).
+  if (!tieneFoto(bolsa.imagen_url)) {
+    return res.status(409).json({ error: MENSAJE_APROBAR_PUBLICACION_SIN_FOTO });
+  }
+
+  // Repetir "aprobar" sobre algo ya aprobado es idempotente: no vuelve a
+  // notificar ni a auditar una transición que no ocurrió.
+  const yaAprobada = bolsa.estado_aprobacion === ESTADOS_APROBACION.APROBADO;
+
   // Aprobar solo cambia el estado de revisión — nunca fuerza "activo": la visibilidad
   // la controla el restaurante con su propio switch, y aprobar una bolsa que el
   // restaurante ya había ocultado no debe hacerla reaparecer sin que él lo decida.
+  // (El activo=false que impone un RECHAZO se deshace al reenviar la corrección,
+  // en PUT /bolsas/:id — ver decidirRevision.)
   let { data, error } = await supabase
     .from('bolsas')
-    .update({ estado_aprobacion: 'aprobado', motivo_rechazo: null })
+    .update({ estado_aprobacion: ESTADOS_APROBACION.APROBADO, motivo_rechazo: null })
     .eq('id', req.params.id)
     .select()
     .single();
@@ -915,60 +979,60 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
     data = r.data;
   }
 
-  // Notificar al propietario del restaurante
-  const propietarioId = bolsa.negocios?.propietario_id;
-  if (propietarioId) {
-    await notificarPropietario(
-      propietarioId,
-      bolsa.nombre,
-      'bolsa_aprobada',
-      '✅ ¡Bolsa aprobada!',
-      `Tu bolsa "${bolsa.nombre}" ya está visible para los clientes en Bocara.`,
-      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id }
-    );
+  const motivos = motivosNoVisible({ ...data, negocios: bolsa.negocios });
+  const visible = motivos.length === 0;
+  if (!visible) {
+    console.warn('[ADMIN APROBAR] bolsa %s aprobada pero NO visible al cliente: %s', bolsa.id, motivos.join(','));
   }
 
-  // Notificar a favoritos que hay una nueva bolsa disponible
-  try {
-    const { data: negocio } = await supabase.from('negocios').select('nombre').eq('id', bolsa.negocio_id).single();
-    const nombreNegocio = negocio?.nombre || 'Tu restaurante favorito';
-    const { data: favs } = await supabase
-      .from('favoritos')
-      .select('usuario_id, usuarios(expo_push_token)')
-      .eq('negocio_id', bolsa.negocio_id);
-    if (favs?.length) {
-      const { enviarNotificacionesMultiples } = require('../services/notificaciones');
-      const tokens = favs.map(f => f.usuarios?.expo_push_token).filter(Boolean);
-      if (tokens.length) {
-        await enviarNotificacionesMultiples(
-          tokens,
-          '🛍️ ¡Nueva bolsa disponible!',
-          `${nombreNegocio} publicó: ${bolsa.nombre}`,
-          { negocioId: bolsa.negocio_id, bolsaId: bolsa.id, screen: 'home' }
-        );
-      }
-      for (const fav of favs) {
-        await guardarNotificacion(
-          supabase, fav.usuario_id, 'nueva_bolsa',
-          '🛍️ Nueva bolsa disponible',
-          `${nombreNegocio} publicó: ${bolsa.nombre}`,
-          { negocioId: bolsa.negocio_id, bolsaId: bolsa.id }
-        );
-      }
+  if (!yaAprobada) {
+    // Notificar al propietario del restaurante
+    const propietarioId = bolsa.negocios?.propietario_id;
+    if (propietarioId) {
+      const detalle = motivos.map(m => EXPLICACION_NO_VISIBLE[m] || m).join('; ');
+      await notificarPropietario(
+        propietarioId,
+        bolsa.nombre,
+        'bolsa_aprobada',
+        '✅ ¡Bolsa aprobada!',
+        visible
+          ? `Tu bolsa "${bolsa.nombre}" ya está visible para los clientes en Bocara.`
+          : `Tu bolsa "${bolsa.nombre}" fue aprobada, pero todavía no es visible para los clientes: ${detalle}.`,
+        { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, visible_cliente: visible }
+      );
     }
-  } catch { /* tabla favoritos puede no existir aún — fallo silencioso */ }
 
-  enqueueEventBestEffort({
-    eventType: 'publicacion.aprobada', aggregateType: 'bolsa', aggregateId: bolsa.id,
-    payload: { negocio_id: bolsa.negocio_id, actor_admin_id: req.usuario.id },
-  });
+    // Avisar a clientes cercanos (≤ 10 km) y favoritos solo si hay algo que el
+    // cliente pueda ver de verdad. Lo hace el despachador de eventos
+    // (services/notificacionesCercania.js), con una notificación por usuario y ciclo.
+    if (visible) encolarPublicacionVisible(data);
 
-  res.json(data);
+    // Una fila por cada aprobación real: la misma publicación puede aprobarse
+    // varias veces a lo largo de su vida (rechazo → corrección → aprobación), y
+    // sin discriminador la clave determinista descartaba como duplicado toda
+    // aprobación posterior a la primera.
+    enqueueEventBestEffort({
+      eventType: 'publicacion.aprobada', aggregateType: 'bolsa', aggregateId: bolsa.id,
+      discriminator: new Date().toISOString(),
+      payload: {
+        negocio_id: bolsa.negocio_id, actor_admin_id: req.usuario.id,
+        estado_anterior: bolsa.estado_aprobacion ?? null,
+        visible_cliente: visible, motivos_no_visible: motivos,
+      },
+    });
+  }
+
+  res.json({ ...data, visible_cliente: visible, motivos_no_visible: motivos });
 });
 
 // PUT /api/admin/bolsas/:id/rechazar
 router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) => {
-  const { motivo } = req.body;
+  // El motivo SIEMPRE queda guardado: es lo que el restaurante necesita para
+  // corregir. Sin motivo explícito se guarda uno por defecto — nunca vacío ni
+  // el de una revisión anterior ("pedir cambios") que ya no aplica.
+  const motivo = typeof req.body?.motivo === 'string' && req.body.motivo.trim()
+    ? req.body.motivo.trim()
+    : MOTIVO_RECHAZO_POR_DEFECTO;
 
   const { data: bolsa, error: fetchErr } = await supabase
     .from('bolsas')
@@ -977,12 +1041,22 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     .single();
   if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
 
+  if (estaEliminada(bolsa)) {
+    return res.status(410).json({ error: 'Esta publicación fue eliminada y ya no puede rechazarse.' });
+  }
+
+  const yaRechazada = bolsa.estado_aprobacion === ESTADOS_APROBACION.RECHAZADO;
+
   // inactivo_desde marca desde cuándo cuenta el plazo de 5 días hábiles del cron
   // de limpieza (server.js). Si la columna aún no existe (migración pendiente:
   // sql/limpieza-automatica-bolsas.sql), se degrada sin ella en vez de fallar.
+  // activo=false: una rechazada nunca debe verse. Al reenviar la corrección,
+  // PUT /bolsas/:id la reactiva (services/publicaciones.js → decidirRevision).
   const inactivoDesde = new Date().toISOString();
-  const updates = { estado_aprobacion: 'rechazado', activo: false, inactivo_desde: inactivoDesde };
-  if (motivo) updates.motivo_rechazo = motivo;
+  const updates = {
+    estado_aprobacion: ESTADOS_APROBACION.RECHAZADO, activo: false, inactivo_desde: inactivoDesde,
+    motivo_rechazo: motivo,
+  };
 
   let { data, error } = await supabase
     .from('bolsas')
@@ -1004,59 +1078,33 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
     }
   }
 
-  // Notificar al propietario del restaurante
-  const propietarioId = bolsa.negocios?.propietario_id;
-  if (propietarioId) {
-    const motivoTexto = motivo ? `: ${motivo}` : '. Contacta a soporte para más información.';
-    await notificarPropietario(
-      propietarioId,
-      bolsa.nombre,
-      'bolsa_rechazada',
-      '❌ Bolsa rechazada',
-      `Tu bolsa "${bolsa.nombre}" fue rechazada${motivoTexto}`,
-      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
-    );
-  }
+  if (!yaRechazada) {
+    // Notificar al propietario del restaurante
+    const propietarioId = bolsa.negocios?.propietario_id;
+    if (propietarioId) {
+      await notificarPropietario(
+        propietarioId,
+        bolsa.nombre,
+        'bolsa_rechazada',
+        '❌ Bolsa rechazada',
+        `Tu bolsa "${bolsa.nombre}" fue rechazada: ${motivo}. Puedes corregirla y guardarla para enviarla de nuevo a revisión.`,
+        { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
+      );
+    }
 
-  enqueueEventBestEffort({
-    eventType: 'publicacion.rechazada', aggregateType: 'bolsa', aggregateId: bolsa.id,
-    payload: { negocio_id: bolsa.negocio_id, motivo: motivo || null, actor_admin_id: req.usuario.id },
-  });
+    // Una fila por cada rechazo real (ver aprobar): rechazo → corrección →
+    // rechazo debe dejar dos eventos, cada uno con su motivo.
+    enqueueEventBestEffort({
+      eventType: 'publicacion.rechazada', aggregateType: 'bolsa', aggregateId: bolsa.id,
+      discriminator: new Date().toISOString(),
+      payload: {
+        negocio_id: bolsa.negocio_id, motivo, actor_admin_id: req.usuario.id,
+        estado_anterior: bolsa.estado_aprobacion ?? null,
+      },
+    });
+  }
 
   res.json(data);
-});
-
-// PUT /api/admin/bolsas/:id/pedir-cambios — solicitar correcciones al restaurante
-router.put('/bolsas/:id/pedir-cambios', authMiddleware, adminOnly, async (req, res) => {
-  const { motivo } = req.body;
-
-  const { data: bolsa, error: fetchErr } = await supabase
-    .from('bolsas')
-    .select('*, negocios(id,nombre,propietario_id)')
-    .eq('id', req.params.id)
-    .single();
-  if (fetchErr || !bolsa) return res.status(404).json({ error: 'Bolsa no encontrada' });
-
-  // Mantener en pendiente con el motivo guardado para que el restaurante sepa qué corregir
-  const { error: estadoErr } = await supabase.from('bolsas')
-    .update({ estado_aprobacion: 'pendiente', motivo_rechazo: motivo || null })
-    .eq('id', req.params.id);
-  if (estadoErr) return res.status(400).json({ error: estadoErr.message });
-
-  const propietarioId = bolsa.negocios?.propietario_id;
-  if (propietarioId) {
-    const motivoTexto = motivo ? `: ${motivo}` : '. Por favor revisa y reenvía la publicación.';
-    await notificarPropietario(
-      propietarioId,
-      bolsa.nombre,
-      'bolsa_cambios_solicitados',
-      '⚠️ Se solicitan cambios en tu publicación',
-      `El administrador te pide corregir "${bolsa.nombre}"${motivoTexto}`,
-      { bolsaId: bolsa.id, negocioId: bolsa.negocio_id, motivo }
-    );
-  }
-
-  res.json({ ok: true });
 });
 
 // GET /api/admin/cambios-perfil — solicitudes de cambio de perfil de restaurantes

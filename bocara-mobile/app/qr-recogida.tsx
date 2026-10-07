@@ -1,9 +1,25 @@
-import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView, Linking, Alert } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, SafeAreaView, Linking, Alert, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import { Colors } from '@/constants/Colors';
 import { pedidosAPI } from '@/src/services/api';
+
+// Estados en los que el backend respalda que el pedido fue pagado y confirmado —
+// ver services/orderStateMachine.js en el backend. La URL (codigo/pedidoId) nunca
+// es suficiente por sí sola: alguien podría pegar esta ruta a mano con cualquier
+// parámetro y no debe ver una confirmación que el backend no respalda.
+export const ESTADOS_CONFIRMADOS = ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido'];
+
+type Verificacion = 'cargando' | 'ok' | 'cancelado' | 'no_confirmado' | 'error';
+
+// Pura y exportada para poder probar la regla sin montar el componente:
+// dado el `estado` que devuelve el backend, decide si se puede mostrar el QR.
+export function resolverVerificacion(estadoPedido: string | undefined): 'ok' | 'cancelado' | 'no_confirmado' {
+  if (estadoPedido === 'cancelado') return 'cancelado';
+  if (ESTADOS_CONFIRMADOS.includes(estadoPedido as string)) return 'ok';
+  return 'no_confirmado';
+}
 
 export default function QrRecogidaScreen() {
   const { codigo, tipo, pedidoId } = useLocalSearchParams<{ codigo: string; tipo: string; pedidoId: string }>();
@@ -20,14 +36,32 @@ export default function QrRecogidaScreen() {
     latitud?: number | null;
     longitud?: number | null;
   } | null>(null);
+  const [verificacion, setVerificacion] = useState<Verificacion>('cargando');
+  const [codigoVerificado, setCodigoVerificado] = useState<string | undefined>(undefined);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [intento, setIntento] = useState(0);
 
   useEffect(() => {
-    if (!pedidoId || esEnvio) return;
+    if (!pedidoId) { setVerificacion('no_confirmado'); return; }
+    let activo = true;
+    setVerificacion('cargando');
     pedidosAPI.detalle(pedidoId).then((res) => {
-      const n = res.data?.negocios || res.data?.negocio;
+      if (!activo) return;
+      const d = res.data || {};
+      const n = d.negocios || d.negocio;
       if (n) setNegocioNav(n);
-    }).catch(() => {});
-  }, [pedidoId, esEnvio]);
+      setCodigoVerificado(d.codigo_recogida);
+      setVerificacion(resolverVerificacion(d.estado));
+    }).catch((err: any) => {
+      if (!activo) return;
+      setErrorMsg(err?.status === 404 ? 'No encontramos este pedido.' : (err?.message || 'No pudimos verificar tu pedido.'));
+      setVerificacion('error');
+    });
+    return () => { activo = false; };
+  }, [pedidoId, intento]);
+
+  const reintentar = useCallback(() => setIntento((n) => n + 1), []);
+  const codigoMostrado = codigoVerificado || codigo;
 
   function abrirGoogleMaps() {
     const url = negocioNav?.google_maps_url
@@ -53,6 +87,43 @@ export default function QrRecogidaScreen() {
     (negocioNav?.latitud != null && negocioNav?.longitud != null)
   );
 
+  if (verificacion === 'cargando') {
+    return (
+      <SafeAreaView style={s.root}>
+        <View style={s.verificando}>
+          <ActivityIndicator size="large" color={Colors.orange} />
+          <Text style={s.verificandoText}>Confirmando tu pedido con Bocara...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (verificacion === 'error' || verificacion === 'no_confirmado' || verificacion === 'cancelado') {
+    const titulo = verificacion === 'cancelado' ? 'Pedido cancelado' : 'No pudimos confirmar tu pedido';
+    const detalle = verificacion === 'cancelado'
+      ? 'Este pedido fue cancelado y ya no tiene una bolsa asociada para recoger.'
+      : verificacion === 'no_confirmado'
+        ? 'Todavía no tenemos confirmación de pago para este pedido. Revisa Mis pedidos para ver su estado actual.'
+        : errorMsg;
+    return (
+      <SafeAreaView style={s.root}>
+        <View style={s.verificando}>
+          <Text style={{ fontSize: 40 }}>{verificacion === 'cancelado' ? '🚫' : '⚠️'}</Text>
+          <Text style={s.title}>{titulo}</Text>
+          <Text style={s.subtitle}>{detalle}</Text>
+          {verificacion === 'error' && (
+            <TouchableOpacity style={s.btnPedidos} onPress={reintentar}>
+              <Text style={s.btnPedidosText}>Reintentar</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={s.btnHome} onPress={() => router.replace('/(tabs)/pedidos' as any)}>
+            <Text style={s.btnHomeText}>Ver mis pedidos</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={s.root}>
       <ScrollView contentContainerStyle={s.container} showsVerticalScrollIndicator={false}>
@@ -72,7 +143,7 @@ export default function QrRecogidaScreen() {
             <View style={s.qrCard}>
               <View style={s.qrWrapper}>
                 <QRCode
-                  value={codigo || 'BOC-000000'}
+                  value={codigoMostrado || 'BOC-000000'}
                   size={200}
                   color={Colors.brown}
                   backgroundColor={Colors.white}
@@ -80,7 +151,7 @@ export default function QrRecogidaScreen() {
               </View>
               <View style={s.codigoRow}>
                 <Text style={s.codigoLabel}>Código</Text>
-                <Text style={s.codigo}>{codigo}</Text>
+                <Text style={s.codigo}>{codigoMostrado}</Text>
               </View>
             </View>
 
@@ -141,7 +212,7 @@ export default function QrRecogidaScreen() {
           <Text style={s.btnPedidosText}>Ver mis pedidos</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={s.btnHome} onPress={() => router.replace('/(tabs)/')}>
+        <TouchableOpacity style={s.btnHome} onPress={() => router.replace('/(tabs)/' as any)}>
           <Text style={s.btnHomeText}>Seguir explorando</Text>
         </TouchableOpacity>
 
@@ -154,6 +225,8 @@ export default function QrRecogidaScreen() {
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: Colors.background },
   container: { padding: 24, alignItems: 'center' },
+  verificando: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, gap: 14 },
+  verificandoText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center' },
   successIcon: {
     backgroundColor: Colors.greenLight,
     borderRadius: 50, width: 96, height: 96,

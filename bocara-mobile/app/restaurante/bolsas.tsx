@@ -1,3 +1,4 @@
+import { publicacionVencida } from '@/src/utils/horarioRecogida';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
@@ -7,8 +8,28 @@ import { useFocusEffect } from 'expo-router';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
+import HoraPicker from '@/components/HoraPicker';
+import CalendarioPicker from '@/components/CalendarioPicker';
+import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
+import { normalizarHora } from '@/src/utils/hora';
+import {
+  estadoPublicacion, bloqueadaParaEditar, textoBotonEditar, avisoAlEditar, payloadDeEdicion, mensajeTrasGuardar,
+  horaParaFormulario, toggleVisibilidadBloqueado, faltaFotoParaGuardar, MENSAJE_FOTO_PUBLICACION,
+  type ClaveEstado,
+} from '@/src/utils/estadoPublicacion';
 
-const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'];
+// Bolsa tal como la devuelve GET /bolsas?mi_negocio=true — además de los campos
+// públicos, incluye el estado de revisión del admin (backend/routes/bolsas.js /
+// admin.js), que no aplica al resto de la app (cliente nunca lo ve).
+interface BolsaRestaurante extends Bolsa {
+  estado_aprobacion?: 'pendiente' | 'aprobado' | 'rechazado' | null;
+  motivo_rechazo?: string | null;
+}
+
+// `categoria` (tipo de descuento) no tiene enum en backend (validarDatosBolsa
+// no lo restringe) — es una lista fija solo para esta UI, no un contrato de
+// backend (ver BolsaForm.categoria más abajo, tipado como string por eso).
+const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'] as const;
 
 const CATEGORIAS_ALIMENTO = [
   { value: 'cereales',          label: 'Cereales y panadería', emoji: '🌾' },
@@ -26,7 +47,12 @@ const CATEGORIAS_ALIMENTO = [
   { value: 'otro',              label: 'Otro',                 emoji: '🍽️' },
 ];
 
-const MENU_CLASIFS = [
+// Banderas de clasificación de menú (en qué sección/filtro de la tienda
+// aparece) — independientes de `tipo_form`, que es el único campo contractual
+// de backend para el tipo real de la publicación (ver TipoPublicacion).
+type MenuClasifKey = 'es_tiempo_limitado' | 'es_promocion' | 'es_descuento' | 'es_destacado' | 'es_mas_vendido' | 'es_precio_bajo';
+
+const MENU_CLASIFS: { key: MenuClasifKey; label: string; emoji: string }[] = [
   { key: 'es_tiempo_limitado', label: 'Tiempo Limitado', emoji: '⏱️' },
   { key: 'es_promocion',       label: 'Promoción',       emoji: '🏷️' },
   { key: 'es_descuento',       label: 'Descuento',       emoji: '💸' },
@@ -35,14 +61,52 @@ const MENU_CLASIFS = [
   { key: 'es_precio_bajo',     label: 'Precio bajo',     emoji: '💰' },
 ];
 
-const FORM_INIT = {
-  tipo_form: 'bolsa' as 'bolsa' | 'cupon',
+// Estado del formulario del modal — los campos numéricos viajan como string
+// mientras se editan (TextInput); `guardar()` los convierte al tipo real que
+// espera CrearBolsaPayload/ActualizarBolsaPayload antes de enviarlos. Las
+// fechas (fecha_disponible/fecha_caducidad) ya viajan en formato canónico
+// 'YYYY-MM-DD' — las entrega así CalendarioPicker, el mismo formato que usa
+// el backend para columnas `date` — sin conversión manual de por medio.
+interface BolsaForm {
+  tipo_form: TipoPublicacion;
+  nombre: string;
+  descripcion: string;
+  contenido: string;
+  precio_original: string;
+  precio_descuento: string;
+  cantidad_disponible: string;
+  hora_recogida_inicio: string;
+  hora_recogida_fin: string;
+  peso_estimado_kg: string;
+  imagen_url: string;
+  activo: boolean;
+  // string, no TipoDescuentoUI: backend no valida `categoria` contra un enum
+  // (ver validarDatosBolsa), así que un registro existente puede traer un
+  // valor fuera de TIPOS_DESCUENTO — la UI solo lo usa para resaltar el chip.
+  categoria: string;
+  // Promoción: fecha de publicación. Tiempo limitado: fecha de inicio de
+  // vigencia (fecha_caducidad es su fecha fin — ver construirPayload).
+  fecha_disponible: string;
+  fecha_caducidad: string;
+  categoria_alimento: string;
+  categoria_menu: string;
+  es_tiempo_limitado: boolean;
+  es_promocion: boolean;
+  es_descuento: boolean;
+  es_destacado: boolean;
+  es_mas_vendido: boolean;
+  es_precio_bajo: boolean;
+}
+
+const FORM_INIT: BolsaForm = {
+  tipo_form: 'bolsa',
   nombre: '', descripcion: '', contenido: '',
   precio_original: '', precio_descuento: '',
   cantidad_disponible: '5',
   hora_recogida_inicio: '18:00', hora_recogida_fin: '20:00',
   peso_estimado_kg: '0.5', imagen_url: '', activo: true,
   categoria: 'Porcentaje',
+  fecha_disponible: '',
   fecha_caducidad: '',
   categoria_alimento: '',
   // Clasificación en el menú
@@ -55,20 +119,69 @@ const FORM_INIT = {
   es_precio_bajo: false,
 };
 
+// Payload que POST/PUT /bolsas esperan a partir del formulario. Se usa para
+// guardar y también para calcular lo que el formulario cargó al abrir "Editar"
+// (base de payloadDeEdicion: solo viajan los campos que el usuario cambió).
+function construirPayload(form: BolsaForm, horaInicio: string, horaFin: string): CrearBolsaPayload {
+  const precOrig = parseFloat(form.precio_original) || 0;
+  const precDesc = parseFloat(form.precio_descuento) || 0;
+  const datos: CrearBolsaPayload = {
+    tipo: form.tipo_form,
+    nombre: form.nombre.trim(),
+    descripcion: form.descripcion.trim(),
+    contenido: form.tipo_form === 'cupon' ? form.contenido.trim().toUpperCase() : form.contenido.trim(),
+    precio_original: precOrig,
+    precio_descuento: precDesc,
+    cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
+    hora_recogida_inicio: horaInicio,
+    hora_recogida_fin: horaFin,
+    imagen_url: form.imagen_url || null,
+    // Clasificación en el menú
+    categoria_menu: form.categoria_menu || null,
+    es_tiempo_limitado: form.es_tiempo_limitado,
+    es_promocion: form.es_promocion,
+    es_descuento: form.es_descuento || (precOrig > precDesc),
+    es_destacado: form.es_destacado,
+    es_mas_vendido: form.es_mas_vendido,
+    es_precio_bajo: form.es_precio_bajo,
+    // categoria_alimento aplica a todos los tipos de publicación
+    categoria_alimento: form.categoria_alimento || null,
+    // Fecha de publicación (Promoción) / inicio de vigencia (Tiempo
+    // limitado) — ya viene en formato canónico YYYY-MM-DD de CalendarioPicker.
+    fecha_disponible: form.fecha_disponible,
+  };
+  // peso y fecha fin solo para bolsas — una Promoción nunca tiene fecha fin
+  // (el backend la ignora igual si llegara, pero el frontend no la manda).
+  if (form.tipo_form === 'bolsa') {
+    datos.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
+    datos.fecha_caducidad = form.fecha_caducidad;
+  }
+  if (form.tipo_form === 'cupon') datos.categoria = form.categoria;
+  return datos;
+}
+
 export default function BolsasRestauranteScreen() {
-  const [items, setItems] = useState<any[]>([]);
+  const [items, setItems] = useState<BolsaRestaurante[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState<any>(FORM_INIT);
+  const [form, setForm] = useState<BolsaForm>(FORM_INIT);
   const [editId, setEditId] = useState<string | null>(null);
   const [negocioId, setNegocioId] = useState('');
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [uploadFotoError, setUploadFotoError] = useState('');
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
   const [saving, setSaving] = useState(false);
+  // Se intentó guardar sin foto: marca el bloque de foto en rojo.
+  const [fotoFaltante, setFotoFaltante] = useState(false);
   const fileInputRef = useRef<any>(null);
-  const set = (k: string) => (v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+  // Scroll del formulario y posición del bloque de foto, para llevar al
+  // usuario hasta ella si intenta guardar sin foto.
+  const modalScrollRef = useRef<ScrollView>(null);
+  const fotoY = useRef(0);
+  // Publicación que se está editando y el payload que su formulario cargó.
+  const edicionInicial = useRef<{ bolsa: BolsaRestaurante; payload: CrearBolsaPayload } | null>(null);
+  const set = <K extends keyof BolsaForm>(k: K) => (v: BolsaForm[K]) => setForm(f => ({ ...f, [k]: v }));
 
   function handleWebFileChange(e: any) {
     const file = e.target?.files?.[0];
@@ -82,7 +195,7 @@ export default function BolsasRestauranteScreen() {
         const ext = file.type.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(base64, path, file.type || 'image/jpeg');
-        if (data?.publicUrl) setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); }
       } catch (err: any) {
         setUploadFotoError(err.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -102,7 +215,7 @@ export default function BolsasRestauranteScreen() {
         const ext = picked.mimeType.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
-        if (data?.publicUrl) setForm((f: any) => ({ ...f, imagen_url: data.publicUrl }));
+        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); }
       } catch (e: any) {
         setUploadFotoError(e.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -114,7 +227,7 @@ export default function BolsasRestauranteScreen() {
       const [negRes, bolRes] = await Promise.all([negociosAPI.miNegocio(), bolsasAPI.listar({ mi_negocio: true })]);
       setNegocioId(negRes.data?.id || '');
       // Deduplicar por id en caso de datos duplicados en BD
-      const raw: any[] = bolRes.data || [];
+      const raw: BolsaRestaurante[] = bolRes.data || [];
       const dedup = Array.from(new Map(raw.map(b => [String(b.id), b])).values());
       setItems(dedup);
     } catch { } finally { setLoading(false); setRefreshing(false); }
@@ -132,12 +245,13 @@ export default function BolsasRestauranteScreen() {
   // una edición en curso (mismo criterio que restaurante/perfil.tsx).
   useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
-  function abrir(b?: any) {
+  function abrir(b?: BolsaRestaurante) {
     setUploadFotoError('');
+    setFotoFaltante(false);
     setSaving(false);
     if (b) {
       setEditId(b.id);
-      setForm({
+      const cargado: BolsaForm = {
         ...FORM_INIT,
         tipo_form: b.tipo === 'cupon' ? 'cupon' : 'bolsa',
         nombre: b.nombre || '',
@@ -147,15 +261,16 @@ export default function BolsasRestauranteScreen() {
         precio_descuento: String(b.precio_descuento),
         cantidad_disponible: String(b.cantidad_disponible),
         peso_estimado_kg: String(b.peso_estimado_kg || 0.5),
-        hora_recogida_inicio: b.hora_recogida_inicio || '18:00',
-        hora_recogida_fin: b.hora_recogida_fin || '20:00',
+        hora_recogida_inicio: horaParaFormulario(b.hora_recogida_inicio, '18:00'),
+        hora_recogida_fin: horaParaFormulario(b.hora_recogida_fin, '20:00'),
         imagen_url: b.imagen_url || '',
         activo: b.activo,
         categoria: b.categoria || 'Porcentaje',
         categoria_alimento: b.categoria_alimento || '',
-        fecha_caducidad: b.fecha_caducidad
-          ? (() => { const d = new Date(b.fecha_caducidad + 'T12:00:00'); return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`; })()
-          : '',
+        // Columna `date` del backend: ya llega como 'YYYY-MM-DD' (se recorta
+        // por si trajera hora/offset) — CalendarioPicker espera ese mismo formato.
+        fecha_disponible: b.fecha_disponible ? String(b.fecha_disponible).slice(0, 10) : '',
+        fecha_caducidad: b.fecha_caducidad ? String(b.fecha_caducidad).slice(0, 10) : '',
         categoria_menu: b.categoria_menu || '',
         es_tiempo_limitado: b.es_tiempo_limitado ?? (b.tipo !== 'cupon'),
         es_promocion: b.es_promocion ?? (b.tipo === 'cupon'),
@@ -163,9 +278,17 @@ export default function BolsasRestauranteScreen() {
         es_destacado: b.es_destacado ?? false,
         es_mas_vendido: b.es_mas_vendido ?? false,
         es_precio_bajo: b.es_precio_bajo ?? false,
-      });
+      };
+      edicionInicial.current = {
+        bolsa: b,
+        payload: construirPayload(cargado,
+          normalizarHora(cargado.hora_recogida_inicio) || cargado.hora_recogida_inicio,
+          normalizarHora(cargado.hora_recogida_fin) || cargado.hora_recogida_fin),
+      };
+      setForm(cargado);
     } else {
       setEditId(null);
+      edicionInicial.current = null;
       setForm(FORM_INIT);
     }
     setModal(true);
@@ -181,17 +304,21 @@ export default function BolsasRestauranteScreen() {
     else Alert.alert('Listo', msg);
   }
 
-  function mensajeGuardado(data: any, esEdicion: boolean) {
-    if (data?.estado_aprobacion === 'pendiente') {
-      return esEdicion
-        ? 'Cambios guardados. Tu publicación fue enviada a revisión y no será visible hasta que el administrador la apruebe.'
-        : 'Publicación creada y enviada a revisión del administrador.';
-    }
-    return esEdicion ? 'Publicación actualizada correctamente.' : 'Publicación creada correctamente.';
+  // Sin foto no se guarda: se marca el bloque, se lleva el scroll hasta él y
+  // se explica por qué (nunca un botón deshabilitado sin explicación).
+  function marcarFotoFaltante() {
+    setFotoFaltante(true);
+    modalScrollRef.current?.scrollTo({ y: Math.max(0, fotoY.current - 16), animated: true });
+    alertar(MENSAJE_FOTO_PUBLICACION);
   }
 
   async function guardar() {
     if (saving) return;
+    if (uploadingFoto) return alertar('Espera a que termine de subir la foto.');
+    // Foto obligatoria al crear (Promoción y Tiempo limitado). Al editar se
+    // revisa más abajo, cuando ya se sabe qué cambió.
+    if (!editId && faltaFotoParaGuardar(form.imagen_url, null)) return marcarFotoFaltante();
+    if (publicacionVencida(form)) return alertar('El horario de recogida ya venció. Corrígelo antes de publicar.');
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
       return alertar('Nombre, precio original y precio Bocara son requeridos');
     if (form.tipo_form === 'cupon' && !form.contenido.trim())
@@ -202,61 +329,66 @@ export default function BolsasRestauranteScreen() {
       return alertar('Selecciona la categoría del alimento antes de publicar.');
     }
 
-    // Validar fecha de caducidad para bolsas de tiempo limitado
-    if (form.tipo_form === 'bolsa') {
-      const fc = form.fecha_caducidad?.trim();
-      if (!fc) return alertar('La fecha de caducidad es obligatoria');
-      const parts = fc.split('/');
-      if (parts.length !== 3 || parts.some((p: string) => !p)) return alertar('Formato de fecha inválido. Usa DD/MM/YYYY');
-      const fechaCad = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-      const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
-      if (isNaN(fechaCad.getTime())) return alertar('Fecha de caducidad inválida');
-      if (fechaCad < hoy) return alertar('La fecha de caducidad no puede ser anterior a hoy');
+    // Fecha de publicación/inicio — obligatoria para ambos tipos, siempre
+    // vía CalendarioPicker (nunca texto libre), así que si está vacía es
+    // porque nunca se seleccionó.
+    if (!form.fecha_disponible) {
+      return alertar(form.tipo_form === 'cupon'
+        ? 'La fecha de publicación es obligatoria'
+        : 'La fecha de inicio es obligatoria');
     }
 
-    setSaving(true);
-    const precOrig = parseFloat(form.precio_original) || 0;
-    const precDesc = parseFloat(form.precio_descuento) || 0;
-
-    const payload: any = {
-      negocio_id: negocioId,
-      tipo: form.tipo_form,
-      nombre: form.nombre.trim(),
-      descripcion: form.descripcion.trim(),
-      contenido: form.tipo_form === 'cupon' ? form.contenido.trim().toUpperCase() : form.contenido.trim(),
-      precio_original: precOrig,
-      precio_descuento: precDesc,
-      cantidad_disponible: parseInt(form.cantidad_disponible) || 1,
-      hora_recogida_inicio: form.hora_recogida_inicio,
-      hora_recogida_fin: form.hora_recogida_fin,
-      imagen_url: form.imagen_url || null,
-      // Clasificación en el menú
-      categoria_menu: form.categoria_menu || null,
-      es_tiempo_limitado: form.es_tiempo_limitado,
-      es_promocion: form.es_promocion,
-      es_descuento: form.es_descuento || (precOrig > precDesc),
-      es_destacado: form.es_destacado,
-      es_mas_vendido: form.es_mas_vendido,
-      es_precio_bajo: form.es_precio_bajo,
-    };
-    // categoria_alimento aplica a todos los tipos de publicación
-    payload.categoria_alimento = form.categoria_alimento || null;
-    // peso y fecha de caducidad solo para bolsas
+    // Tiempo limitado también necesita fecha fin, y no puede ser anterior al
+    // inicio (Promoción no tiene fecha fin — ver construirPayload).
     if (form.tipo_form === 'bolsa') {
-      payload.peso_estimado_kg = parseFloat(form.peso_estimado_kg) || 0.5;
-      const [d, m, y] = form.fecha_caducidad.split('/');
-      if (d && m && y) payload.fecha_caducidad = `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+      if (!form.fecha_caducidad) return alertar('La fecha de fin es obligatoria');
+      if (form.fecha_caducidad < form.fecha_disponible) {
+        return alertar('La fecha de fin no puede ser anterior a la fecha de inicio');
+      }
     }
-    if (form.tipo_form === 'cupon') payload.categoria = form.categoria;
+
+    const horaInicio = normalizarHora(form.hora_recogida_inicio);
+    if (!horaInicio) return alertar('Hora de inicio inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
+    const horaFin = normalizarHora(form.hora_recogida_fin);
+    if (!horaFin) return alertar('Hora de fin inválida. Usa el formato HH:MM, por ejemplo 08:00 o 20:00.');
 
     const esEdicion = !!editId;
+
+    // negocio_id se agrega solo al crear: PUT /bolsas/:id lo ignora (no está en
+    // su allowlist de campos editables), así que mandarlo en una edición no
+    // cambiaría nada.
+    const payload = construirPayload(form, horaInicio, horaFin);
+    const cambios = esEdicion
+      ? payloadDeEdicion(edicionInicial.current?.bolsa, payload, edicionInicial.current?.payload ?? null)
+      : payload;
+    if (esEdicion && Object.keys(cambios).length === 0) {
+      setModal(false);
+      return avisar('No modificaste ningún dato.');
+    }
+    // Publicación heredada sin foto: cambiar unidades o visibilidad se
+    // permite; un cambio que la manda a revisión exige agregar la foto.
+    if (esEdicion && faltaFotoParaGuardar(form.imagen_url, { bolsa: edicionInicial.current?.bolsa, cambios })) {
+      return marcarFotoFaltante();
+    }
+    setSaving(true);
+
     try {
+      // Siempre se edita la MISMA publicación (PUT /bolsas/:id), nunca se crea
+      // una copia: corregir una rechazada la devuelve a Pendiente.
       const res = esEdicion
-        ? await bolsasAPI.actualizar(editId, payload)
-        : await bolsasAPI.crear(payload);
+        ? await bolsasAPI.actualizar(editId, cambios)
+        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
+      // La tarjeta refleja al instante el estado que devolvió el backend (p. ej.
+      // Rechazada → Pendiente), sin esperar a la recarga.
+      const guardada: BolsaRestaurante | undefined = res.data?.id ? res.data : undefined;
+      if (guardada) {
+        setItems(prev => esEdicion
+          ? prev.map(i => (i.id === guardada.id ? { ...i, ...guardada } : i))
+          : [guardada, ...prev]);
+      }
       setModal(false);
       cargar();
-      avisar(mensajeGuardado(res.data, esEdicion));
+      avisar(mensajeTrasGuardar(res.data?.estado_aprobacion, esEdicion));
     } catch (e: any) {
       alertar(e.message || 'Error al guardar');
     } finally {
@@ -264,19 +396,37 @@ export default function BolsasRestauranteScreen() {
     }
   }
 
-  async function eliminar(id: string) {
+  // Eliminar es DISTINTO del switch "activo": no oculta, elimina de verdad.
+  // Deja de existir para el panel del restaurante, para el admin y para el
+  // cliente, y no se puede reactivar después (backend/routes/bolsas.js DELETE
+  // /api/bolsas/:id — eliminación lógica, nunca reversible desde la app).
+  async function eliminar(id: string, nombre: string) {
+    const mensaje = `Vas a eliminar "${nombre}" de forma permanente. Dejará de aparecer en tu panel, en el panel del administrador y para los clientes. Esta acción no se puede deshacer.`;
+
+    async function confirmarYEliminar() {
+      try {
+        await bolsasAPI.eliminar(id);
+        // Optimista: la tarjeta desaparece al instante, sin esperar la
+        // recarga de red (que igual corre después, para quedar consistente
+        // con el servidor si algo más cambió mientras tanto).
+        setItems(prev => prev.filter(i => i.id !== id));
+        cargar();
+      } catch (e: any) {
+        alertar(e.message || 'No se pudo eliminar la publicación.');
+      }
+    }
+
     if (Platform.OS === 'web') {
-      if (!(window as any).confirm('¿Eliminar este elemento? Esta acción no se puede deshacer.')) return;
-      try { await bolsasAPI.eliminar(id); cargar(); } catch (e: any) { (window as any).alert(e.message || 'Error al eliminar'); }
+      if ((window as any).confirm(mensaje)) await confirmarYEliminar();
       return;
     }
-    Alert.alert('Eliminar', '¿Eliminar este elemento?', [
+    Alert.alert('Eliminar publicación', mensaje, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => bolsasAPI.eliminar(id).then(cargar) },
+      { text: 'Eliminar', style: 'destructive', onPress: confirmarYEliminar },
     ]);
   }
 
-  const desc = (b: any) => b.precio_original > 0 ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
+  const desc = (b: BolsaRestaurante) => b.precio_original > 0 ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
 
   const filtrados = tabVista === 'todos' ? items
     : items.filter(b => tabVista === 'cupon' ? b.tipo === 'cupon' : b.tipo !== 'cupon');
@@ -333,13 +483,14 @@ export default function BolsasRestauranteScreen() {
           // que apruebe una versión distinta a la que ve. Una vez que hay una
           // decisión (aprobado / rechazado / "pedir cambios" con motivo), editar
           // vuelve a funcionar con normalidad para que el restaurante pueda corregir.
-          const enRevisionInicial = b.estado_aprobacion === 'pendiente' && !b.motivo_rechazo;
-          // El switch de visibilidad, en cambio, debe quedarse bloqueado durante
-          // TODA la revisión (inicial o "pedir cambios" aún sin reenviar) — no solo
-          // la inicial. Antes se desbloqueaba en cuanto había motivo_rechazo, así
-          // que se podía activar/desactivar una publicación que el admin todavía no
-          // había vuelto a aprobar.
-          const enRevision = b.estado_aprobacion === 'pendiente';
+          const enRevisionInicial = bloqueadaParaEditar(b);
+          const estado = estadoPublicacion(b);
+          // El switch de visibilidad debe quedarse bloqueado mientras la
+          // publicación no esté aprobada — pendiente O rechazada, no solo
+          // pendiente (antes una rechazada se podía "activar" con el switch;
+          // el backend ya lo rechaza igual, pero el control debe verse y
+          // comportarse como deshabilitado, no solo fallar en silencio).
+          const enRevision = toggleVisibilidadBloqueado(b);
           return (
           <View key={b.id} style={[s.card, !b.activo && s.cardInactiva]}>
             <View style={s.cardRow}>
@@ -355,16 +506,9 @@ export default function BolsasRestauranteScreen() {
                     <Text style={s.tipoBadgeText}>{b.tipo === 'cupon' ? 'PROMO' : 'T. LIMITADO'}</Text>
                   </View>
                   <View style={s.descBadge}><Text style={s.descBadgeText}>-{desc(b)}%</Text></View>
-                  {!b.activo && <View style={s.inactivaBadge}><Text style={s.inactivaText}>Inactiva</Text></View>}
-                  {b.estado_aprobacion === 'pendiente' && (
-                    <View style={s.enRevisionBadge}><Text style={s.enRevisionText}>En revisión</Text></View>
-                  )}
-                  {b.estado_aprobacion === 'rechazado' && (
-                    <View style={s.rechazadaBadge}><Text style={s.rechazadaText}>✕ Rechazada</Text></View>
-                  )}
-                  {(b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion) && b.activo && (
-                    <View style={s.aprobadaBadge}><Text style={s.aprobadaText}>✓ Aprobada</Text></View>
-                  )}
+                  <View style={BADGE_ESTADO[estado.clave][0]}>
+                    <Text style={BADGE_ESTADO[estado.clave][1]}>{estado.etiqueta}</Text>
+                  </View>
                 </View>
                 <Text style={s.cardNombre}>{b.nombre}</Text>
                 {b.tipo === 'cupon' && b.contenido ? (
@@ -373,12 +517,7 @@ export default function BolsasRestauranteScreen() {
                   <Text style={s.cardSub} numberOfLines={1}>{b.descripcion}</Text>
                 )}
                 <Text style={s.cardHora}>⏰ {b.hora_recogida_inicio?.slice(0, 5)} – {b.hora_recogida_fin?.slice(0, 5)}</Text>
-                {enRevisionInicial && (
-                  <Text style={s.revisionMsg}>Esta publicación está siendo revisada por el administrador. No se puede editar ni activar hasta que se resuelva la revisión.</Text>
-                )}
-                {b.estado_aprobacion === 'pendiente' && b.motivo_rechazo && (
-                  <Text style={s.revisionMsg}>El administrador pidió cambios — corrige y guarda para reenviar a revisión</Text>
-                )}
+                {estado.ayuda ? <Text style={s.revisionMsg}>{estado.ayuda}</Text> : null}
                 {b.motivo_rechazo && (
                   <View style={s.motivoBox}><Text style={s.motivoText}>Motivo: {b.motivo_rechazo}</Text></View>
                 )}
@@ -392,19 +531,26 @@ export default function BolsasRestauranteScreen() {
 
             <View style={s.cardActions}>
               <Switch
-                value={!!b.activo}
+                // Forzado OFF mientras no esté aprobada: no mostrar "encendido" un
+                // activo=true que puede venir de una corrección reenviada a
+                // revisión (ver decidirRevision en el backend) — visualmente debe
+                // leerse igual de bloqueado que lo que de verdad impide el backend.
+                value={enRevision ? false : !!b.activo}
                 disabled={enRevision}
-                onValueChange={() => bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'))}
+                onValueChange={() => {
+                  if (!b.activo && publicacionVencida(b)) return alertar('El horario de recogida ya venció. Edita la publicación antes de activarla.');
+                  bolsasAPI.actualizar(b.id, { activo: !b.activo }).then(cargar).catch((e: any) => alertar(e.message || 'No se pudo actualizar la visibilidad'));
+                }}
                 trackColor={{ true: Colors.green, false: Colors.border }}
                 thumbColor={Colors.white}
               />
-              {/* Visible a clientes solo si activo Y aprobado */}
+              {/* Visible a clientes solo si aprobada, activa, vigente y con unidades.
+                  Rechazada siempre dice "No visible" explícitamente (no "En
+                  revisión": ya hubo una decisión, y fue negativa). */}
               <Text style={s.switchLabel}>
-                {enRevision
-                  ? 'En revisión'
-                  : b.activo && (b.estado_aprobacion === 'aprobado' || !b.estado_aprobacion)
-                  ? 'Visible'
-                  : 'Inactiva'}
+                {b.estado_aprobacion === 'rechazado' ? 'No visible'
+                  : enRevision ? 'En revisión'
+                  : estado.visible ? 'Visible' : 'No visible'}
               </Text>
               <View style={{ flex: 1 }} />
               <TouchableOpacity
@@ -412,9 +558,9 @@ export default function BolsasRestauranteScreen() {
                 onPress={() => abrir(b)}
                 disabled={enRevisionInicial}
               >
-                <Text style={[s.editBtnText, enRevisionInicial && s.editBtnTextDisabled]}>Editar</Text>
+                <Text style={[s.editBtnText, enRevisionInicial && s.editBtnTextDisabled]}>{textoBotonEditar(b)}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.deleteBtn} onPress={() => eliminar(b.id)}>
+              <TouchableOpacity style={s.deleteBtn} onPress={() => eliminar(b.id, b.nombre)}>
                 <Text style={s.deleteBtnText}>Eliminar</Text>
               </TouchableOpacity>
             </View>
@@ -445,15 +591,22 @@ export default function BolsasRestauranteScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
-            {/* Selector de tipo */}
-            {!editId && (
+          <ScrollView ref={modalScrollRef} contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+            {/* Qué pasará al guardar esta edición (reglas del backend). */}
+            {editId && avisoAlEditar(edicionInicial.current?.bolsa) ? (
+              <Text style={s.avisoEdicion}>{avisoAlEditar(edicionInicial.current?.bolsa)}</Text>
+            ) : null}
+            {editId && edicionInicial.current?.bolsa.motivo_rechazo ? (
+              <View style={s.motivoBox}><Text style={s.motivoText}>Motivo del administrador: {edicionInicial.current.bolsa.motivo_rechazo}</Text></View>
+            ) : null}
+            {/* Selector de tipo (también al editar: cambiarlo vuelve a revisión) */}
+            {(
               <View style={s.tipoSelectorWrap}>
                 <Text style={s.sectionLabel}>Tipo de publicación</Text>
                 <View style={s.tipoSelector}>
                   <TouchableOpacity
                     style={[s.tipoBtn, form.tipo_form === 'bolsa' && s.tipoBtnActive]}
-                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'bolsa', es_tiempo_limitado: true, es_promocion: false }))}
+                    onPress={() => setForm((f) => ({ ...f, tipo_form: 'bolsa', es_tiempo_limitado: true, es_promocion: false }))}
                   >
                     <Text style={[s.tipoBtnEmoji]}>⏱️</Text>
                     <Text style={[s.tipoBtnLabel, form.tipo_form === 'bolsa' && s.tipoBtnLabelActive]}>Disponible por{'\n'}Tiempo Limitado</Text>
@@ -461,7 +614,7 @@ export default function BolsasRestauranteScreen() {
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[s.tipoBtn, form.tipo_form === 'cupon' && s.tipoBtnActive]}
-                    onPress={() => setForm((f: any) => ({ ...f, tipo_form: 'cupon', es_promocion: true, es_tiempo_limitado: false }))}
+                    onPress={() => setForm((f) => ({ ...f, tipo_form: 'cupon', es_promocion: true, es_tiempo_limitado: false }))}
                   >
                     <Text style={[s.tipoBtnEmoji]}>🏷️</Text>
                     <Text style={[s.tipoBtnLabel, form.tipo_form === 'cupon' && s.tipoBtnLabelActive]}>Promoción</Text>
@@ -471,11 +624,11 @@ export default function BolsasRestauranteScreen() {
               </View>
             )}
 
-            {/* Foto */}
-            <>
-              <Text style={s.sectionLabel}>📷 Foto</Text>
+            {/* Foto (obligatoria) */}
+            <View onLayout={(e) => { fotoY.current = e.nativeEvent.layout.y; }}>
+              <Text style={s.sectionLabel}>📷 Foto *</Text>
               <TouchableOpacity
-                style={[s.fotoBtn, uploadingFoto && { opacity: 0.6 }]}
+                style={[s.fotoBtn, fotoFaltante && !form.imagen_url && s.fotoBtnError, uploadingFoto && { opacity: 0.6 }]}
                 onPress={seleccionarFotoBolsa}
                 disabled={uploadingFoto}
                 activeOpacity={0.8}
@@ -494,10 +647,13 @@ export default function BolsasRestauranteScreen() {
                   }
                 </View>
               </TouchableOpacity>
+              {fotoFaltante && !form.imagen_url ? (
+                <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {MENSAJE_FOTO_PUBLICACION}</Text></View>
+              ) : null}
               {uploadFotoError ? (
                 <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {uploadFotoError}</Text></View>
               ) : null}
-            </>
+            </View>
 
             <Text style={s.sectionLabel}>📝 Información</Text>
             <Field label="Nombre *" value={form.nombre} onChange={set('nombre')} placeholder={form.tipo_form === 'cupon' ? 'Ej. Descuento miércoles' : 'Ej. Bolsa de panadería'} />
@@ -519,7 +675,7 @@ export default function BolsasRestauranteScreen() {
                     <TouchableOpacity
                       key={t}
                       style={[s.discChip, form.categoria === t && s.discChipActive]}
-                      onPress={() => setForm((f: any) => ({ ...f, categoria: t }))}
+                      onPress={() => setForm((f) => ({ ...f, categoria: t }))}
                     >
                       <Text style={[s.discChipText, form.categoria === t && s.discChipTextActive]}>{t}</Text>
                     </TouchableOpacity>
@@ -551,14 +707,53 @@ export default function BolsasRestauranteScreen() {
 
             <Field label="Unidades disponibles *" value={form.cantidad_disponible} onChange={set('cantidad_disponible')} placeholder="5" keyboard="numeric" />
 
-            <Text style={s.sectionLabel}>{form.tipo_form === 'cupon' ? '📅 Vigencia' : '⏰ Horario de recogida'}</Text>
+            <Text style={s.sectionLabel}>{form.tipo_form === 'cupon' ? '📅 Fecha de publicación' : '📅 Fecha de vigencia'}</Text>
+            {form.tipo_form === 'cupon' ? (
+              // Promoción: solo fecha de publicación — no tiene fecha fin.
+              // Su disponibilidad posterior depende de activo/stock/aprobación
+              // y del horario diario de abajo, nunca de una fecha de cierre.
+              <CalendarioPicker
+                label="Fecha de publicación *"
+                value={form.fecha_disponible}
+                onChange={set('fecha_disponible')}
+              />
+            ) : (
+              // Tiempo limitado: rango fecha inicio → fecha fin, ambas por
+              // calendario. minDate en "Fecha fin" bloquea en la UI misma
+              // elegir un día anterior al de inicio (la regla real la aplica
+              // igual el backend, ver validarDatosBolsa).
+              <View style={s.priceRow}>
+                <View style={{ flex: 1 }}>
+                  <CalendarioPicker label="Fecha inicio *" value={form.fecha_disponible} onChange={set('fecha_disponible')} />
+                </View>
+                <View style={{ width: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <CalendarioPicker
+                    label="Fecha fin *"
+                    value={form.fecha_caducidad}
+                    onChange={set('fecha_caducidad')}
+                    minDate={form.fecha_disponible || undefined}
+                  />
+                </View>
+              </View>
+            )}
+
+            <Text style={s.sectionLabel}>⏰ Horario de recogida</Text>
             <View style={s.priceRow}>
               <View style={{ flex: 1 }}>
-                <Field label={form.tipo_form === 'cupon' ? 'Válido desde (hora)' : 'Hora inicio'} value={form.hora_recogida_inicio} onChange={set('hora_recogida_inicio')} placeholder="18:00" />
+                <HoraPicker
+                  label={form.tipo_form === 'cupon' ? 'Válido desde (hora) *' : 'Hora inicio *'}
+                  value={form.hora_recogida_inicio}
+                  onChange={set('hora_recogida_inicio')}
+                />
               </View>
               <View style={{ width: 12 }} />
               <View style={{ flex: 1 }}>
-                <Field label={form.tipo_form === 'cupon' ? 'Válido hasta (hora)' : 'Hora fin'} value={form.hora_recogida_fin} onChange={set('hora_recogida_fin')} placeholder="20:00" />
+                <HoraPicker
+                  label={form.tipo_form === 'cupon' ? 'Válido hasta (hora) *' : 'Hora fin *'}
+                  value={form.hora_recogida_fin}
+                  onChange={set('hora_recogida_fin')}
+                />
               </View>
             </View>
 
@@ -586,13 +781,6 @@ export default function BolsasRestauranteScreen() {
             {form.tipo_form === 'bolsa' && (
               <>
                 <Field
-                  label="Fecha de caducidad * (DD/MM/YYYY)"
-                  value={form.fecha_caducidad}
-                  onChange={set('fecha_caducidad')}
-                  placeholder="31/12/2025"
-                  keyboard="numeric"
-                />
-                <Field
                   label="Peso aproximado por unidad (kg)"
                   value={form.peso_estimado_kg}
                   onChange={set('peso_estimado_kg')}
@@ -611,12 +799,12 @@ export default function BolsasRestauranteScreen() {
               {MENU_CLASIFS.map(({ key, label, emoji }) => (
                 <TouchableOpacity
                   key={key}
-                  style={[s.clasifChip, (form as any)[key] && s.clasifChipActive]}
-                  onPress={() => set(key)(!(form as any)[key])}
+                  style={[s.clasifChip, form[key] && s.clasifChipActive]}
+                  onPress={() => set(key)(!form[key])}
                   activeOpacity={0.8}
                 >
                   <Text style={s.clasifChipEmoji}>{emoji}</Text>
-                  <Text style={[s.clasifChipText, (form as any)[key] && s.clasifChipTextActive]}>{label}</Text>
+                  <Text style={[s.clasifChipText, form[key] && s.clasifChipTextActive]}>{label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
@@ -715,6 +903,7 @@ const s = StyleSheet.create({
   aprobadaBadge: { backgroundColor: '#DCFCE7', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 2 },
   aprobadaText: { fontSize: 10, color: '#16A34A', fontWeight: '700' },
   motivoBox: { backgroundColor: '#FEF2F2', borderRadius: 8, padding: 8, marginTop: 4 },
+  avisoEdicion: { fontSize: 13, color: '#92400E', backgroundColor: '#FEF3C7', borderRadius: 10, padding: 10, marginBottom: 12 },
   motivoText: { fontSize: 12, color: '#DC2626', fontStyle: 'italic' },
 
   modal: { flex: 1, backgroundColor: Colors.background },
@@ -730,6 +919,7 @@ const s = StyleSheet.create({
   uploadError: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12, marginTop: -8 },
   uploadErrorText: { color: '#B91C1C', fontSize: 13, fontWeight: '600' },
   fotoBtn: { borderRadius: 12, overflow: 'hidden', height: 150, marginBottom: 16 },
+  fotoBtnError: { borderWidth: 2, borderColor: Colors.error },
   fotoPreview: { width: '100%', height: '100%' },
   fotoPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, alignItems: 'center', justifyContent: 'center', gap: 6 },
   fotoPlaceholderText: { fontSize: 13, color: Colors.textSecondary },
@@ -772,3 +962,14 @@ const s = StyleSheet.create({
   catChipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
   catChipTextActive: { color: '#fff', fontWeight: '700' },
 });
+
+// Badge [contenedor, texto] por estado (src/utils/estadoPublicacion.ts).
+const BADGE_ESTADO: Record<ClaveEstado, [object, object]> = {
+  pendiente: [s.enRevisionBadge, s.enRevisionText],
+  cambios: [s.enRevisionBadge, s.enRevisionText],
+  rechazada: [s.rechazadaBadge, s.rechazadaText],
+  inactiva: [s.inactivaBadge, s.inactivaText],
+  vencida: [s.inactivaBadge, s.inactivaText],
+  agotada: [s.inactivaBadge, s.inactivaText],
+  aprobada: [s.aprobadaBadge, s.aprobadaText],
+};

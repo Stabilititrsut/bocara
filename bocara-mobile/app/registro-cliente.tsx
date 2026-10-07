@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { authAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { volver } from '@/src/utils/backNavigation';
 
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
 const GT_PHONE_REGEX = /^[234567]\d{7}$/;
@@ -110,7 +111,7 @@ export default function RegistroClienteScreen() {
   return (
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
-        <TouchableOpacity onPress={() => router.back()} style={s.back}>
+        <TouchableOpacity onPress={() => volver(router, '/login')} style={s.back}>
           <Text style={s.backText}>← Volver</Text>
         </TouchableOpacity>
         <Text style={s.title}>Crear cuenta</Text>

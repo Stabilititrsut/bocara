@@ -24,6 +24,9 @@ export default function AdminNegociosScreen() {
   const [busqueda,   setBusqueda]   = useState('');
   const [filtro,     setFiltro]     = useState<Filtro>('pendientes');
   const [procesando, setProcesando] = useState<string | null>(null);
+  // Error de la última acción por negocio (p. ej. "No se puede aprobar el
+  // negocio porque no tiene foto." del backend) — visible en su tarjeta.
+  const [errores, setErrores] = useState<Record<string, string>>({});
 
   // Modal rechazo
   const [rechazarModal, setRechazarModal] = useState<any>(null);
@@ -40,11 +43,13 @@ export default function AdminNegociosScreen() {
 
   async function aprobar(n: any) {
     setProcesando(n.id);
+    setErrores(prev => ({ ...prev, [n.id]: '' }));
     try {
       await adminAPI.verificarNegocio(n.id);
       cargar();
     } catch (e: any) {
       console.error('[negocios] aprobar error:', e.message);
+      setErrores(prev => ({ ...prev, [n.id]: e.message || 'No se pudo aprobar el negocio.' }));
     } finally { setProcesando(null); }
   }
 
@@ -62,11 +67,13 @@ export default function AdminNegociosScreen() {
 
   async function activar(id: string) {
     setProcesando(id);
+    setErrores(prev => ({ ...prev, [id]: '' }));
     try {
       await adminAPI.toggleNegocio(id);
       cargar();
     } catch (e: any) {
       console.error('[negocios] activar error:', e.message);
+      setErrores(prev => ({ ...prev, [id]: e.message || 'No se pudo activar el negocio.' }));
     } finally { setProcesando(null); }
   }
 
@@ -212,6 +219,7 @@ export default function AdminNegociosScreen() {
                 <Text style={s.btnVerText}>Ver perfil</Text>
               </TouchableOpacity>
             </View>
+            {errores[n.id] ? <Text style={s.errorAccion}>⚠️ {errores[n.id]}</Text> : null}
           </TouchableOpacity>
         ))}
 
@@ -291,6 +299,7 @@ const s = StyleSheet.create({
   btnSuspenderText: { color: '#D97706', fontWeight: '700', fontSize: 12 },
   btnActivar:       { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, justifyContent: 'center' },
   btnActivarText:   { color: '#16A34A', fontWeight: '700', fontSize: 12 },
+  errorAccion:      { marginTop: 10, color: '#DC2626', fontSize: 12, fontWeight: '700' },
   btnVer:           { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: BORDER, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, justifyContent: 'center' },
   btnVerText:       { color: TEXT2, fontWeight: '600', fontSize: 12 },
 

@@ -4,9 +4,12 @@ const authMiddleware = require('../middleware/auth');
 const { geocodeAddress } = require('../utils/geo');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
-const { hoyGuatemala, filtrarVigentes } = require('../services/horarioGuatemala');
+const { hoyGuatemala } = require('../services/horarioGuatemala');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../services/impactoAmbiental');
+const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
+const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
+const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -27,13 +30,6 @@ const CAMPOS_BOLSA_PUBLICOS = 'id,negocio_id,nombre,descripcion,contenido,precio
   'peso_estimado_kg,co2_salvado_kg,fecha,fecha_disponible,fecha_caducidad,' +
   'activo,activa,estado_aprobacion,creado_en,created_at,' +
   'es_tiempo_limitado,es_promocion,es_descuento,es_destacado,es_mas_vendido,es_precio_bajo';
-
-// Un negocio solo debe ser visible/navegable para clientes si está activo y,
-// cuando el campo existe, aprobado (compat con despliegues sin estado_verificacion aún).
-function negocioDisponiblePublico(n) {
-  return !!n && n.activo !== false &&
-    (n.estado_verificacion === 'aprobado' || n.estado_verificacion == null);
-}
 
 // Fecha de hoy (YYYY-MM-DD) en Guatemala para comparar contra fecha_caducidad
 // (columna "date", sin hora). Igual que en routes/bolsas.js: calcularla en UTC
@@ -86,9 +82,10 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
 // GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
-  // hora_recogida_inicio/fin y fecha_caducidad se seleccionan aunque no se
-  // devuelvan: son los que deciden si la publicación ya venció en Guatemala.
-  const CAMPOS_FEED = 'negocio_id, precio_original, precio_descuento, ' +
+  // Estado, horario, unidades y vigencia se seleccionan aunque no se devuelvan:
+  // son los que decide filtrarVisiblesParaCliente (misma regla que /api/bolsas).
+  const CAMPOS_FEED = 'id, negocio_id, tipo, precio_original, precio_descuento, ' +
+    'activo, estado_aprobacion, cantidad_disponible, ' +
     'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, ' +
     'negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)';
   let { data: bolsas, error } = await supabase
@@ -108,9 +105,10 @@ router.get('/feed', async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Excluir las vencidas ANTES de agrupar: si no, un negocio cuyas publicaciones
-  // ya cerraron seguiría apareciendo en el feed con cantidad_bolsas > 0.
-  bolsas = filtrarVigentes(bolsas);
+  // Excluir lo que el cliente no ve ANTES de agrupar: si no, un negocio cuyas
+  // publicaciones ya cerraron (o cuyo fallback relajó filtros) seguiría
+  // apareciendo en el feed con cantidad_bolsas > 0.
+  bolsas = filtrarVisiblesParaCliente(bolsas);
 
   const map = new Map();
   for (const b of (bolsas || [])) {
@@ -153,10 +151,11 @@ router.get('/:id/detalle', async (req, res) => {
       .eq('negocio_id', req.params.id).eq('activo', true).gt('cantidad_disponible', 0);
     data = r.data;
   }
-  // Fuera las que ya cerraron su ventana de recogida en Guatemala: se filtra antes
-  // de contar veces_pedido para que los contadores no incluyan publicaciones que
-  // el cliente ya no ve.
-  const bolsas = filtrarVigentes(data);
+  // Regla única del catálogo (aprobada, activa, con unidades, vigente en
+  // Guatemala) — también sobre el fallback, que no filtra estado_aprobacion.
+  // Se filtra antes de contar veces_pedido para que los contadores no incluyan
+  // publicaciones que el cliente no ve.
+  const bolsas = filtrarVisiblesParaCliente(data);
 
   // Contar cuántas veces fue pedida cada bolsa (pedidos recogidos)
   const vecesPedidoMap = {};
@@ -285,12 +284,11 @@ router.get('/:id', async (req, res) => {
       .gt('cantidad_disponible', 0);
     bolsas = r.data;
   }
-  // Este endpoint también devuelve bolsas (lo consume la vista de tienda) y era
-  // el único público que no pasaba por filtrarVigentes: el `.gte(fecha_caducidad)`
-  // de arriba solo compara la FECHA, así que dejaba pasar publicaciones cuya
-  // ventana de recogida ya había cerrado hoy. Misma regla que /feed, /:id/detalle
-  // y /:id/bolsas.
-  res.json({ ...negocio, bolsas: filtrarVigentes(bolsas) });
+  // Este endpoint también devuelve bolsas (lo consume la vista de tienda). El
+  // `.gte(fecha_caducidad)` de arriba solo compara la FECHA y el fallback no
+  // filtra estado_aprobacion: la regla completa (services/publicaciones.js) se
+  // aplica aquí, igual que en /feed, /:id/detalle y /:id/bolsas.
+  res.json({ ...negocio, bolsas: filtrarVisiblesParaCliente(bolsas) });
 });
 
 // POST /api/negocios — crear negocio con geocodificación
@@ -299,9 +297,14 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'No autorizado' });
 
   const { nombre, descripcion, direccion, zona, ciudad, telefono, categoria, email,
-    nit, dpi, datos_bancarios, horario_atencion,
+    nit, dpi, datos_bancarios, horario_atencion, imagen_url,
     latitud: latManual, longitud: lngManual } = req.body;
   if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
+  // Un negocio creado por esta vía puede nacer aprobado y activo (admin):
+  // nunca sin foto. (El registro de restaurantes crea el negocio en
+  // routes/auth.js, pendiente e inactivo — la foto se sube justo después, con
+  // la sesión ya creada, y sin ella el admin no puede aprobarlo.)
+  if (!tieneFoto(imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
 
   let latitud = latManual ? parseFloat(latManual) : null;
   let longitud = lngManual ? parseFloat(lngManual) : null;
@@ -315,6 +318,7 @@ router.post('/', authMiddleware, async (req, res) => {
     propietario_id: req.usuario.id, nombre, descripcion, direccion,
     zona, ciudad: ciudad || 'Guatemala', telefono, categoria,
     email: email || req.usuario.email,
+    imagen_url: imagen_url.trim(),
     latitud, longitud,
     estado_verificacion: req.usuario.rol === 'admin' ? 'aprobado' : 'pendiente',
     activo: req.usuario.rol === 'admin',
@@ -413,10 +417,24 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
 
 // PUT /api/negocios/:id — actualizar negocio con re-geocodificación si cambia dirección
 router.put('/:id', authMiddleware, async (req, res) => {
-  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud').eq('id', req.params.id).single();
+  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud,imagen_url').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
   if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
+
+  // Activar/suspender y el estado de verificación son decisiones del admin
+  // (aprobar, rechazar, toggle en routes/admin.js). El restaurante no puede
+  // cambiarlos manipulando el payload — antes `activo` se aceptaba tal cual y
+  // un negocio podía activarse a sí mismo. Reenviar una solicitud rechazada
+  // tiene su propio endpoint: POST /api/negocios/mi-negocio/reenviar.
+  if (req.usuario.rol !== 'admin') {
+    if (req.body.activo !== undefined) {
+      return res.status(403).json({ error: 'Solo un administrador puede activar o suspender el negocio.' });
+    }
+    if (req.body.estado_verificacion !== undefined || req.body.verificado !== undefined) {
+      return res.status(403).json({ error: 'El estado de verificación lo decide el administrador. Para reenviar tu solicitud usa "Reenviar a revisión".' });
+    }
+  }
 
   const { nombre, descripcion, direccion, zona, ciudad, telefono, categoria, activo,
     imagen_url, dpi_foto_url, nit, dpi, datos_bancarios, horario_atencion,
@@ -440,6 +458,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
   if (punto_referencia !== undefined)   updates.punto_referencia = punto_referencia;
   if (google_maps_url !== undefined)    updates.google_maps_url = google_maps_url;
   if (waze_url !== undefined)           updates.waze_url = waze_url;
+
+  // La foto del negocio no se puede quitar (null, '' o espacios) — solo
+  // reemplazar por otra. Y un negocio sin foto (dato heredado) no puede
+  // quedar activo por esta vía.
+  const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
+  if (errorFoto) return res.status(400).json({ error: errorFoto });
+  const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
+  if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
+    return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
+  }
 
   // Coordenadas manuales tienen prioridad
   if (latManual != null) updates.latitud  = parseFloat(latManual);
@@ -542,12 +570,54 @@ router.get('/:id/bolsas', async (req, res) => {
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
-  // Misma regla que el feed y el detalle: nada con la ventana de recogida vencida.
-  const bolsas = filtrarVigentes(data);
+  // Misma regla que el feed y el detalle (services/publicaciones.js).
+  const bolsas = filtrarVisiblesParaCliente(data);
   res.json({
     tiempo_limitado: bolsas.filter(b => b.tipo !== 'cupon'),
     promociones: bolsas.filter(b => b.tipo === 'cupon'),
   });
+});
+
+// POST /api/negocios/mi-negocio/reenviar — rechazado → pendiente.
+//
+// Única transición de estado que el restaurante puede pedir, y la controla el
+// backend: solo desde 'rechazado', sobre el MISMO negocio (nunca crea otro),
+// exige foto (sin ella el admin no podría aprobarlo) y lo deja pendiente e
+// inactivo hasta que el admin decida. El motivo del rechazo se limpia de la
+// fila (la solicitud nueva ya no lo tiene pendiente) y queda en el evento de
+// auditoría — mismo criterio que el reenvío de publicaciones (PUT /bolsas/:id).
+// Las correcciones de campos se guardan antes con PUT /api/negocios/:id.
+router.post('/mi-negocio/reenviar', authMiddleware, async (req, res) => {
+  if (req.usuario.rol !== 'restaurante') return res.status(403).json({ error: 'No autorizado' });
+
+  const { data: negocio, error: negocioErr } = await supabase
+    .from('negocios')
+    .select('id,propietario_id,estado_verificacion,imagen_url,motivo_rechazo')
+    .eq('propietario_id', req.usuario.id)
+    .maybeSingle();
+  if (negocioErr) return res.status(500).json({ error: negocioErr.message });
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+
+  if (negocio.estado_verificacion !== 'rechazado') {
+    return res.status(409).json({ error: 'Solo una solicitud rechazada puede reenviarse a revisión.' });
+  }
+  if (!tieneFoto(negocio.imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
+
+  const { data, error } = await supabase
+    .from('negocios')
+    .update({ estado_verificacion: 'pendiente', activo: false, verificado: false, motivo_rechazo: null })
+    .eq('id', negocio.id)
+    .select()
+    .single();
+  if (error) return res.status(400).json({ error: error.message });
+
+  enqueueEventBestEffort({
+    eventType: 'negocio.reenviado_revision', aggregateType: 'negocio', aggregateId: negocio.id,
+    discriminator: new Date().toISOString(),
+    payload: { estado_anterior: 'rechazado', motivo_anterior: negocio.motivo_rechazo || null },
+  });
+
+  res.json(data);
 });
 
 // POST /api/negocios/mi-negocio/solicitar-cambios

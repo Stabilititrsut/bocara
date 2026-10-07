@@ -1,3 +1,6 @@
+import { publicacionVencida, calcularEstadoHorario } from '@/src/utils/horarioRecogida';
+import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
+import { volver } from '@/src/utils/backNavigation';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -10,32 +13,15 @@ import { bolsasAPI, resenasAPI, favoritosAPI } from '@/src/services/api';
 import { Bolsa } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useCart } from '@/src/context/CartContext';
+import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
+import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
+import { etiquetaTipoProducto, emojiTipoProducto } from '@/src/utils/tipoPublicacion';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 
 const { height: SH } = Dimensions.get('window');
 const IMG_H = Math.round(SH * 0.48);
 const STATUS_TOP = Platform.OS === 'ios' ? 52 : (StatusBar.currentHeight || 24) + 8;
-
-function calcularEstadoHorario(inicio: string, fin: string) {
-  if (!inicio || !fin) return { estado: 'desconocido', mensaje: '', color: Colors.textLight };
-  const now = new Date();
-  const [ih, im] = inicio.split(':').map(Number);
-  const [fh, fm] = fin.split(':').map(Number);
-  const ini = new Date(now); ini.setHours(ih, im, 0, 0);
-  const end = new Date(now); end.setHours(fh, fm, 0, 0);
-  if (now > end) return { estado: 'vencido', mensaje: 'Horario de recogida vencido por hoy', color: Colors.error, bloqueado: true };
-  if (now < ini) {
-    const mins = Math.floor((ini.getTime() - now.getTime()) / 60000);
-    const hrs = Math.floor(mins / 60);
-    const txt = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins} min`;
-    return { estado: 'pronto', mensaje: `Abre en ${txt} · ${inicio.slice(0, 5)} – ${fin.slice(0, 5)}`, color: '#F59E0B', bloqueado: false };
-  }
-  const mins = Math.floor((end.getTime() - now.getTime()) / 60000);
-  const hrs = Math.floor(mins / 60);
-  const txt = hrs > 0 ? `${hrs}h ${mins % 60}m` : `${mins} min`;
-  return { estado: 'abierto', mensaje: `Cierra en ${txt}`, color: mins <= 30 ? Colors.error : '#22C55E', bloqueado: false };
-}
 
 function Stars({ rating, size = 13 }: { rating: number; size?: number }) {
   return (
@@ -138,11 +124,12 @@ export default function ProductoScreen() {
   const [toggleandoFav, setToggleandoFav] = useState(false);
   const [horario, setHorario] = useState<ReturnType<typeof calcularEstadoHorario> | null>(null);
   const [tab, setTab] = useState<'info' | 'resenas'>('info');
-  const { agregar, items } = useCart();
+  const { agregar, items, loaded: cartLoaded } = useCart();
   const { usuario } = useAuth();
   const { haversine, formatDistancia } = useLocation();
   const router = useRouter();
   const timerRef = useRef<any>(null);
+  const ahora = useRelojPublicaciones();
 
   const cargarBolsa = useCallback(async () => {
     const bolsaId = Array.isArray(id) ? id[0] : id;
@@ -175,6 +162,27 @@ export default function ProductoScreen() {
     return () => clearInterval(timerRef.current);
   }, [bolsa]);
 
+  // Refresca solo la disponibilidad mientras la pantalla sigue abierta, para que
+  // un producto que se agota (o vuelve a haber stock) se refleje sin recargar.
+  // Silencioso ante error de red: se mantiene el último dato bueno, no se rompe la UI.
+  useEffect(() => {
+    const bolsaId = Array.isArray(id) ? id[0] : id;
+    if (!bolsaId) return;
+    let cancelado = false;
+    const interval = setInterval(async () => {
+      try {
+        const r = await bolsasAPI.detalle(bolsaId);
+        if (cancelado || !r.data) return;
+        setBolsa(prev => prev ? {
+          ...prev,
+          cantidad_disponible: r.data.cantidad_disponible ?? prev.cantidad_disponible,
+          cantidad_disponible_real: r.data.cantidad_disponible_real,
+        } : prev);
+      } catch { /* mantener último dato conocido */ }
+    }, 20000);
+    return () => { cancelado = true; clearInterval(interval); };
+  }, [id]);
+
   if (loading) {
     return (
       <View style={s.root}>
@@ -189,7 +197,7 @@ export default function ProductoScreen() {
   if (errorMsg || !bolsa) {
     return (
       <View style={s.root}>
-        <TouchableOpacity style={s.backRow} onPress={() => router.back()}>
+        <TouchableOpacity style={s.backRow} onPress={() => volver(router, '/(tabs)/buscar')}>
           <Ionicons name="arrow-back" size={20} color={Colors.accent} />
           <Text style={s.backRowText}>Volver</Text>
         </TouchableOpacity>
@@ -207,10 +215,18 @@ export default function ProductoScreen() {
     );
   }
 
+  if (publicacionVencida(bolsa, ahora) || horario?.bloqueado) return (
+    <View style={s.root}>
+      <Text style={s.errorTitle}>Esta publicación ya no está disponible</Text>
+      <TouchableOpacity onPress={() => router.replace('/(tabs)/' as any)}><Text style={s.retryText}>Volver a explorar</Text></TouchableOpacity>
+    </View>
+  );
+
   const desc = bolsa.precio_original > 0
     ? Math.round((1 - bolsa.precio_descuento / bolsa.precio_original) * 100) : 0;
   const enCarrito = items.find(i => i.bolsa.id === bolsa.id);
-  const agotada = bolsa.cantidad_disponible === 0;
+  const stockReal = disponibilidadReal(bolsa);
+  const agotada = stockReal <= 0;
   const horarioBloqueado = horario?.bloqueado ?? false;
   const puedeComprar = !agotada && !horarioBloqueado;
   const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
@@ -252,15 +268,15 @@ export default function ProductoScreen() {
 
   function handleAgregar() {
     if (!bolsa || !puedeComprar) return;
+    if (publicacionVencida(bolsa)) {
+      setHorario(calcularEstadoHorario(bolsa.hora_recogida_inicio, bolsa.hora_recogida_fin));
+      mostrarErrorCarrito({ ok: false, motivo: 'vencido' }); return;
+    }
     if (noPuedeComprarPorRol) {
       Alert.alert('Compra no disponible', 'Las cuentas de restaurante y administrador no pueden realizar compras. Inicia sesión con una cuenta de cliente.');
       return;
     }
-    if (enCarrito && enCarrito.cantidad >= bolsa.cantidad_disponible) {
-      Alert.alert('Sin stock', `Solo quedan ${bolsa.cantidad_disponible} unidades disponibles.`);
-      return;
-    }
-    agregar(bolsa!);
+    if (mostrarErrorCarrito(agregar(bolsa))) return;
     Alert.alert('¡Agregado!', `${bolsa!.nombre} está en tu carrito 🛒`, [
       { text: 'Seguir viendo', style: 'cancel' },
       { text: 'Ver carrito', onPress: () => router.push('/(tabs)/carrito') },
@@ -285,7 +301,7 @@ export default function ProductoScreen() {
 
           {/* Back + action buttons */}
           <View style={[s.heroButtons, { top: STATUS_TOP }]}>
-            <TouchableOpacity style={s.circleBtn} onPress={() => router.back()}>
+            <TouchableOpacity style={s.circleBtn} onPress={() => volver(router, bolsa?.negocio_id ? `/tienda/${bolsa.negocio_id}` : '/(tabs)/buscar')}>
               <Ionicons name="arrow-back" size={20} color={Colors.primary} />
             </TouchableOpacity>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -306,9 +322,9 @@ export default function ProductoScreen() {
 
           {/* Badges at bottom of image */}
           <View style={s.heroBadges}>
-            {bolsa.tipo === 'cupon' && (
-              <View style={s.cuponBadge}><Text style={s.cuponBadgeText}>🎫 Cupón</Text></View>
-            )}
+            <View style={s.cuponBadge}>
+              <Text style={s.cuponBadgeText}>{emojiTipoProducto(bolsa.tipo)} {etiquetaTipoProducto(bolsa.tipo)}</Text>
+            </View>
             <View style={s.discBadge}>
               <Text style={s.discBadgeText}>-{desc}% OFF</Text>
             </View>
@@ -425,12 +441,10 @@ export default function ProductoScreen() {
               <Ionicons
                 name="cube-outline"
                 size={15}
-                color={bolsa.cantidad_disponible <= 3 ? Colors.error : Colors.textSecondary}
+                color={stockReal <= 3 ? Colors.error : Colors.textSecondary}
               />
-              <Text style={[s.stockText, bolsa.cantidad_disponible <= 3 && { color: Colors.error }]}>
-                {agotada
-                  ? 'Sin stock disponible'
-                  : `${bolsa.cantidad_disponible} unidad${bolsa.cantidad_disponible !== 1 ? 'es' : ''} disponible${bolsa.cantidad_disponible !== 1 ? 's' : ''}`}
+              <Text style={[s.stockText, stockReal <= 3 && { color: Colors.error }]}>
+                {textoDisponibilidad(stockReal)}
               </Text>
             </View>
 
@@ -557,9 +571,9 @@ export default function ProductoScreen() {
             </Text>
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={s.footerBtn} onPress={handleAgregar} activeOpacity={0.85}>
+          <TouchableOpacity style={s.footerBtn} onPress={handleAgregar} activeOpacity={0.85} disabled={!cartLoaded}>
             <Ionicons name="bag-add-outline" size={18} color={Colors.white} />
-            <Text style={s.footerBtnText}>Agregar al carrito · Q{bolsa.precio_descuento}</Text>
+            <Text style={s.footerBtnText}>{cartLoaded ? `Agregar al carrito · Q${bolsa.precio_descuento}` : 'Cargando carrito...'}</Text>
           </TouchableOpacity>
         )}
       </View>

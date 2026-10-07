@@ -1,11 +1,12 @@
-import { useEffect, useState, useCallback } from 'react';
+import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
+import { useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, Dimensions, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { promocionesAPI } from '@/src/services/api';
 
 const GOLD = '#C8960C';
@@ -67,7 +68,8 @@ function PromoCard({ bolsa, onPress }: { bolsa: any; onPress: () => void }) {
 }
 
 export default function PromocionesScreen() {
-  const [bolsas, setBolsas] = useState<any[]>([]);
+  const [bolsasGuardadas, setBolsas] = useState<any[]>([]);
+  const bolsas = usePublicacionesVigentes(bolsasGuardadas);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [catSelected, setCatSelected] = useState('Todos');
@@ -83,7 +85,10 @@ export default function PromocionesScreen() {
     }
   }, []);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  // Al recuperar el foco (no solo al montar): las pestañas quedan montadas, así
+  // que sin esto una publicación aprobada por el admin no aparecía hasta un
+  // pull-to-refresh manual o reiniciar la app.
+  useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
   const filtradas = catSelected === 'Todos'
     ? bolsas
