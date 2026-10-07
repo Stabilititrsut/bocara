@@ -4,7 +4,7 @@ import {
   StyleSheet, SafeAreaView, ActivityIndicator, Platform, RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { negociosAPI, uploadsAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
@@ -463,10 +463,15 @@ export default function PerfilRestauranteScreen() {
             <Text style={s.statVal}>{negocio?.calificacion_promedio?.toFixed(1) || '–'}</Text>
             <Text style={s.statLabel}>Calificación</Text>
           </View>
-          <View style={s.stat}>
+          <TouchableOpacity
+            style={s.stat}
+            onPress={() => router.push('/restaurante/resenas' as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Ver y responder reseñas"
+          >
             <Text style={s.statVal}>{negocio?.total_resenas || 0}</Text>
-            <Text style={s.statLabel}>Reseñas</Text>
-          </View>
+            <Text style={[s.statLabel, { textDecorationLine: 'underline' }]}>Reseñas ›</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Datos básicos */}

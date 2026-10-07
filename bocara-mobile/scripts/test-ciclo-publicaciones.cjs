@@ -97,6 +97,7 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     '@/src/utils/stock': stockReal,
     '@/src/utils/cartFeedback': { mostrarErrorCarrito() {} },
     '@/src/utils/backNavigation': { volver() {} },
+    '@/src/utils/liquidacionesResenas': load('src/utils/liquidacionesResenas.ts'),
     '@/src/context/CartContext': { useCart: () => ({ loaded: true, items: [], cantidad: 0, total: 0, agregar: () => ({ ok: true }) }) },
     '@/src/context/AuthContext': { useAuth: () => ({ usuario: { rol: 'cliente' } }) },
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) },

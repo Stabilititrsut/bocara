@@ -1,5 +1,6 @@
 import { usePublicacionesVigentes } from '@/src/utils/usePublicacionesVigentes';
 import { volver } from '@/src/utils/backNavigation';
+import { estrellas, nombreCorto } from '@/src/utils/liquidacionesResenas';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
@@ -447,11 +448,23 @@ export default function NegocioDetailScreen() {
               {resenas.slice(0, 5).map((r: any) => (
                 <View key={r.id} style={sr.card}>
                   <View style={sr.top}>
-                    <Text style={sr.nombre}>{r.usuarios?.nombre || 'Cliente'}</Text>
-                    <Text style={sr.estrellas}>{'★'.repeat(r.calificacion)}{'☆'.repeat(5 - r.calificacion)}</Text>
+                    <Text style={sr.nombre}>{nombreCorto(r.usuarios?.nombre)}</Text>
+                    <Text style={sr.estrellas}>{estrellas(r.calificacion)}</Text>
                   </View>
+                  {r.compra_verificada && (
+                    <View style={sr.verificada} accessibilityLabel="Compra verificada">
+                      <Ionicons name="checkmark-circle" size={12} color="#065F46" />
+                      <Text style={sr.verificadaText}>Compra verificada</Text>
+                    </View>
+                  )}
                   {!!r.comentario && <Text style={sr.comentario}>{r.comentario}</Text>}
                   <Text style={sr.fecha}>{new Date(r.created_at).toLocaleDateString('es-GT', { day: 'numeric', month: 'short', year: 'numeric' })}</Text>
+                  {!!r.respuesta_restaurante && (
+                    <View style={sr.respuesta}>
+                      <Text style={sr.respuestaLabel}>Respuesta de {negocio?.nombre || 'el comercio'}</Text>
+                      <Text style={sr.respuestaTexto}>{r.respuesta_restaurante}</Text>
+                    </View>
+                  )}
                 </View>
               ))}
             </View>
@@ -495,6 +508,17 @@ const sr = StyleSheet.create({
   estrellas: { fontSize: 12, color: '#FF9800', letterSpacing: 1 },
   comentario: { fontSize: 13, color: '#444', lineHeight: 20, marginBottom: 4 },
   fecha: { fontSize: 11, color: GRAY },
+  verificada: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+    backgroundColor: '#D1FAE5', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginBottom: 6,
+  },
+  verificadaText: { fontSize: 11, fontWeight: '700', color: '#065F46' },
+  respuesta: {
+    marginTop: 8, backgroundColor: '#FFFFFF', borderRadius: 10, padding: 10,
+    borderLeftWidth: 3, borderLeftColor: '#FF9800',
+  },
+  respuestaLabel: { fontSize: 11, fontWeight: '800', color: GRAY, marginBottom: 2 },
+  respuestaTexto: { fontSize: 13, color: '#444', lineHeight: 19 },
 });
 
 // ─── PrevioCard styles ────────────────────────────────────────────────────────

@@ -47,6 +47,7 @@ function RestauranteTabs() {
       <Tabs.Screen name="perfil"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />
       <Tabs.Screen name="cupones"        options={{ href: null }} />
       <Tabs.Screen name="historial"      options={{ href: null }} />
+      <Tabs.Screen name="resenas"        options={{ href: null }} />
     </Tabs>
   );
 }

@@ -47,16 +47,18 @@ router.get('/restaurante', authMiddleware, async (req, res) => {
 });
 
 // GET /api/resenas/:negocio_id — reseñas de un negocio (público, solo visibles)
+// `compra_verificada`: la reseña está ligada a un pedido entregado (POST lo
+// exige). Se expone el booleano, nunca el pedido_id.
 router.get('/:negocio_id', async (req, res) => {
   const { data, error } = await supabase
     .from('resenas')
-    .select('id,negocio_id,calificacion,comentario,respuesta_restaurante,respondida_en,created_at,usuarios(nombre)')
+    .select('id,negocio_id,pedido_id,calificacion,comentario,respuesta_restaurante,respondida_en,created_at,usuarios(nombre)')
     .eq('negocio_id', req.params.negocio_id)
     .eq('visible', true)
     .order('created_at', { ascending: false })
     .limit(50);
   if (error) return res.status(500).json({ error: error.message });
-  res.json(data || []);
+  res.json((data || []).map(({ pedido_id: pedidoId, ...r }) => ({ ...r, compra_verificada: pedidoId != null })));
 });
 
 // POST /api/resenas — crear reseña verificada

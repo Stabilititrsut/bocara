@@ -35,6 +35,23 @@ function filtrarSoloPagosCuboVerificados(query) {
     .not('cubo_identifier', 'is', null);
 }
 
+// `resena_id` en cada pedido: la app decide con él si mostrar "Dejar reseña"
+// (antes lo recordaba solo en AsyncStorage del dispositivo — al reinstalar o
+// cambiar de teléfono volvía a ofrecer calificar un pedido ya calificado).
+// Si la consulta falla, el campo se omite (no se inventa null) y la app cae en
+// mostrar el botón; el backend responde 409 si el pedido ya tenía reseña.
+async function adjuntarResenaId(pedidos) {
+  const ids = pedidos.map(p => p.id);
+  if (ids.length === 0) return pedidos;
+  const { data, error } = await supabase.from('resenas').select('id,pedido_id').in('pedido_id', ids);
+  if (error) {
+    console.warn('[PEDIDOS API] no se pudo adjuntar resena_id:', error.message);
+    return pedidos;
+  }
+  const porPedido = new Map((data || []).map(r => [r.pedido_id, r.id]));
+  return pedidos.map(p => ({ ...p, resena_id: porPedido.get(p.id) || null }));
+}
+
 // GET /api/pedidos — pedidos del cliente autenticado
 router.get('/', authMiddleware, async (req, res) => {
   try {
@@ -56,7 +73,7 @@ router.get('/', authMiddleware, async (req, res) => {
     }
     if (error) return res.status(500).json({ error: error.message });
     console.log('[PEDIDOS API] usuario:', req.usuario.id, 'rows:', data?.length, 'ids:', data?.map(p => p.id));
-    res.json(data || []);
+    res.json(await adjuntarResenaId(data || []));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

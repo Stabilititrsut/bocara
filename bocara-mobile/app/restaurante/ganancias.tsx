@@ -1,10 +1,29 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, RefreshControl,
+  SafeAreaView, ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { abrirComprobante } from '@/src/utils/abrirComprobante';
+import { etiquetaMes, fechaGT, estadoLiquidacion, pagoVencido, quetzales } from '@/src/utils/liquidacionesResenas';
+
+type Liquidacion = {
+  id: string;
+  mes: string | null;
+  folio: string | null;
+  estado: string;
+  monto: number;
+  ventas_brutas: number;
+  comision_bocara: number;
+  propinas: number;
+  costo_envio: number;
+  total_pedidos: number;
+  fecha_limite_pago: string | null;
+  pagado_en: string | null;
+  created_at: string;
+  datos_transferencia: { referencia?: string } | null;
+};
 
 type Periodo = 'dia' | 'semana' | 'mes' | 'todo';
 
@@ -20,16 +39,43 @@ export default function GananciasScreen() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [liquidaciones, setLiquidaciones] = useState<Liquidacion[]>([]);
+  const [errorLiquidaciones, setErrorLiquidaciones] = useState<string | null>(null);
+  const [abriendo, setAbriendo] = useState<string | null>(null);
+  const [errorComprobante, setErrorComprobante] = useState<{ id: string; msg: string } | null>(null);
 
   const cargar = useCallback(async (p: Periodo = periodo) => {
-    try {
-      const res = await negociosAPI.ganancias(p);
-      setData(res.data);
-    } catch { } finally {
-      setLoading(false);
-      setRefreshing(false);
+    // El resumen del periodo y el historial mensual son independientes: si
+    // uno falla, el otro se muestra igual.
+    const [ganancias, liqs] = await Promise.allSettled([
+      negociosAPI.ganancias(p),
+      negociosAPI.liquidaciones(),
+    ]);
+    if (ganancias.status === 'fulfilled') setData(ganancias.value.data);
+    if (liqs.status === 'fulfilled') {
+      setLiquidaciones(liqs.value.data || []);
+      setErrorLiquidaciones(null);
+    } else {
+      setErrorLiquidaciones(liqs.reason?.message || 'No se pudieron cargar tus liquidaciones');
     }
+    setLoading(false);
+    setRefreshing(false);
   }, [periodo]);
+
+  async function verComprobante(liq: Liquidacion) {
+    setAbriendo(liq.id);
+    setErrorComprobante(null);
+    try {
+      await abrirComprobante(async () => (await negociosAPI.comprobanteLiquidacion(liq.id)).data.url);
+    } catch (e: any) {
+      // Alert no se ve en web: el error también queda en la tarjeta.
+      const msg = e?.message || 'No se pudo abrir el comprobante';
+      setErrorComprobante({ id: liq.id, msg });
+      Alert.alert('Comprobante', msg);
+    } finally {
+      setAbriendo(null);
+    }
+  }
 
   useEffect(() => { cargar(periodo); }, [periodo, cargar]);
 
@@ -40,7 +86,6 @@ export default function GananciasScreen() {
   );
 
   const resumen = data?.resumen || {};
-  const liquidaciones = data?.liquidaciones || [];
   const banco = data?.negocio?.datos_bancarios;
   // % real de comisión de ESTE período: derivado de los montos que ya devolvió
   // el backend (snapshot financiero por pedido, nunca recalculado con el %
@@ -143,7 +188,9 @@ export default function GananciasScreen() {
               <Text style={s.bancoLabel}>Titular</Text>
               <Text style={s.bancoVal}>{banco.titular || '—'}</Text>
             </View>
-            <Text style={s.bancoHint}>Los pagos se realizan cada semana los viernes.</Text>
+            <Text style={s.bancoHint}>
+              Tus ventas se liquidan al cierre de cada mes y se pagan dentro de los primeros 3 días hábiles del mes siguiente.
+            </Text>
           </View>
         ) : (
           <View style={s.sinBancoCard}>
@@ -153,38 +200,91 @@ export default function GananciasScreen() {
           </View>
         )}
 
-        {/* Historial de liquidaciones */}
-        <Text style={s.sectionTitle}>Historial de pagos</Text>
-        {liquidaciones.length === 0 ? (
+        {/* Liquidaciones mensuales */}
+        <Text style={s.sectionTitle}>Liquidaciones mensuales</Text>
+        {errorLiquidaciones ? (
           <View style={s.emptyLiq}>
-            <Text style={s.emptyLiqText}>Aún no tienes pagos registrados.</Text>
+            <Text style={[s.emptyLiqText, { color: Colors.error }]}>{errorLiquidaciones}</Text>
+            <TouchableOpacity onPress={() => { setRefreshing(true); cargar(periodo); }}>
+              <Text style={s.reintentar}>Reintentar</Text>
+            </TouchableOpacity>
+          </View>
+        ) : liquidaciones.length === 0 ? (
+          <View style={s.emptyLiq}>
+            <Text style={s.emptyLiqText}>Aún no tienes liquidaciones. Se generan al cierre de cada mes.</Text>
           </View>
         ) : (
-          liquidaciones.map((liq: any) => (
-            <View key={liq.id} style={s.liqCard}>
-              <View style={s.liqHeader}>
-                <View style={[s.liqEstado, liq.estado === 'pagado' && s.liqEstadoPagado]}>
-                  <Text style={[s.liqEstadoText, liq.estado === 'pagado' && s.liqEstadoTextPagado]}>
-                    {liq.estado === 'pagado' ? '✅ Pagado' : '⏳ Pendiente'}
-                  </Text>
+          liquidaciones.map((liq) => {
+            const estado = estadoLiquidacion(liq.estado);
+            const vencido = pagoVencido(liq);
+            return (
+              <View key={liq.id} style={s.liqCard}>
+                <View style={s.liqHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.liqMes}>{etiquetaMes(liq.mes)}</Text>
+                    {!!liq.folio && <Text style={s.liqFolio}>Folio {liq.folio}</Text>}
+                  </View>
+                  <Text style={s.liqMonto}>{quetzales(liq.monto)}</Text>
                 </View>
-                <Text style={s.liqMonto}>Q{(liq.monto || 0).toFixed(2)}</Text>
-              </View>
-              <View style={s.liqDetails}>
-                <Text style={s.liqDetail}>{liq.total_pedidos || '—'} pedidos</Text>
-                <Text style={s.liqDetail}>
-                  {liq.pagado_en
-                    ? `Pagado: ${new Date(liq.pagado_en).toLocaleDateString('es-GT')}`
-                    : liq.created_at
-                      ? new Date(liq.created_at).toLocaleDateString('es-GT')
-                      : '—'}
+
+                <View style={s.liqDetails}>
+                  <View style={[s.liqEstado, { backgroundColor: estado.bg }]}>
+                    <Text style={[s.liqEstadoText, { color: estado.color }]}>{estado.label}</Text>
+                  </View>
+                  <Text style={s.liqDetail}>{liq.total_pedidos || 0} pedidos</Text>
+                </View>
+
+                <Text style={[s.liqDetail, { marginTop: 8 }, vencido && { color: Colors.error, fontWeight: '700' }]}>
+                  {liq.estado === 'pagado' || liq.estado === 'liquidado'
+                    ? `Pagado el ${fechaGT(liq.pagado_en)}`
+                    : liq.fecha_limite_pago
+                      ? `${vencido ? 'Vencido · ' : ''}Fecha límite de pago: ${fechaGT(liq.fecha_limite_pago)}`
+                      : `Generada el ${fechaGT(liq.created_at)}`}
                 </Text>
+                {!!liq.datos_transferencia?.referencia && (
+                  <Text style={s.liqRef}>Ref: {liq.datos_transferencia.referencia}</Text>
+                )}
+
+                <View style={s.liqDesglose}>
+                  <View style={s.liqDesgloseRow}>
+                    <Text style={s.liqDesgloseLabel}>Ventas brutas</Text>
+                    <Text style={s.liqDesgloseVal}>{quetzales(liq.ventas_brutas)}</Text>
+                  </View>
+                  <View style={s.liqDesgloseRow}>
+                    <Text style={s.liqDesgloseLabel}>Comisión Bocara</Text>
+                    <Text style={[s.liqDesgloseVal, { color: Colors.error }]}>−{quetzales(liq.comision_bocara)}</Text>
+                  </View>
+                  {Number(liq.propinas) > 0 && (
+                    <View style={s.liqDesgloseRow}>
+                      <Text style={s.liqDesgloseLabel}>Propinas</Text>
+                      <Text style={s.liqDesgloseVal}>{quetzales(liq.propinas)}</Text>
+                    </View>
+                  )}
+                  {Number(liq.costo_envio) > 0 && (
+                    <View style={s.liqDesgloseRow}>
+                      <Text style={s.liqDesgloseLabel}>Envíos</Text>
+                      <Text style={s.liqDesgloseVal}>{quetzales(liq.costo_envio)}</Text>
+                    </View>
+                  )}
+                </View>
+
+                <TouchableOpacity
+                  style={[s.btnComprobante, abriendo === liq.id && { opacity: 0.6 }]}
+                  onPress={() => verComprobante(liq)}
+                  disabled={abriendo !== null}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Ver comprobante de ${etiquetaMes(liq.mes)}`}
+                >
+                  {abriendo === liq.id
+                    ? <ActivityIndicator size="small" color={Colors.white} />
+                    : <Text style={s.btnComprobanteText}>📄 Ver comprobante</Text>}
+                </TouchableOpacity>
+                {errorComprobante?.id === liq.id && (
+                  <Text style={s.liqError}>{errorComprobante.msg}</Text>
+                )}
               </View>
-              {liq.datos_transferencia?.referencia && (
-                <Text style={s.liqRef}>Ref: {liq.datos_transferencia.referencia}</Text>
-              )}
-            </View>
-          ))
+            );
+          })
         )}
 
         <View style={{ height: 24 }} />
@@ -231,12 +331,20 @@ const s = StyleSheet.create({
   emptyLiqText: { fontSize: 13, color: Colors.textSecondary },
   liqCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1.5, borderColor: Colors.border },
   liqHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  liqEstado: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#F59E0B40' },
-  liqEstadoPagado: { backgroundColor: '#D1FAE5', borderColor: '#34D39940' },
-  liqEstadoText: { fontSize: 12, fontWeight: '800', color: '#92400E' },
-  liqEstadoTextPagado: { color: '#065F46' },
+  liqEstado: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  liqEstadoText: { fontSize: 12, fontWeight: '800' },
+  liqMes: { fontSize: 15, fontWeight: '800', color: Colors.brown },
+  liqFolio: { fontSize: 11, color: Colors.textLight, marginTop: 2 },
   liqMonto: { fontSize: 18, fontWeight: '900', color: Colors.brown },
-  liqDetails: { flexDirection: 'row', justifyContent: 'space-between' },
+  liqDetails: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   liqDetail: { fontSize: 12, color: Colors.textSecondary },
   liqRef: { fontSize: 11, color: Colors.textLight, marginTop: 4 },
+  liqDesglose: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, borderTopColor: Colors.border },
+  liqDesgloseRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 },
+  liqDesgloseLabel: { fontSize: 12, color: Colors.textSecondary },
+  liqDesgloseVal: { fontSize: 12, fontWeight: '700', color: Colors.textPrimary },
+  btnComprobante: { marginTop: 12, backgroundColor: Colors.brown, borderRadius: 10, paddingVertical: 10, alignItems: 'center' },
+  btnComprobanteText: { color: Colors.white, fontWeight: '800', fontSize: 13 },
+  liqError: { fontSize: 12, color: Colors.error, marginTop: 6, textAlign: 'center' },
+  reintentar: { fontSize: 13, fontWeight: '800', color: Colors.orange, marginTop: 8 },
 });

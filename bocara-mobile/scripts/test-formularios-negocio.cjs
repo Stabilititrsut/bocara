@@ -399,6 +399,8 @@ function renderGanancias(resumenOverrides = {}) {
   const Component = load('app/restaurante/ganancias.tsx', {
     react: h.react, 'react-native': native, '@/src/services/api': { negociosAPI: { ganancias: async () => ({ data }) } },
     '@/constants/Colors': { Colors: {} },
+    '@/src/utils/liquidacionesResenas': load('src/utils/liquidacionesResenas.ts'),
+    '@/src/utils/abrirComprobante': { abrirComprobante: async () => {} },
   }).default;
   return textOf(Component());
 }

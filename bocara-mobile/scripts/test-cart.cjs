@@ -308,6 +308,8 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
     '@/constants/Colors': { Colors: {} }, '@/src/services/api': {},
     '@react-native-async-storage/async-storage': {}, 'expo-web-browser': {},
     '@/src/utils/backNavigation': { volver: (router, fallback) => router.replace(fallback) },
+    // Ficha del negocio: estrellas / nombre abreviado de las reseñas (módulo real).
+    '@/src/utils/liquidacionesResenas': load('src/utils/liquidacionesResenas.ts'),
     ...extraMocks,
   };
   const Component = load(file, mocks).default;

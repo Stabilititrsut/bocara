@@ -154,6 +154,11 @@ export const negociosAPI = {
   reenviarSolicitud: () => api.post('/negocios/mi-negocio/reenviar'),
   estadisticas: (id: string) => api.get(`/negocios/${id}/estadisticas`),
   ganancias: (periodo?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo } }),
+  // Liquidaciones mensuales del comercio y URL firmada (10 min) de su comprobante PDF.
+  liquidaciones: (params?: { mes?: string; estado?: string }) =>
+    api.get('/negocios/mi-negocio/liquidaciones', { params }),
+  comprobanteLiquidacion: (id: string) =>
+    api.get(`/negocios/mi-negocio/liquidaciones/${id}/comprobante`),
   solicitarCambios: (data: any) => api.post('/negocios/mi-negocio/solicitar-cambios', data),
   cambiosPendientes: () => api.get('/negocios/mi-negocio/cambios-pendientes'),
   impacto: (id: string) => api.get(`/negocios/${id}/impacto`),
@@ -213,6 +218,9 @@ export const pagosAPI = {
 export const resenasAPI = {
   listarPorNegocio: (negocioId: string) => api.get(`/resenas/${negocioId}`),
   crear: (data: any) => api.post('/resenas', data),
+  // Comercio: reseñas recibidas (incluye ocultas por moderación) y su respuesta.
+  restaurante: () => api.get('/resenas/restaurante'),
+  responder: (id: string, respuesta: string) => api.patch(`/resenas/${id}/respuesta`, { respuesta }),
 };
 
 export const notificacionesAPI = {
@@ -267,6 +275,11 @@ export const adminAPI = {
   liquidaciones: () => api.get('/admin/liquidaciones'),
   pagarLiquidacion: (restaurante_id: string, data?: any) =>
     api.post(`/admin/liquidaciones/${restaurante_id}/pagar`, data || {}),
+  comprobanteLiquidacion: (id: string) => api.get(`/admin/liquidaciones/${id}/comprobante`),
+  resenas: (params?: { negocio_id?: string; visible?: 'true' | 'false'; limit?: number }) =>
+    api.get('/admin/resenas', { params }),
+  moderarResena: (id: string, data: { visible: boolean; motivo?: string }) =>
+    api.patch(`/admin/resenas/${id}/moderar`, data),
   contenidoPendiente: () => api.get('/admin/contenido/pendiente'),
   aprobarBolsa: (id: string) => api.put(`/admin/bolsas/${id}/aprobar`),
   rechazarBolsa: (id: string, motivo?: string) =>

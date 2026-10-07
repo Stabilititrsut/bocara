@@ -4,13 +4,15 @@ import {
   RefreshControl, ActivityIndicator, SafeAreaView, Alert,
   Modal, TextInput, KeyboardAvoidingView, Platform, Linking,
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { pedidosAPI, resenasAPI } from '@/src/services/api';
 import { Pedido } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useRealtime } from '@/src/context/RealtimeContext';
 import { useLocalSearchParams } from 'expo-router';
+import {
+  puedeResenar, yaResenado, resenaExistenteDeError, largoTexto, MAX_TEXTO_RESENA,
+} from '@/src/utils/liquidacionesResenas';
 
 const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
   pendiente:       { label: 'Pendiente',          color: '#FF9800',            bg: '#FFF3E0',       icon: 'time-outline' },
@@ -22,8 +24,6 @@ const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; 
   cancelado:       { label: 'Cancelado',            color: Colors.error,         bg: Colors.errorLight, icon: 'close-circle-outline' },
 };
 
-const RESENAS_KEY = 'bocara_resenas_enviadas';
-
 interface ResenaState {
   visible: boolean;
   pedido: Pedido | null;
@@ -33,7 +33,7 @@ interface ResenaState {
   error: string | null;
 }
 
-function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosicion }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void; enfocado?: boolean; onPosicion?: (y: number) => void }) {
+function PedidoCard({ pedido, onResena, onCancelar, enfocado, onPosicion }: { pedido: Pedido; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void; enfocado?: boolean; onPosicion?: (y: number) => void }) {
   const estado = ESTADO_CONFIG[pedido.estado] || ESTADO_CONFIG.pendiente;
   const activo = ['confirmado','en_preparacion','listo'].includes(pedido.estado);
 
@@ -88,13 +88,13 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosici
         <Text style={s.refCode}>{pedido.codigo_recogida}</Text>
       )}
 
-      {(pedido.estado === 'recogido' || pedido.estado === 'completado') && !yaReseno && (
+      {puedeResenar(pedido) && (
         <TouchableOpacity style={s.btnResena} onPress={() => onResena(pedido)}>
           <Ionicons name="star-outline" size={15} color={Colors.primary} />
           <Text style={s.btnResenaText}>Dejar reseña</Text>
         </TouchableOpacity>
       )}
-      {(pedido.estado === 'recogido' || pedido.estado === 'completado') && yaReseno && (
+      {yaResenado(pedido) && (
         <View style={s.resenaEnviada}>
           <Ionicons name="checkmark-circle" size={15} color={Colors.primary} />
           <Text style={s.resenaEnviadaText}>Reseña enviada</Text>
@@ -141,6 +141,9 @@ function ResenaModal({ state, onClose, onEnviar, onChange }: {
             onChangeText={(v) => onChange('comentario', v)}
             multiline numberOfLines={4} textAlignVertical="top"
           />
+          <Text style={[s.contador, largoTexto(state.comentario.trim()) > MAX_TEXTO_RESENA && { color: Colors.error }]}>
+            {largoTexto(state.comentario.trim())}/{MAX_TEXTO_RESENA}
+          </Text>
           {state.error && <Text style={s.errorText}>{state.error}</Text>}
           <TouchableOpacity style={[s.btnEnviar, state.enviando && s.btnDisabled]} onPress={onEnviar} disabled={state.enviando}>
             <Text style={s.btnEnviarText}>{state.enviando ? 'Enviando...' : 'Enviar reseña'}</Text>
@@ -159,7 +162,6 @@ export default function PedidosScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorCarga, setErrorCarga] = useState(false);
-  const [resenasEnviadas, setResenasEnviadas] = useState<Set<string>>(new Set());
   const [resena, setResena] = useState<ResenaState>({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
   const pollingRef = useRef<any>(null);
   // ?pedidoId=<uuid> llega de un tap en una notificación de pedido
@@ -176,12 +178,6 @@ export default function PedidosScreen() {
   const propsEnfoque = (p: Pedido) => (String(p.id) === pedidoEnfocado
     ? { enfocado: true, onPosicion: (y: number) => alPosicionar(String(p.id), y) }
     : {});
-
-  useEffect(() => {
-    AsyncStorage.getItem(RESENAS_KEY).then((val) => {
-      if (val) setResenasEnviadas(new Set(JSON.parse(val)));
-    });
-  }, []);
 
   const cargar = useCallback(async () => {
     try {
@@ -229,22 +225,40 @@ export default function PedidosScreen() {
     }
   }
 
+  // El estado "ya calificado" vive en el backend (`resena_id` de GET /pedidos);
+  // aquí solo se refleja en memoria hasta la próxima recarga.
+  const marcarResenado = useCallback((pedidoId: string, resenaId: string) => {
+    setPedidos((lista) => lista.map((p) => (String(p.id) === String(pedidoId) ? { ...p, resena_id: resenaId } : p)));
+  }, []);
+
   async function enviarResena() {
     if (!resena.pedido) return;
+    if (largoTexto(resena.comentario.trim()) > MAX_TEXTO_RESENA) {
+      setResena((r) => ({ ...r, error: `El comentario no puede superar ${MAX_TEXTO_RESENA} caracteres` }));
+      return;
+    }
+    const pedidoId = resena.pedido.id;
     setResena((r) => ({ ...r, enviando: true, error: null }));
     try {
-      await resenasAPI.crear({
-        pedido_id: resena.pedido.id,
+      const { data } = await resenasAPI.crear({
+        pedido_id: pedidoId,
         negocio_id: resena.pedido.negocio_id,
         calificacion: resena.calificacion,
         comentario: resena.comentario,
       });
-      const nuevas = new Set([...resenasEnviadas, resena.pedido.id]);
-      setResenasEnviadas(nuevas);
-      await AsyncStorage.setItem(RESENAS_KEY, JSON.stringify([...nuevas]));
+      marcarResenado(pedidoId, data?.id || 'existente');
       setResena({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
       Alert.alert('¡Gracias!', 'Tu reseña fue enviada 🌟');
     } catch (e: any) {
+      // 409: ya estaba calificado (otro dispositivo o doble toque) — no es un
+      // error para el cliente; se marca y se cierra.
+      const existente = resenaExistenteDeError(e);
+      if (existente) {
+        marcarResenado(pedidoId, existente);
+        setResena({ visible: false, pedido: null, calificacion: 5, comentario: '', enviando: false, error: null });
+        Alert.alert('Reseña registrada', 'Ya habías calificado este pedido.');
+        return;
+      }
       // Alert.alert no muestra nada en web (react-native-web no lo implementa),
       // así que el error también se refleja inline en el modal para que el
       // usuario no crea que la reseña se guardó cuando en realidad falló.
@@ -304,13 +318,13 @@ export default function PedidosScreen() {
           {activos.length > 0 && (
             <>
               <Text style={s.seccionLabel}>En curso</Text>
-              {activos.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} {...propsEnfoque(p)} />)}
+              {activos.map((p) => <PedidoCard key={p.id} pedido={p} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} {...propsEnfoque(p)} />)}
             </>
           )}
           {historial.length > 0 && (
             <>
               <Text style={s.seccionLabel}>Historial</Text>
-              {historial.map((p) => <PedidoCard key={p.id} pedido={p} yaReseno={resenasEnviadas.has(p.id)} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} {...propsEnfoque(p)} />)}
+              {historial.map((p) => <PedidoCard key={p.id} pedido={p} onResena={(pd) => setResena({ visible: true, pedido: pd, calificacion: 5, comentario: '', enviando: false, error: null })} onCancelar={confirmarCancelacion} {...propsEnfoque(p)} />)}
             </>
           )}
           <View style={{ height: 30 }} />
@@ -384,7 +398,8 @@ const s = StyleSheet.create({
   estrellas: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginBottom: 8 },
   estrellaBtn: { padding: 4 },
   estrellaLabel: { textAlign: 'center', fontSize: 13, color: Colors.textSecondary, fontWeight: '600', marginBottom: 22 },
-  comentarioInput: { backgroundColor: Colors.surface, borderRadius: 16, padding: 16, fontSize: 14, color: Colors.textPrimary, height: 100, marginBottom: 18 },
+  comentarioInput: { backgroundColor: Colors.surface, borderRadius: 16, padding: 16, fontSize: 14, color: Colors.textPrimary, height: 100, marginBottom: 4 },
+  contador: { fontSize: 11, color: Colors.textLight, textAlign: 'right', marginBottom: 14 },
   errorText: { color: Colors.error, fontSize: 13, fontWeight: '600', textAlign: 'center', marginBottom: 14 },
   btnEnviar: { backgroundColor: Colors.primary, borderRadius: 50, paddingVertical: 17, alignItems: 'center', marginBottom: 10, elevation: 3, shadowColor: Colors.primary, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.3, shadowRadius: 8 },
   btnDisabled: { backgroundColor: Colors.textLight, elevation: 0, shadowOpacity: 0 },

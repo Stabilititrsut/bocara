@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { abrirComprobante } from '@/src/utils/abrirComprobante';
+import { etiquetaMes, estadoLiquidacion } from '@/src/utils/liquidacionesResenas';
 
 const DARK = '#1E293B';
 const DARK2 = '#0F172A';
@@ -18,6 +20,18 @@ export default function AdminLiquidacionesScreen() {
   const [referencia, setReferencia] = useState('');
   const [tab, setTab] = useState<'pendientes' | 'historial'>('pendientes');
   const [comisionPct, setComisionPct] = useState(25);
+  const [abriendo, setAbriendo] = useState<string | null>(null);
+
+  async function verComprobante(id: string) {
+    setAbriendo(id);
+    try {
+      await abrirComprobante(async () => (await adminAPI.comprobanteLiquidacion(id)).data.url);
+    } catch (e: any) {
+      Alert.alert('Comprobante', e?.message || 'No se pudo abrir el comprobante');
+    } finally {
+      setAbriendo(null);
+    }
+  }
 
   const cargar = useCallback(async () => {
     try {
@@ -193,6 +207,9 @@ export default function AdminLiquidacionesScreen() {
                     <Text style={s.histNombre}>{liq.negocios?.nombre || 'Negocio'}</Text>
                     <Text style={s.histMonto}>Q{(liq.monto || 0).toFixed(2)}</Text>
                   </View>
+                  <Text style={s.histDetail}>
+                    {etiquetaMes(liq.mes)}{liq.folio ? ` · ${liq.folio}` : ''} · {estadoLiquidacion(liq.estado).label}
+                  </Text>
                   <View style={s.histDetails}>
                     <Text style={s.histDetail}>
                       {liq.pagado_en
@@ -215,6 +232,15 @@ export default function AdminLiquidacionesScreen() {
                       <Text style={s.histDetail}>Propinas: Q{liq.propinas.toFixed(2)}</Text>
                     )}
                   </View>
+                  <TouchableOpacity
+                    style={[s.btnComprobante, abriendo === liq.id && { opacity: 0.6 }]}
+                    onPress={() => verComprobante(liq.id)}
+                    disabled={abriendo !== null}
+                  >
+                    {abriendo === liq.id
+                      ? <ActivityIndicator size="small" color="#FFFFFF" />
+                      : <Text style={s.btnComprobanteText}>📄 Ver comprobante</Text>}
+                  </TouchableOpacity>
                 </View>
               ))
             )}
@@ -280,6 +306,8 @@ export default function AdminLiquidacionesScreen() {
 }
 
 const s = StyleSheet.create({
+  btnComprobante: { marginTop: 10, backgroundColor: DARK, borderRadius: 10, paddingVertical: 9, alignItems: 'center' },
+  btnComprobanteText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
   root: { flex: 1, backgroundColor: DARK2 },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: DARK, padding: 20, borderBottomWidth: 1, borderBottomColor: '#334155' },
