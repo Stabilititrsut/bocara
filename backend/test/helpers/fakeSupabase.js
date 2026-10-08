@@ -26,6 +26,11 @@ const DEFAULTS = {
     fecha_caducidad: null,
     created_at: new Date().toISOString(),
   }),
+  // DEFAULTs de la migración 202610061200 (visible) y de la tabla (created_at).
+  resenas: () => ({
+    visible: true,
+    created_at: new Date().toISOString(),
+  }),
 };
 
 const UNICOS = { eventos_dominio: ['idempotency_key'] };
