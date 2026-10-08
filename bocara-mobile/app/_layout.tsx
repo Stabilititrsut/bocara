@@ -11,6 +11,7 @@ import { OnboardingProvider, useOnboarding } from '@/src/context/OnboardingConte
 import { RealtimeProvider } from '@/src/context/RealtimeContext';
 import { resolverRutaNotificacion } from '@/src/utils/resolverRutaNotificacion';
 import { recordarPushToken } from '@/src/services/pushToken';
+import { iniciarAnalitica, establecerAnaliticaHabilitada } from '@/src/utils/analitica';
 import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 
@@ -202,6 +203,15 @@ function AuthGuard() {
     // usuario anterior a la sesión nueva.
     if (!usuario) { pushRegistered.current = false; pendingNotifRef.current = null; }
   }, [usuario]);
+
+  // Analítica del embudo: envío por lotes durante toda la vida de la app; al
+  // desmontar se envía lo pendiente. Solo visitantes y clientes alimentan el
+  // embudo: la navegación de admin/restaurante no es tráfico de compra.
+  useEffect(() => iniciarAnalitica(), []);
+  const rolUsuario = usuario?.rol;
+  useEffect(() => {
+    establecerAnaliticaHabilitada(!rolUsuario || rolUsuario === 'cliente');
+  }, [rolUsuario]);
 
   // Rotación del token: FCM/APNs pueden reemplazar el token nativo en
   // cualquier momento (reinstalación de servicios, restauración de backup).
