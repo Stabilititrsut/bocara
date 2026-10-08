@@ -46,6 +46,7 @@
 const { validarConfirmacionPago } = require('./orderStateMachine');
 const { reservaPagable, instanteReserva, RESERVA_TTL_MINUTOS } = require('./stock');
 const { enqueueEventBestEffort } = require('./eventosDominio');
+const { finalizarIntento } = require('./intentosPago');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -350,6 +351,12 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
   const { referenceId, authorizationCode, processedAt, metadata } = body;
   const orderId            = metadata?.orderId;
 
+  // Cierre del intento en intentos_pago (KPIs de pagos). Best-effort: nunca
+  // lanza ni cambia la respuesta a Cubo.
+  const cerrarIntento = (resultado) => finalizarIntento({
+    paymentIntentToken, resultado, statusRaw: rawStatus || null, cliente: supabase, ahora: new Date(ahora),
+  });
+
   registrar('info', 'recibido', { status: rawStatus || null, estado_normalizado: estadoNormalizado, identifier_enmascarado: enmascararIdentifier(paymentIntentToken), pedido_id: orderId || null });
 
   // ── Payload corrupto o incompleto → 400, sin tocar red ni BD ───────────────
@@ -388,6 +395,8 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
       // evento ya completado no se vuelve a ejecutar.
       procesarEventosPedido(pedido.id).catch(err =>
         registrar('warn', 'eventos_pendientes_fallo', { pedido_id: pedido.id, detalle: err.message }));
+      // Si el cierre falló en la primera entrega, el reintento lo completa.
+      await cerrarIntento('aprobado');
       return { statusCode: 200, warning: 'pedido ya procesado', tipo: 'duplicado' };
     }
 
@@ -583,6 +592,8 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
           cliente: supabase,
         });
 
+        await cerrarIntento('aprobado');
+
         registrar('info', 'pago_confirmado', { pedido_id: pedido.id, codigo_recogida: codigoRecogida });
         return { statusCode: 200, tipo: 'procesado' };
       }
@@ -663,6 +674,8 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
       discriminator: paymentIntentToken, payload: { status: rawStatus },
       cliente: supabase,
     });
+
+    await cerrarIntento('fallido');
 
     registrar('info', 'pago_rechazado_registrado', {
       pedido_id: pedido.id,

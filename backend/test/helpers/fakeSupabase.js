@@ -3,15 +3,17 @@
 // sin red ni base de datos. Solo implementa lo que usan las rutas de
 // publicaciones (bolsas.js, admin.js, negocios.js) y sus servicios:
 //
-//   select (con embebidos `tabla(cols)` y { count, head }), insert, update,
-//   delete, eq, neq, gt, gte, lt, lte, in, is, ilike, not(col,'in',...), or,
-//   order, limit, single, maybeSingle, rpc.
+//   select (con embebidos `tabla(cols)` y { count, head }), insert, upsert
+//   (solo { onConflict, ignoreDuplicates: true }), update, delete, eq, neq, gt,
+//   gte, lt, lte, in, is, ilike, not(col,'in'|'is',...), or, order, limit,
+//   range, single, maybeSingle, rpc.
 //
 // Fidelidad deliberada en tres puntos que importan para estas pruebas:
 //   · la proyección de columnas (un campo que no se selecciona no viaja);
 //   · `.or()` repetido se combina con AND, igual que PostgREST con varios
 //     parámetros `or=` en la misma URL;
-//   · `eventos_dominio.idempotency_key` es UNIQUE (error 23505 al repetir).
+//   · columnas UNIQUE de UNICOS (error 23505 al repetir; upsert con
+//     ignoreDuplicates las omite como ON CONFLICT DO NOTHING).
 
 const crypto = require('node:crypto');
 
@@ -31,9 +33,23 @@ const DEFAULTS = {
     visible: true,
     created_at: new Date().toISOString(),
   }),
+  // DEFAULTs de la migración 202610070900.
+  intentos_pago: () => ({
+    iniciado_en: new Date().toISOString(),
+    resultado: 'pendiente',
+    finalizado_en: null,
+    status_raw: null,
+  }),
+  eventos_analitica: () => ({
+    recibido_en: new Date().toISOString(),
+  }),
 };
 
-const UNICOS = { eventos_dominio: ['idempotency_key'] };
+const UNICOS = {
+  eventos_dominio: ['idempotency_key'],
+  intentos_pago: ['payment_intent_token'],
+  eventos_analitica: ['client_event_id'],
+};
 
 function dividirNivelSuperior(texto) {
   const partes = [];
@@ -108,7 +124,9 @@ class Query {
     this.modo = 'many';
     this.orden = null;
     this.limite = null;
+    this.rango = null;
     this.devolver = false;
+    this.omitirDuplicados = false;
   }
 
   select(columnas = '*', opciones = {}) {
@@ -117,6 +135,11 @@ class Query {
     return this;
   }
   insert(filas) { this.accion = 'insert'; this.payload = Array.isArray(filas) ? filas : [filas]; return this; }
+  upsert(filas, { ignoreDuplicates = false } = {}) {
+    if (!ignoreDuplicates) throw new Error('fakeSupabase: upsert solo soporta ignoreDuplicates: true');
+    this.omitirDuplicados = true;
+    return this.insert(filas);
+  }
   update(valores) { this.accion = 'update'; this.payload = valores; return this; }
   delete() { this.accion = 'delete'; return this; }
 
@@ -140,6 +163,7 @@ class Query {
   }
   order(col, { ascending = true } = {}) { this.orden = { col, ascending }; return this; }
   limit(n) { this.limite = n; return this; }
+  range(desde, hasta) { this.rango = [desde, hasta]; return this; }
   single() { this.modo = 'single'; return this; }
   maybeSingle() { this.modo = 'maybe'; return this; }
 
@@ -189,10 +213,10 @@ class Query {
       const insertadas = [];
       for (const p of this.payload) {
         const fila = { id: crypto.randomUUID(), ...(DEFAULTS[this.tabla]?.() || {}), ...structuredClone(p) };
-        for (const col of UNICOS[this.tabla] || []) {
-          if (todas.some(r => r[col] === fila[col])) {
-            return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint (${col})` } };
-          }
+        const choca = (UNICOS[this.tabla] || []).find(col => fila[col] != null && todas.some(r => r[col] === fila[col]));
+        if (choca && this.omitirDuplicados) continue;
+        if (choca) {
+          return { data: null, error: { code: '23505', message: `duplicate key value violates unique constraint (${choca})` } };
         }
         todas.push(fila);
         insertadas.push(fila);
@@ -218,6 +242,7 @@ class Query {
       filas = [...filas].sort((a, b) => (ascending ? 1 : -1) * comparar(a[col], b[col]));
     }
     if (this.limite != null) filas = filas.slice(0, this.limite);
+    if (this.rango) filas = filas.slice(this.rango[0], this.rango[1] + 1);
     if (this.opciones.head) return { data: null, error: null, count: filas.length };
     const r = this._resultado(filas.map(f => this._proyectar(f)));
     if (this.opciones.count) r.count = filas.length;

@@ -19,6 +19,9 @@ const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENS
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
+const {
+  resolverPeriodo, resolverFiltros, obtenerIndicadores, obtenerEmbudo, validarInversion, listarInversiones,
+} = require('../services/metricas');
 const router = express.Router();
 
 const ESTADOS_LIQUIDACION = ['pendiente', 'pagado', 'liquidado', 'anulado'];
@@ -1576,6 +1579,71 @@ router.get('/datos-prueba', authMiddleware, adminOnly, async (req, res) => {
   }
 
   res.json({ candidatos, nota: 'Ningún registro fue eliminado. Revisa la lista y borra manualmente en Supabase si corresponde.' });
+});
+
+// ── Indicadores y embudo (módulo 03) ─────────────────────────────────────────
+// Query común: periodo=hoy|mes_actual|mes|rango|historico (+ mes=YYYY-MM o
+// desde/hasta=YYYY-MM-DD, días de Guatemala inclusivos) y filtros opcionales
+// negocio_id, zona, tipo (bolsa | cupon).
+function leerPeriodoYFiltros(query) {
+  const p = resolverPeriodo(query);
+  if (p.error) return { error: p.error };
+  const f = resolverFiltros(query);
+  if (f.error) return { error: f.error };
+  return { periodo: p.periodo, filtros: f.filtros };
+}
+
+// GET /api/admin/indicadores — matriz de los 11 KPIs de la guía
+router.get('/indicadores', authMiddleware, adminOnly, async (req, res) => {
+  const entrada = leerPeriodoYFiltros(req.query);
+  if (entrada.error) return res.status(400).json({ error: entrada.error });
+  try {
+    res.json(await obtenerIndicadores(entrada));
+  } catch (err) {
+    console.error('[INDICADORES] error:', err.message);
+    res.status(500).json({ error: 'No se pudieron calcular los indicadores' });
+  }
+});
+
+// GET /api/admin/indicadores/embudo — sesiones únicas por paso
+router.get('/indicadores/embudo', authMiddleware, adminOnly, async (req, res) => {
+  const entrada = leerPeriodoYFiltros(req.query);
+  if (entrada.error) return res.status(400).json({ error: entrada.error });
+  try {
+    res.json(await obtenerEmbudo(entrada));
+  } catch (err) {
+    console.error('[EMBUDO] error:', err.message);
+    res.status(500).json({ error: 'No se pudo calcular el embudo' });
+  }
+});
+
+// GET /api/admin/inversion-publicitaria?desde=&hasta=&canal= — registros que
+// se solapan con el rango; `total` suma los montos completos (sin prorrateo).
+router.get('/inversion-publicitaria', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const r = await listarInversiones(req.query);
+    if (r.error) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (err) {
+    console.error('[INVERSION] error al listar:', err.message);
+    res.status(500).json({ error: 'No se pudo consultar la inversión publicitaria' });
+  }
+});
+
+// POST /api/admin/inversion-publicitaria — conserva histórico: una corrección
+// es un registro nuevo, no una edición.
+router.post('/inversion-publicitaria', authMiddleware, adminOnly, async (req, res) => {
+  const v = validarInversion(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  const { data, error } = await supabase.from('inversion_publicitaria')
+    .insert([{ ...v.valor, creado_por: req.usuario.id }])
+    .select('id,canal,campana,fecha_inicio,fecha_fin,monto,creado_por,created_at')
+    .single();
+  if (error) {
+    console.error('[INVERSION] error al registrar:', error.message);
+    return res.status(500).json({ error: 'No se pudo registrar la inversión' });
+  }
+  res.status(201).json(data);
 });
 
 module.exports = router;
