@@ -15,6 +15,7 @@ import { pagosAPI, pedidosAPI, cuponesAPI, bolsasAPI } from '@/src/services/api'
 import { useCart } from '@/src/context/CartContext';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
+import { registrarEvento, vaciarAnalitica } from '@/src/utils/analitica';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
@@ -296,6 +297,18 @@ function PagoContent() {
       setErrorMsg(e.message || 'Error al preparar el pedido.');
     }
   }, [items, propina, refrescarDisponibilidad]);
+
+  // begin_checkout: una vez por borrador, con su pedido_id (el backend enlaza
+  // así la sesión con la compra pagada). Se envía de inmediato porque en web
+  // "Pagar" navega fuera de la app hacia Cubo.
+  const checkoutRegistradoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pedidoId || checkoutRegistradoRef.current === pedidoId) return;
+    checkoutRegistradoRef.current = pedidoId;
+    const primero = items[0]?.bolsa;
+    registrarEvento('begin_checkout', { pedido_id: pedidoId, bolsa_id: primero?.id, negocio_id: primero?.negocio_id });
+    void vaciarAnalitica();
+  }, [pedidoId, items]);
 
   // Preparar una sola vez el pedido borrador cuando el carrito esté disponible.
   useEffect(() => {

@@ -287,6 +287,173 @@ export const adminAPI = {
   reservasCupon: (id: string) => api.get(`/admin/cupones/${id}/reservas`),
 };
 
+// ── Indicadores y embudo (Admin, módulo 03) ───────────────────────────────────
+// Contrato de backend/services/metricas.js. `estado` decide la lectura:
+//   ok        → valor calculado
+//   no_aplica → hay medición, denominador 0 (valor null)
+//   sin_datos → no hay medición observable (numerador/denominador/valor null)
+export type EstadoKpi = 'ok' | 'no_aplica' | 'sin_datos';
+export type TipoPeriodoKpi = 'hoy' | 'mes_actual' | 'mes' | 'rango' | 'historico';
+
+export interface PeriodoKpi {
+  tipo: TipoPeriodoKpi | 'lectura_actual';
+  desde?: string;
+  hasta?: string;
+  hasta_exclusivo?: boolean;
+  desde_local?: string;
+  hasta_local?: string;
+  zona_horaria?: string;
+  abierto?: boolean;
+  instante?: string;
+}
+
+export interface Kpi {
+  clave: string;
+  nombre: string;
+  valor: number | null;
+  unidad: string;
+  formula: string;
+  numerador: number | null;
+  denominador: number | null;
+  periodo: PeriodoKpi;
+  exclusiones: string;
+  estado: EstadoKpi;
+  nota?: string;
+  muestras?: number;
+  cohorte?: string;
+  ventana_minutos?: number;
+  ventana_medicion?: string;
+  cobertura_desde?: string | null;
+  cobertura_parcial?: boolean;
+  periodo_abierto?: boolean;
+  desglose?: Record<string, number> | Kpi[];
+}
+
+export interface FiltrosKpi {
+  periodo: TipoPeriodoKpi;
+  mes?: string;
+  desde?: string;
+  hasta?: string;
+  negocio_id?: string;
+  zona?: string;
+  tipo?: 'bolsa' | 'cupon';
+}
+
+export interface RespuestaIndicadores {
+  periodo: PeriodoKpi;
+  filtros: { negocio_id: string | null; zona: string | null; tipo: string | null };
+  generado_en: string;
+  kpis: Kpi[];
+  advertencias: { fuente: string; detalle: string }[];
+}
+
+export interface TasaEmbudo {
+  valor: number | null;
+  numerador: number;
+  denominador: number;
+  unidad: '%';
+  estado: EstadoKpi;
+}
+
+export interface PasoEmbudo {
+  clave: 'visita' | 'vista_oferta' | 'carrito' | 'inicio_pago' | 'compra_pagada';
+  nombre: string;
+  evento: string | null;
+  sesiones: number | null;
+  tasa_desde_anterior: TasaEmbudo | null;
+  tasa_desde_visita: TasaEmbudo | null;
+}
+
+export interface RespuestaEmbudo {
+  periodo: PeriodoKpi;
+  filtros: RespuestaIndicadores['filtros'];
+  generado_en: string;
+  estado: EstadoKpi;
+  pasos: PasoEmbudo[];
+  regla?: string;
+  cobertura_desde?: string | null;
+  cobertura_parcial?: boolean;
+  advertencias: { fuente: string; detalle: string }[];
+}
+
+export interface InversionPublicitaria {
+  id: string;
+  canal: string;
+  campana: string | null;
+  fecha_inicio: string;
+  fecha_fin: string;
+  monto: number;
+  creado_por: string | null;
+  created_at: string;
+}
+
+export interface NuevaInversionPublicitaria {
+  canal?: string;
+  campana?: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  monto: number | string;
+}
+
+// Quita los filtros vacíos: el backend trata '' como "sin filtro", pero así la
+// URL refleja exactamente lo que se consultó.
+function paramsIndicadores(filtros: FiltrosKpi): Record<string, string> {
+  const params: Record<string, string> = {};
+  for (const [clave, valor] of Object.entries(filtros)) {
+    if (valor != null && String(valor).trim() !== '') params[clave] = String(valor).trim();
+  }
+  return params;
+}
+
+export const indicadoresAPI = {
+  indicadores: (filtros: FiltrosKpi) =>
+    api.get<RespuestaIndicadores>('/admin/indicadores', { params: paramsIndicadores(filtros) }),
+  embudo: (filtros: FiltrosKpi) =>
+    api.get<RespuestaEmbudo>('/admin/indicadores/embudo', { params: paramsIndicadores(filtros) }),
+  inversiones: (params?: { desde?: string; hasta?: string; canal?: string }) =>
+    api.get<{ registros: InversionPublicitaria[]; total: number }>('/admin/inversion-publicitaria', { params }),
+  registrarInversion: (data: NuevaInversionPublicitaria) =>
+    api.post<InversionPublicitaria>('/admin/inversion-publicitaria', data),
+};
+
+// ── Analítica (ingesta pública) ───────────────────────────────────────────────
+export type EventoAnalitica = 'session_start' | 'view_item' | 'add_to_cart' | 'begin_checkout' | 'purchase';
+
+export interface EventoAnaliticaPayload {
+  client_event_id: string;
+  anon_id: string;
+  sesion_id: string;
+  evento: EventoAnalitica;
+  ocurrido_en: string;
+  bolsa_id?: string;
+  negocio_id?: string;
+  pedido_id?: string;
+  utm_source?: string;
+  utm_campaign?: string;
+}
+
+export interface RespuestaIngesta {
+  aceptados: number;
+  duplicados: number;
+  rechazados: { indice: number; error: string }[];
+}
+
+// Cliente aparte, sin el interceptor de respuesta de `api`: un 401 de la
+// analítica nunca debe disparar "tu sesión expiró". El token sí se adjunta
+// (si existe) para que el backend asocie usuario_id. Timeout corto: es un envío
+// de fondo y se reintenta en el siguiente lote.
+const apiAnalitica = create({ baseURL: API_BASE_URL, timeout: 10000, headers: { 'Content-Type': 'application/json' } });
+apiAnalitica.interceptors.request.use(async (config) => {
+  const token = await getAuthToken().catch(() => null);
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+export const analiticaAPI = {
+  enviarEventos: (eventos: EventoAnaliticaPayload[]) =>
+    apiAnalitica.post<RespuestaIngesta>('/analitica/eventos', { eventos }),
+};
+
 export const promocionesAPI = {
   listar: (params?: any) => api.get('/bolsas', { params: { tipo: 'cupon', activo: true, ...params } }),
 };

@@ -51,6 +51,7 @@ const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 const { enqueueEventBestEffort } = require('./services/eventosDominio');
 const { ejecutarDespachador } = require('./services/despachadorEventos');
 const { resolverRequestId } = require('./utils/requestId');
+const { expirarIntentosDePedidos } = require('./services/intentosPago');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -94,6 +95,7 @@ app.use('/api/admin',          require('./routes/admin'));
 app.use('/api/favoritos',      require('./routes/favoritos'));
 app.use('/api/uploads',        require('./routes/uploads'));
 app.use('/api/cupones',        require('./routes/cupones'));
+app.use('/api/analitica',      require('./routes/analitica'));
 
 app.get('/', (req, res) => {
   res.json({ status: '✅ Bocara API funcionando', version: '2.0.2', ambiente: process.env.NODE_ENV });
@@ -280,6 +282,11 @@ app.listen(PORT, () => {
       }
       if (!data?.expirados) return;
       console.log('[CLEANUP] reservas vencidas cerradas:', data.expirados, `(TTL ${RESERVA_TTL_MINUTOS} min)`);
+
+      // Fallback de intentos_pago: el pago de una reserva vencida ya no puede
+      // aprobarse (la RPC lo rechaza), así que su intento pendiente se cierra
+      // como 'expirado'. Best-effort: nunca lanza.
+      await expirarIntentosDePedidos(data.pedido_ids || []);
 
       // Un pedido cancelado no debe seguir reteniendo la reserva de su cupón.
       // try/catch por iteración: .rpc(...) lanza de forma síncrona si algo va

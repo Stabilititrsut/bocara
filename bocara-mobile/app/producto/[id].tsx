@@ -18,6 +18,7 @@ import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
 import { etiquetaTipoProducto, emojiTipoProducto } from '@/src/utils/tipoPublicacion';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
+import { registrarEvento } from '@/src/utils/analitica';
 
 const { height: SH } = Dimensions.get('window');
 const IMG_H = Math.round(SH * 0.48);
@@ -140,6 +141,7 @@ export default function ProductoScreen() {
       const data: Bolsa = bRes.data;
       if (!data || !data.id) throw new Error('Bolsa no encontrada');
       setBolsa(data);
+      registrarEvento('view_item', { bolsa_id: data.id, negocio_id: data.negocio_id });
       setHorario(calcularEstadoHorario(data.hora_recogida_inicio, data.hora_recogida_fin));
       if (data.negocio_id) {
         resenasAPI.listarPorNegocio(data.negocio_id).then(r => setResenas(r.data || [])).catch(() => {});
