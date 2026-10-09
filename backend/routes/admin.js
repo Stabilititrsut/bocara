@@ -6,14 +6,25 @@ const { enviarNotificacionPush, guardarNotificacion } = require('../services/not
 const { enviarEmail, templateAprobado, templateRechazado, templateSuspendido, templateSuspendidoUsuario, templateRehabilitadoUsuario, templateLiquidacionPagada } = require('../services/email');
 const { obtenerConfig, obtenerComisionFraccion, COMISION_PLATAFORMA_FRACCION } = require('../services/configuracion');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
+const {
+  esMesValido, ultimoMesCerrado, resumirPendientes, cargarPedidosPendientes, cargarLiquidacionesVivas,
+  planParaNegocio, crearLiquidacionMensual, guardarComprobanteSeguro, urlFirmadaComprobante,
+} = require('../services/liquidaciones');
+const { validarModeracion } = require('../services/resenas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
+const {
+  resolverPeriodo, resolverFiltros, obtenerIndicadores, obtenerEmbudo, validarInversion, listarInversiones,
+} = require('../services/metricas');
 const router = express.Router();
+
+const ESTADOS_LIQUIDACION = ['pendiente', 'pagado', 'liquidado', 'anulado'];
 
 // 2026-08-09: ya no confía en req.usuario.rol (el rol tal como venía en el
 // JWT firmado al momento del login/registro). POST /auth/registro aceptaba
@@ -624,181 +635,164 @@ router.post('/geocodificar-negocios', authMiddleware, adminOnly, async (req, res
   res.json({ total: negocios?.length || 0, ...resultados });
 });
 
-// GET /api/admin/liquidaciones — deuda pendiente por restaurante
+// GET /api/admin/liquidaciones?mes=YYYY-MM&estado=pendiente|pagado|liquidado|anulado&negocio_id=
+// `pendientes`: lo que se pagaría hoy por negocio (meses cerrados liquidables +
+// liquidaciones mensuales generadas y sin pagar), con el mes que toca liquidar.
+// `historial` / `liquidaciones`: liquidaciones registradas, filtradas.
 router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
-  // Calcular neto por restaurante desde pedidos no liquidados. Exigir
-  // cubo_payment_intent_token/cubo_identifier no nulos: no se le puede pagar a
-  // un restaurante por un pedido cuyo estado_pago='pagado' nunca fue verificado
-  // contra Cubo (ver confirmar_pago_cubo) — pagar de más por eso es dinero real
-  // perdido, no solo una cifra mal mostrada.
-  const { data: pedidos } = await supabase
-    .from('pedidos')
-    .select('id,negocio_id,precio_bolsa,cantidad,total,costo_envio,monto_neto_restaurante,comision_bocara,comision_pasarela,propina,descuento_cupon,created_at,negocios(id,nombre,datos_bancarios,propietario_id)')
-    .in('estado', ['completado', 'recogido'])
-    .eq('estado_pago', 'pagado')
-    .not('cubo_payment_intent_token', 'is', null)
-    .not('cubo_identifier', 'is', null)
-    .is('liquidacion_id', null);
+  const { mes, estado, negocio_id: negocioId } = req.query;
+  if (mes && !esMesValido(mes)) return res.status(400).json({ error: 'mes debe tener formato YYYY-MM' });
+  if (estado && !ESTADOS_LIQUIDACION.includes(estado))
+    return res.status(400).json({ error: `estado debe ser uno de: ${ESTADOS_LIQUIDACION.join(', ')}` });
+  const limite = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
 
-  // Liquidaciones ya pagadas
-  let { data: liquidaciones } = await supabase
+  let q = supabase
     .from('liquidaciones')
     .select('*,negocios(nombre)')
     .order('created_at', { ascending: false })
-    .limit(50);
-  if (!liquidaciones) liquidaciones = [];
+    .limit(limite);
+  if (mes) q = q.eq('mes', mes);
+  if (estado) q = q.eq('estado', estado);
+  if (negocioId) q = q.eq('negocio_id', negocioId);
 
-  // Agrupar pedidos por negocio. Desglose explícito para que la liquidación sea
-  // auditable sin ambigüedad: cuánto es venta bruta del producto, cuánto se quedó
-  // Bocara (comisión 25% + cargo de plataforma 3.5%, nunca mezclados) y cuánto de
-  // eso es propina (100% del restaurante, aparte de su 75%).
-  //
-  // Todo sale de columnas guardadas al confirmar el pago — nunca de un % recalculado
-  // aquí. Un pedido Cubo-verificado sin monto_neto_restaurante calculado sería un
-  // dato faltante real (nunca debería pasar: routes/pagos.js siempre lo guarda al
-  // crear el pedido) — se excluye del neto y se cuenta en `pedidos_sin_desglose`
-  // para que quede visible en vez de camuflarse con una cifra inventada.
-  const mapa = {};
-  for (const p of (pedidos || [])) {
-    const nid = p.negocio_id;
-    if (!mapa[nid]) {
-      mapa[nid] = {
-        negocio_id: nid,
-        nombre: p.negocios?.nombre || 'Sin nombre',
-        datos_bancarios: p.negocios?.datos_bancarios || null,
-        propietario_id: p.negocios?.propietario_id,
-        pedidos: 0,
-        bruto: 0,
-        comisionBocara: 0,
-        cargoPlataforma: 0,
-        propinas: 0,
-        neto: 0,
-        pedidosSinDesglose: 0,
-      };
+  try {
+    const [{ data: liquidaciones, error }, pedidos, vivas] = await Promise.all([
+      q, cargarPedidosPendientes(negocioId || null), cargarLiquidacionesVivas(negocioId || null),
+    ]);
+    if (error) return res.status(500).json({ error: error.message });
+    const ultimoCerrado = ultimoMesCerrado();
+    const pendientes = resumirPendientes({ pedidos, liquidacionesVivas: vivas, ultimoCerrado });
+
+    // Enriquecer con push token del propietario
+    const propIds = [...new Set(pendientes.map((r) => r.propietario_id).filter(Boolean))];
+    if (propIds.length > 0) {
+      const { data: propUsers } = await supabase
+        .from('usuarios').select('id,expo_push_token').in('id', propIds);
+      const tokenMap = {};
+      for (const u of (propUsers || [])) tokenMap[u.id] = u.expo_push_token;
+      for (const r of pendientes) r.push_token = tokenMap[r.propietario_id] || null;
     }
-    const bruto = obtenerSubtotalProductos(p);
-    mapa[nid].pedidos += 1;
-    mapa[nid].bruto += bruto;
-    mapa[nid].comisionBocara  += p.comision_bocara   || 0;
-    mapa[nid].cargoPlataforma += p.comision_pasarela || 0;
-    mapa[nid].propinas        += p.propina           || 0;
-    if (p.monto_neto_restaurante == null) {
-      mapa[nid].pedidosSinDesglose += 1;
-      console.warn('[LIQUIDACIONES] pedido pagado sin monto_neto_restaurante — excluido del neto:', p.id);
-    } else {
-      mapa[nid].neto += p.monto_neto_restaurante;
-    }
+
+    res.json({
+      pendientes,
+      historial: liquidaciones || [],
+      liquidaciones: liquidaciones || [],
+      filtros: { mes: mes || null, estado: estado || null, negocio_id: negocioId || null },
+      ultimo_mes_cerrado: ultimoCerrado,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  // Enriquecer con push token del propietario
-  const propIds = [...new Set(Object.values(mapa).map((r) => r.propietario_id).filter(Boolean))];
-  if (propIds.length > 0) {
-    const { data: propUsers } = await supabase
-      .from('usuarios').select('id,expo_push_token').in('id', propIds);
-    const tokenMap = {};
-    for (const u of (propUsers || [])) tokenMap[u.id] = u.expo_push_token;
-    for (const r of Object.values(mapa)) {
-      r.push_token = tokenMap[r.propietario_id] || null;
-    }
-  }
-  const pendientes = Object.values(mapa)
-    .map(r => ({
-      ...r,
-      bruto:           parseFloat(r.bruto.toFixed(2)),
-      comisionBocara:  parseFloat(r.comisionBocara.toFixed(2)),
-      cargoPlataforma: parseFloat(r.cargoPlataforma.toFixed(2)),
-      propinas:        parseFloat(r.propinas.toFixed(2)),
-      neto:            parseFloat(r.neto.toFixed(2)),
-    }))
-    .filter(r => r.neto > 0 || r.pedidosSinDesglose > 0)
-    .sort((a, b) => b.neto - a.neto);
-
-  res.json({ pendientes, historial: liquidaciones });
 });
 
-// POST /api/admin/liquidaciones/:restaurante_id/pagar
-router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, async (req, res) => {
-  const { restaurante_id } = req.params;
-  const { datos_transferencia } = req.body;
+// POST /api/admin/liquidaciones — { negocio_id, mes: 'YYYY-MM' }
+// Genera la liquidación mensual con la RPC atómica (bloquea pedidos, suma del
+// snapshot, inserta y vincula en una transacción) y su comprobante PDF.
+// Exige liquidar del mes más antiguo al más reciente (409 mes_anterior_pendiente).
+router.post('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const r = await crearLiquidacionMensual({
+      negocioId: req.body?.negocio_id, mes: req.body?.mes, adminId: req.usuario.id,
+    });
+    res.status(r.status).json(r.body);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/liquidaciones/:id/comprobante[?descargar=1]
+// URL firmada temporal (10 min) del PDF en el bucket privado. Si el PDF no se
+// generó al crear la liquidación, se genera ahora.
+router.get('/liquidaciones/:id/comprobante', authMiddleware, adminOnly, async (req, res) => {
+  const { data: liq } = await supabase.from('liquidaciones').select('*').eq('id', req.params.id).maybeSingle();
+  if (!liq) return res.status(404).json({ error: 'Liquidación no encontrada' });
+  try {
+    res.json(await urlFirmadaComprobante(liq, { descargar: req.query.descargar === '1' }));
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/liquidaciones/:id/pagar — { datos_transferencia: { referencia, banco? } }
+// `:id` puede ser:
+//   · una liquidación mensual 'pendiente' → se marca pagada;
+//   · un negocio (contrato legacy de la app admin) → se generan, en orden y vía
+//     la RPC, las liquidaciones de sus meses cerrados pendientes, y se pagan
+//     todas sus liquidaciones 'pendiente'.
+// Este endpoint ya no escribe pedidos.liquidacion_id directamente: antes
+// insertaba la liquidación y vinculaba los pedidos en dos llamadas, sin guarda,
+// y podía sobrescribir pedidos ya liquidados en una liquidación mensual.
+// El cambio a 'pagado' exige estado='pendiente' en el mismo UPDATE: dos admins
+// confirmando a la vez → el segundo recibe 409, nunca un doble pago.
+router.post('/liquidaciones/:id/pagar', authMiddleware, adminOnly, async (req, res) => {
+  const { id } = req.params;
+  const { datos_transferencia } = req.body || {};
   const referencia = String(datos_transferencia?.referencia || '').trim();
   if (!referencia) {
     return res.status(400).json({ error: 'Ingresa la referencia de la transferencia realizada' });
   }
 
-  // Buscar pedidos pendientes del restaurante — mismo filtro que GET /liquidaciones,
-  // deben coincidir exactamente o el monto que se marca "pagado" aquí no
-  // corresponderá con lo que el admin vio como pendiente.
-  const { data: pedidosPend } = await supabase
-    .from('pedidos')
-    .select('id,precio_bolsa,cantidad,total,costo_envio,monto_neto_restaurante,comision_bocara,comision_pasarela,propina,descuento_cupon')
-    .eq('negocio_id', restaurante_id)
-    .in('estado', ['completado', 'recogido'])
-    .eq('estado_pago', 'pagado')
-    .not('cubo_payment_intent_token', 'is', null)
-    .not('cubo_identifier', 'is', null)
-    .is('liquidacion_id', null);
-
-  // Sin fallback por % recalculado: si algún pedido Cubo-verificado no tiene
-  // monto_neto_restaurante guardado (no debería ocurrir — ver GET /liquidaciones),
-  // no se le paga por ese pedido en este lote en vez de inventarle un monto; queda
-  // fuera de `pedidosPend` filtrados aquí y se avisa por consola para investigar.
-  const pedidosConDesglose = (pedidosPend || []).filter(p => p.monto_neto_restaurante != null);
-  const pedidosSinDesglose = (pedidosPend || []).filter(p => p.monto_neto_restaurante == null);
-  if (pedidosSinDesglose.length > 0) {
-    console.warn('[LIQUIDACIONES PAGAR] pedidos sin monto_neto_restaurante excluidos del pago:',
-      pedidosSinDesglose.map(p => p.id));
+  let negocioId;
+  let ids;
+  try {
+    const { data: liqDirecta } = await supabase
+      .from('liquidaciones').select('id,negocio_id,estado').eq('id', id).maybeSingle();
+    if (liqDirecta) {
+      if (liqDirecta.estado !== 'pendiente')
+        return res.status(409).json({ error: `La liquidación ya está ${liqDirecta.estado}` });
+      negocioId = liqDirecta.negocio_id;
+      ids = [liqDirecta.id];
+    } else {
+      negocioId = id;
+      const plan = await planParaNegocio(negocioId);
+      for (const mes of plan.mesesAGenerar) {
+        const r = await crearLiquidacionMensual({ negocioId, mes, adminId: req.usuario.id, validarOrden: false });
+        if (r.status !== 201 && !['mes_ya_liquidado', 'sin_pedidos_pendientes'].includes(r.body.resultado)) {
+          return res.status(r.status).json(r.body);
+        }
+      }
+      const { data: pendientes, error } = await supabase
+        .from('liquidaciones').select('id').eq('negocio_id', negocioId).eq('estado', 'pendiente');
+      if (error) return res.status(500).json({ error: error.message });
+      ids = (pendientes || []).map((l) => l.id);
+      if (ids.length === 0) {
+        return res.status(400).json({ error: 'No hay pedidos completados pendientes de liquidar en meses cerrados' });
+      }
+    }
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-  if (pedidosConDesglose.length === 0) {
-    return res.status(400).json({ error: 'No hay pedidos completados pendientes de liquidar' });
-  }
 
-  const bruto           = pedidosConDesglose.reduce((s, p) => s + obtenerSubtotalProductos(p), 0);
-  const comisionBocara  = pedidosConDesglose.reduce((s, p) => s + (p.comision_bocara   || 0), 0);
-  const cargoPlataforma = pedidosConDesglose.reduce((s, p) => s + (p.comision_pasarela || 0), 0);
-  const propinas        = pedidosConDesglose.reduce((s, p) => s + (p.propina           || 0), 0);
-  // El monto nunca se acepta desde el navegador: se calcula exclusivamente con
-  // los pedidos elegibles para evitar registrar un pago mayor o menor por error.
-  const neto = parseFloat(pedidosConDesglose.reduce((s, p) => s + aNumero(p.monto_neto_restaurante), 0).toFixed(2));
-
-  // Crear liquidacion — desglose completo guardado para que el pago quede auditable
-  // sin ambigüedad: de dónde sale cada quetzal (venta, comisión, cargo de
-  // plataforma, propina), no solo el monto final transferido.
-  const { data: liq, error: liqErr } = await supabase
+  const { data: pagadas, error: payErr } = await supabase
     .from('liquidaciones')
-    .insert([{
-      negocio_id: restaurante_id,
-      monto: neto,
-      ventas_brutas: parseFloat(bruto.toFixed(2)),
-      comision_bocara: parseFloat(comisionBocara.toFixed(2)),
-      comision_plataforma: parseFloat(cargoPlataforma.toFixed(2)),
-      propinas: parseFloat(propinas.toFixed(2)),
+    .update({
       estado: 'pagado',
-      datos_transferencia: datos_transferencia || null,
-      total_pedidos: pedidosConDesglose.length,
       pagado_en: new Date().toISOString(),
       pagado_por: req.usuario.id,
-    }])
-    .select()
-    .single();
-  if (liqErr) return res.status(400).json({ error: liqErr.message });
+      datos_transferencia: { ...datos_transferencia, referencia },
+    })
+    .in('id', ids)
+    .eq('estado', 'pendiente')
+    .select('*');
+  if (payErr) return res.status(400).json({ error: payErr.message });
+  if (!pagadas?.length) return res.status(409).json({ error: 'La liquidación ya fue pagada por otro administrador' });
 
-  // Marcar como liquidados solo los pedidos que realmente entraron en este pago
-  // (pedidosConDesglose) — los que se excluyeron por falta de monto_neto_restaurante
-  // se quedan is('liquidacion_id', null) y volverán a aparecer en GET /liquidaciones
-  // hasta que se investigue y corrija su dato faltante.
-  if (pedidosConDesglose.length && liq?.id) {
-    const ids = pedidosConDesglose.map(p => p.id);
-    await supabase.from('pedidos').update({ liquidacion_id: liq.id }).in('id', ids);
-  }
+  const { data: negocio } = await supabase
+    .from('negocios')
+    .select('nombre,propietario_id')
+    .eq('id', negocioId)
+    .maybeSingle();
+
+  // El comprobante se regenera con estado "Pagado" y la referencia (best-effort).
+  await Promise.all(pagadas.map((l) => guardarComprobanteSeguro(l, { nombre: negocio?.nombre })));
+
+  const suma = (k) => pagadas.reduce((s, l) => s + aNumero(l[k]), 0);
+  const neto = parseFloat(suma('monto').toFixed(2));
+  const totalPedidos = suma('total_pedidos');
 
   // Push + correo al propietario — el push es best-effort y muchos negocios
   // nuevos nunca abrieron la app en un celular (sin expo_push_token), así que
   // el correo es el único respaldo escrito de que el pago realmente llegó.
-  const { data: negocio } = await supabase
-    .from('negocios')
-    .select('nombre,propietario_id')
-    .eq('id', restaurante_id)
-    .single();
   if (negocio?.propietario_id) {
     const { data: propUser } = await supabase
       .from('usuarios').select('expo_push_token,email,nombre').eq('id', negocio.propietario_id).single();
@@ -806,7 +800,7 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
       await enviarNotificacionPush(
         propUser.expo_push_token,
         '💸 ¡Pago recibido!',
-        `Recibiste Q${neto.toFixed(2)} por ${(pedidosPend || []).length} pedidos. Revisa tu cuenta bancaria.`,
+        `Recibiste Q${neto.toFixed(2)} por ${totalPedidos} pedidos. Revisa tu cuenta bancaria.`,
         { tipo: 'liquidacion_pagada', monto: neto }
       );
     }
@@ -816,12 +810,12 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
           nombrePropietario: propUser.nombre || 'equipo',
           nombreNegocio: negocio.nombre || 'tu negocio',
           monto: neto,
-          ventasBrutas: bruto,
-          comisionBocara,
-          cargoPlataforma,
-          propinas,
-          totalPedidos: pedidosConDesglose.length,
-          referencia: datos_transferencia?.referencia || null,
+          ventasBrutas: suma('ventas_brutas'),
+          comisionBocara: suma('comision_bocara'),
+          cargoPlataforma: suma('comision_plataforma'),
+          propinas: suma('propinas'),
+          totalPedidos,
+          referencia,
           banco: datos_transferencia?.banco || null,
         });
         await enviarEmail({ to: propUser.email, subject: `💸 Pago recibido — Q${neto.toFixed(2)}`, html });
@@ -832,7 +826,47 @@ router.post('/liquidaciones/:restaurante_id/pagar', authMiddleware, adminOnly, a
     await guardarNotificacion(supabase, negocio.propietario_id, 'liquidacion', '¡Pago recibido!', `Q${neto.toFixed(2)} transferidos a tu cuenta.`, { monto: neto });
   }
 
-  res.json({ ok: true, liquidacion: liq });
+  res.json({ ok: true, liquidacion: pagadas[0], liquidaciones: pagadas, monto_total: neto });
+});
+
+// GET /api/admin/resenas?negocio_id=&visible=true|false&limit= — auditoría
+router.get('/resenas', authMiddleware, adminOnly, async (req, res) => {
+  const { negocio_id: negocioId, visible } = req.query;
+  if (visible != null && !['true', 'false'].includes(visible))
+    return res.status(400).json({ error: 'visible debe ser true o false' });
+  const limite = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+  let q = supabase
+    .from('resenas')
+    .select('*, usuarios(nombre), negocios(nombre)')
+    .order('created_at', { ascending: false })
+    .limit(limite);
+  if (negocioId) q = q.eq('negocio_id', negocioId);
+  if (visible != null) q = q.eq('visible', visible === 'true');
+  const { data, error } = await q;
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data || []);
+});
+
+// PATCH /api/admin/resenas/:id/moderar — { visible: boolean, motivo }
+// Ocultar exige motivo. El trigger de la base recalcula el promedio del
+// negocio solo con las reseñas visibles.
+router.patch('/resenas/:id/moderar', authMiddleware, adminOnly, async (req, res) => {
+  const moderacion = validarModeracion(req.body || {});
+  if (moderacion.error) return res.status(400).json({ error: moderacion.error });
+  const { data, error } = await supabase
+    .from('resenas')
+    .update({
+      visible: moderacion.valor.visible,
+      motivo_moderacion: moderacion.valor.motivo,
+      moderada_por: req.usuario.id,
+      moderada_en: new Date().toISOString(),
+    })
+    .eq('id', req.params.id)
+    .select()
+    .maybeSingle();
+  if (error) return res.status(400).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'Reseña no encontrada' });
+  res.json(data);
 });
 
 // GET /api/admin/config
@@ -1001,37 +1035,10 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
       );
     }
 
-    // Notificar a favoritos solo si hay algo que el cliente pueda ver de verdad
-    if (visible) {
-      try {
-        const { data: negocio } = await supabase.from('negocios').select('nombre').eq('id', bolsa.negocio_id).single();
-        const nombreNegocio = negocio?.nombre || 'Tu restaurante favorito';
-        const { data: favs } = await supabase
-          .from('favoritos')
-          .select('usuario_id, usuarios(expo_push_token)')
-          .eq('negocio_id', bolsa.negocio_id);
-        if (favs?.length) {
-          const { enviarNotificacionesMultiples } = require('../services/notificaciones');
-          const tokens = favs.map(f => f.usuarios?.expo_push_token).filter(Boolean);
-          if (tokens.length) {
-            await enviarNotificacionesMultiples(
-              tokens,
-              '🛍️ ¡Nueva bolsa disponible!',
-              `${nombreNegocio} publicó: ${bolsa.nombre}`,
-              { negocioId: bolsa.negocio_id, bolsaId: bolsa.id, screen: 'home' }
-            );
-          }
-          for (const fav of favs) {
-            await guardarNotificacion(
-              supabase, fav.usuario_id, 'nueva_bolsa',
-              '🛍️ Nueva bolsa disponible',
-              `${nombreNegocio} publicó: ${bolsa.nombre}`,
-              { negocioId: bolsa.negocio_id, bolsaId: bolsa.id }
-            );
-          }
-        }
-      } catch { /* tabla favoritos puede no existir aún — fallo silencioso */ }
-    }
+    // Avisar a clientes cercanos (≤ 10 km) y favoritos solo si hay algo que el
+    // cliente pueda ver de verdad. Lo hace el despachador de eventos
+    // (services/notificacionesCercania.js), con una notificación por usuario y ciclo.
+    if (visible) encolarPublicacionVisible(data);
 
     // Una fila por cada aprobación real: la misma publicación puede aprobarse
     // varias veces a lo largo de su vida (rechazo → corrección → aprobación), y
@@ -1572,6 +1579,71 @@ router.get('/datos-prueba', authMiddleware, adminOnly, async (req, res) => {
   }
 
   res.json({ candidatos, nota: 'Ningún registro fue eliminado. Revisa la lista y borra manualmente en Supabase si corresponde.' });
+});
+
+// ── Indicadores y embudo (módulo 03) ─────────────────────────────────────────
+// Query común: periodo=hoy|mes_actual|mes|rango|historico (+ mes=YYYY-MM o
+// desde/hasta=YYYY-MM-DD, días de Guatemala inclusivos) y filtros opcionales
+// negocio_id, zona, tipo (bolsa | cupon).
+function leerPeriodoYFiltros(query) {
+  const p = resolverPeriodo(query);
+  if (p.error) return { error: p.error };
+  const f = resolverFiltros(query);
+  if (f.error) return { error: f.error };
+  return { periodo: p.periodo, filtros: f.filtros };
+}
+
+// GET /api/admin/indicadores — matriz de los 11 KPIs de la guía
+router.get('/indicadores', authMiddleware, adminOnly, async (req, res) => {
+  const entrada = leerPeriodoYFiltros(req.query);
+  if (entrada.error) return res.status(400).json({ error: entrada.error });
+  try {
+    res.json(await obtenerIndicadores(entrada));
+  } catch (err) {
+    console.error('[INDICADORES] error:', err.message);
+    res.status(500).json({ error: 'No se pudieron calcular los indicadores' });
+  }
+});
+
+// GET /api/admin/indicadores/embudo — sesiones únicas por paso
+router.get('/indicadores/embudo', authMiddleware, adminOnly, async (req, res) => {
+  const entrada = leerPeriodoYFiltros(req.query);
+  if (entrada.error) return res.status(400).json({ error: entrada.error });
+  try {
+    res.json(await obtenerEmbudo(entrada));
+  } catch (err) {
+    console.error('[EMBUDO] error:', err.message);
+    res.status(500).json({ error: 'No se pudo calcular el embudo' });
+  }
+});
+
+// GET /api/admin/inversion-publicitaria?desde=&hasta=&canal= — registros que
+// se solapan con el rango; `total` suma los montos completos (sin prorrateo).
+router.get('/inversion-publicitaria', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const r = await listarInversiones(req.query);
+    if (r.error) return res.status(400).json({ error: r.error });
+    res.json(r);
+  } catch (err) {
+    console.error('[INVERSION] error al listar:', err.message);
+    res.status(500).json({ error: 'No se pudo consultar la inversión publicitaria' });
+  }
+});
+
+// POST /api/admin/inversion-publicitaria — conserva histórico: una corrección
+// es un registro nuevo, no una edición.
+router.post('/inversion-publicitaria', authMiddleware, adminOnly, async (req, res) => {
+  const v = validarInversion(req.body);
+  if (v.error) return res.status(400).json({ error: v.error });
+  const { data, error } = await supabase.from('inversion_publicitaria')
+    .insert([{ ...v.valor, creado_por: req.usuario.id }])
+    .select('id,canal,campana,fecha_inicio,fecha_fin,monto,creado_por,created_at')
+    .single();
+  if (error) {
+    console.error('[INVERSION] error al registrar:', error.message);
+    return res.status(500).json({ error: 'No se pudo registrar la inversión' });
+  }
+  res.status(201).json(data);
 });
 
 module.exports = router;

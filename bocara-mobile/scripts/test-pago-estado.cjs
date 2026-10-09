@@ -24,6 +24,8 @@ function load(file, mocks = {}, globals = {}) {
     require(name) {
       if (name in mocks) return mocks[name];
       if (name === 'react/jsx-runtime') return require(name);
+      // Analítica (src/utils/analitica.ts): no-op salvo que la prueba pase su double.
+      if (name.endsWith('utils/analitica')) return { registrarEvento() {}, vaciarAnalitica: async () => {}, iniciarAnalitica: () => () => {}, establecerAnaliticaHabilitada() {} };
       throw new Error(`Import sin double: ${name}`);
     },
   }, { filename: file });
@@ -220,6 +222,8 @@ test('_layout: rutaParaNotificacion nunca manda un rol a la sección de otro rol
     '@/src/utils/resolverRutaNotificacion': resolverReal,
     '@/constants/Colors': { Colors: {} },
     '@/src/services/api': { notificacionesAPI: {} },
+    '@/src/services/pushToken': { recordarPushToken() {} },
+    'expo-constants': {},
     '@/src/context/OnboardingContext': { OnboardingProvider: 'OnboardingProvider', useOnboarding: () => ({}) },
     'expo-splash-screen': { preventAutoHideAsync: () => Promise.resolve() },
   });

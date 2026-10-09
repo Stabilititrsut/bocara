@@ -19,6 +19,8 @@ function load(file, mocks = {}, globals = {}, extraSource = '') {
     require(name) {
       if (name in mocks) return mocks[name];
       if (name === 'react/jsx-runtime') return require(name);
+      // Analítica (src/utils/analitica.ts): no-op salvo que la prueba pase su double.
+      if (name.endsWith('utils/analitica')) return { registrarEvento() {}, vaciarAnalitica: async () => {}, iniciarAnalitica: () => () => {}, establecerAnaliticaHabilitada() {} };
       throw new Error(`Import sin double: ${name}`);
     },
   }, { filename: file });

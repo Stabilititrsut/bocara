@@ -10,11 +10,13 @@ const DARK_GREEN = '#0A2A2A';
 
 // Orden por frecuencia de uso: los primeros 7 siempre son visibles en móvil.
 // cupones está en posición 4 para garantizar visibilidad en pantallas estrechas.
+// indicadores (módulo 03 de la guía) va justo después, dentro de los 7 visibles.
 const TABS = [
   { name: 'index',             label: 'Dashboard',  icon: 'stats-chart'       },
   { name: 'verificacion',      label: 'Verificar',  icon: 'checkmark-circle'  },
   { name: 'contenido',         label: 'Contenido',  icon: 'document-text'     },
   { name: 'cupones',           label: 'Cupones',    icon: 'ticket-outline'    },
+  { name: 'indicadores',       label: 'Indicadores', icon: 'analytics'        },
   { name: 'cambios-perfil',    label: 'Perfiles',   icon: 'person-circle'     },
   { name: 'liquidaciones',     label: 'Pagos',      icon: 'cash'              },
   { name: 'negocios',          label: 'Negocios',   icon: 'storefront'        },

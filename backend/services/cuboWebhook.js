@@ -46,6 +46,7 @@
 const { validarConfirmacionPago } = require('./orderStateMachine');
 const { reservaPagable, instanteReserva, RESERVA_TTL_MINUTOS } = require('./stock');
 const { enqueueEventBestEffort } = require('./eventosDominio');
+const { finalizarIntento } = require('./intentosPago');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -88,6 +89,21 @@ function registrar(nivel, evento, datos = {}) {
   if (nivel === 'error') console.error(linea);
   else if (nivel === 'warn') console.warn(linea);
   else console.log(linea);
+}
+
+// El paymentIntentToken (que Cubo manda como `identifier`) es una credencial:
+// con él se puede consultar y operar la transacción contra la API de Cubo. Los
+// logs de Render los lee mucha más gente que la que puede tocar la pasarela, así
+// que nunca se escribe entero — mismo criterio que visaLink.generarLinkPago, que
+// solo registra `tiene token: true`.
+//
+// Se conservan los 4 últimos caracteres para poder cruzar una incidencia
+// concreta con el soporte de Cubo; con eso no se puede reconstruir el token ni
+// operar con él. El valor íntegro sigue guardándose donde corresponde: en las
+// columnas `cubo_payment_intent_token` / `cubo_identifier` de `pedidos`.
+function enmascararIdentifier(token) {
+  if (!token || typeof token !== 'string') return null;
+  return token.length <= 4 ? 'tok_…' : `tok_…${token.slice(-4)}`;
 }
 
 // Resuelve las dependencias. Las que no se inyectan se cargan de verdad — y
@@ -335,7 +351,13 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
   const { referenceId, authorizationCode, processedAt, metadata } = body;
   const orderId            = metadata?.orderId;
 
-  registrar('info', 'recibido', { status: rawStatus || null, estado_normalizado: estadoNormalizado, identifier: paymentIntentToken || null, pedido_id: orderId || null });
+  // Cierre del intento en intentos_pago (KPIs de pagos). Best-effort: nunca
+  // lanza ni cambia la respuesta a Cubo.
+  const cerrarIntento = (resultado) => finalizarIntento({
+    paymentIntentToken, resultado, statusRaw: rawStatus || null, cliente: supabase, ahora: new Date(ahora),
+  });
+
+  registrar('info', 'recibido', { status: rawStatus || null, estado_normalizado: estadoNormalizado, identifier_enmascarado: enmascararIdentifier(paymentIntentToken), pedido_id: orderId || null });
 
   // ── Payload corrupto o incompleto → 400, sin tocar red ni BD ───────────────
   if (!paymentIntentToken || !orderId) {
@@ -364,7 +386,7 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     if (esReintentoDeUnPagoYaRegistrado(pedido, paymentIntentToken)) {
       registrar('info', 'duplicado_ignorado', {
         pedido_id: pedido.id,
-        identifier: paymentIntentToken,
+        identifier_enmascarado: enmascararIdentifier(paymentIntentToken),
         estado: pedido.estado,
       });
       // Reintentar los eventos post-pago que quedaron pendientes (una
@@ -373,6 +395,8 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
       // evento ya completado no se vuelve a ejecutar.
       procesarEventosPedido(pedido.id).catch(err =>
         registrar('warn', 'eventos_pendientes_fallo', { pedido_id: pedido.id, detalle: err.message }));
+      // Si el cierre falló en la primera entrega, el reintento lo completa.
+      await cerrarIntento('aprobado');
       return { statusCode: 200, warning: 'pedido ya procesado', tipo: 'duplicado' };
     }
 
@@ -388,7 +412,7 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
       });
     } catch (err) {
       if (err.code === 'NOT_FOUND') {
-        registrar('error', 'transaccion_inexistente_en_cubo', { pedido_id: orderId, identifier: paymentIntentToken });
+        registrar('error', 'transaccion_inexistente_en_cubo', { pedido_id: orderId, identifier_enmascarado: enmascararIdentifier(paymentIntentToken) });
         return { statusCode: 409, error: 'Transacción no encontrada en Cubo al verificar' };
       }
       // Error de red o Cubo caído → 502 para que Cubo reintente el webhook
@@ -409,7 +433,7 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     if (!validacion.ok && validacion.tipo === 'reserva_expirada') {
       registrar('error', 'pago_tardio_reserva_expirada', {
         pedido_id: orderId,
-        identifier: paymentIntentToken,
+        identifier_enmascarado: enmascararIdentifier(paymentIntentToken),
         estado: pedido?.estado ?? null,
         reservado_en: validacion.reservadoEn ?? null,
         ttl_minutos: RESERVA_TTL_MINUTOS,
@@ -512,7 +536,7 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
           pedido_id: pedido.id,
           via: 'rpc',
           resultado,
-          identifier: paymentIntentToken,
+          identifier_enmascarado: enmascararIdentifier(paymentIntentToken),
           detalle: rpcResult,
           accion: 'reembolso_manual',
         });
@@ -568,6 +592,8 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
           cliente: supabase,
         });
 
+        await cerrarIntento('aprobado');
+
         registrar('info', 'pago_confirmado', { pedido_id: pedido.id, codigo_recogida: codigoRecogida });
         return { statusCode: 200, tipo: 'procesado' };
       }
@@ -593,7 +619,7 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     // Nunca sobreescribir un pedido ya pagado: un rechazo que llega tarde (o
     // duplicado) no puede cancelar un pedido que sí se cobró.
     if (pedido.estado_pago === 'pagado') {
-      registrar('warn', 'rechazo_sobre_pedido_pagado_ignorado', { pedido_id: pedido.id, status: rawStatus, identifier: paymentIntentToken });
+      registrar('warn', 'rechazo_sobre_pedido_pagado_ignorado', { pedido_id: pedido.id, status: rawStatus, identifier_enmascarado: enmascararIdentifier(paymentIntentToken) });
       return { statusCode: 200, warning: `pedido ya pagado — ${rawStatus} ignorado` };
     }
 
@@ -602,9 +628,14 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
     // El compare-and-swap sobre `estado` dentro de liberarInventarioPedido hace
     // que solo la primera ejecución libere de verdad; las siguientes responden
     // 'ya_cancelado' sin tocar el stock.
+    // El motivo se persiste en `pedidos.motivo_cancelacion` (ver
+    // stock.liberarInventarioPedido), donde sobrevive a cualquier rotación de
+    // logs y lo lee cualquiera con acceso a la tabla. El identifier NO va aquí:
+    // el token de la transacción ya vive en `cubo_payment_intent_token`, que es
+    // su sitio, y repetirlo en un campo de texto libre solo amplía la superficie.
     const liberacion = await liberarInventarioPedido(pedido.id, {
       canceladoPor: 'sistema',
-      motivo: `pago rechazado por Cubo|status:${rawStatus}|identifier:${paymentIntentToken}`,
+      motivo: `pago rechazado por Cubo|status:${rawStatus}`,
     });
 
     if (!liberacion.ok) {
@@ -643,6 +674,8 @@ async function procesarWebhookCubo(body = {}, deps = {}) {
       discriminator: paymentIntentToken, payload: { status: rawStatus },
       cliente: supabase,
     });
+
+    await cerrarIntento('fallido');
 
     registrar('info', 'pago_rechazado_registrado', {
       pedido_id: pedido.id,

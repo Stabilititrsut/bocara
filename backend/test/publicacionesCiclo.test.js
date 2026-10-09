@@ -13,6 +13,7 @@ const assert = require('node:assert/strict');
 const {
   fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
 } = require('./helpers/appPublicaciones');
+const { HORA_INICIO_PRUEBA, horaFinVigente, horaFinEn } = require('./helpers/horarioPrueba');
 
 const HOY = fechaGuatemala(0);
 const MANANA = fechaGuatemala(1);
@@ -21,7 +22,7 @@ const AYER = fechaGuatemala(-1);
 // Ventana que no vence durante la prueba: termina mañana. fecha_disponible=HOY
 // para que ya haya "iniciado" (no dispare el nuevo motivo no_iniciada).
 const HORARIO_VIGENTE = {
-  hora_recogida_inicio: '08:00', hora_recogida_fin: '22:00',
+  hora_recogida_inicio: HORA_INICIO_PRUEBA, hora_recogida_fin: horaFinVigente(),
   fecha_disponible: HOY, fecha_caducidad: MANANA,
 };
 
@@ -267,8 +268,8 @@ test('Ola Azul: A mal creada → rechazada; B creada bien → aprobada ⇒ B vis
   assert.equal(vista.negocio_id, IDS.olaAzul);
   assert.equal(vista.tipo, 'cupon');
   assert.equal(vista.precio_descuento, 60);
-  assert.equal(vista.hora_recogida_inicio, '08:00');
-  assert.equal(vista.hora_recogida_fin, '22:00');
+  assert.equal(vista.hora_recogida_inicio, HORARIO_VIGENTE.hora_recogida_inicio);
+  assert.equal(vista.hora_recogida_fin, HORARIO_VIGENTE.hora_recogida_fin);
   // Promoción nunca tiene fecha fin — el backend la limpia aunque el payload
   // de creación la incluyera (HORARIO_VIGENTE la trae para las bolsas de
   // Tiempo limitado; en una promoción se ignora, ver POST /api/bolsas).
@@ -324,10 +325,15 @@ test('aprobada → modificar dato relevante → pendiente y deja de verse hasta 
 // backend la fuerza a null, ver POST/PUT /api/bolsas), así que "cambiarla"
 // nunca es un cambio real sobre un promo(). Tiene su propio test justo abajo,
 // usando bolsaTiempoLimitado(), que sí la usa de verdad.
+//
+// hora_recogida_fin no puede ser una hora fija: una Promoción vence HOY a esa
+// hora, así que '21:00' fallaba como "horario expirado" a partir de las 21:00
+// de Guatemala. ahora + 2 h es siempre futura y siempre distinta del fin del
+// fixture (ahora + 4 h), así que es un cambio real (test/helpers/horarioPrueba.js).
 for (const [campo, valor] of [
   ['nombre', '2x1 Ceviche mixto'], ['descripcion', 'otra'], ['contenido', 'NUEVOCOD'],
   ['precio_original', 130], ['tipo', 'bolsa'], ['categoria', 'Porcentaje'],
-  ['hora_recogida_fin', '21:00'], ['imagen_url', 'https://x/y.jpg'],
+  ['hora_recogida_fin', horaFinEn(2)], ['imagen_url', 'https://x/y.jpg'],
 ]) {
   test(`aprobada: cambiar "${campo}" vuelve a revisión`, async () => {
     const p = await crear(promo());
@@ -381,7 +387,7 @@ test('aprobada: guardar el formulario sin cambios reales no la manda a revisión
   await aprobar(p.id);
   // La app reenvía el formulario completo; números como texto y horas con segundos
   // (como las devuelve una columna `time`) no son cambios.
-  const ed = await editar(p.id, { ...promo(), precio_original: '120', hora_recogida_inicio: '08:00:00' });
+  const ed = await editar(p.id, { ...promo(), precio_original: '120', hora_recogida_inicio: `${HORARIO_VIGENTE.hora_recogida_inicio}:00` });
   assert.equal(ed.body.estado_aprobacion, 'aprobado', JSON.stringify(ed.body));
   await assertVisible(p.id, 'sin cambios');
 });

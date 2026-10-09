@@ -14,6 +14,7 @@ const { obtenerComisionFraccion, obtenerComisionPromocionFraccion, obtenerConfig
 const { calcularSnapshotFinanciero, actualizarPropinaEnSnapshot } = require('../services/finanzasSnapshot');
 const { normalizeCartItems, validateCheckoutBags } = require('../services/checkoutValidation');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
+const { registrarInicioIntento } = require('../services/intentosPago');
 const router = express.Router();
 
 // Números de Guatemala tienen 8 dígitos locales. Algunos registros en `usuarios.telefono`
@@ -842,6 +843,10 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
           : 'El pedido dejó de estar disponible para pago mientras se generaba el link. Vuelve a iniciar el checkout.',
       });
     }
+
+    // Inicio de pago para los KPIs (abandono / pagos fallidos). Se registra solo
+    // aquí, cuando el link de verdad llega al cliente; best-effort, nunca lanza.
+    await registrarInicioIntento({ pedidoId: pedido.id, paymentIntentToken });
 
     console.log('[GENERAR LINK] pedido:', pedido.id, '| link generado');
     res.json({ visaLinkUrl, paymentIntentToken });
