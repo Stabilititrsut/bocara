@@ -69,6 +69,18 @@ export default function AdminLiquidacionesScreen() {
   const historial = data?.historial || [];
   const totalPendiente = pendientes.reduce((s: number, r: any) => s + r.neto, 0);
 
+  // Ventana de liquidación (backend: services/liquidaciones.js#ventanaLiquidacion).
+  // Fuera de los 5 primeros días hábiles el backend NO genera cortes nuevos,
+  // pero sí paga las liquidaciones ya generadas: el botón paga solo eso, y se
+  // deshabilita si el restaurante no tiene ninguna generada. Sin el campo
+  // (backend anterior) no se bloquea nada.
+  const ventana = data?.ventana_liquidacion;
+  const fueraDeVentana = !!ventana && !ventana.dentro;
+  const ddmm = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '—');
+  const montoPagable = (r: any): number => fueraDeVentana
+    ? (r.liquidaciones_pendientes || []).reduce((s: number, l: any) => s + (l.monto || 0), 0)
+    : r.neto;
+
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
@@ -100,6 +112,20 @@ export default function AdminLiquidacionesScreen() {
       >
         {tab === 'pendientes' && (
           <>
+            {ventana && (
+              <View style={[s.ventanaCard, fueraDeVentana ? s.ventanaCerrada : s.ventanaAbierta]}>
+                <Text style={[s.ventanaTitulo, { color: fueraDeVentana ? '#FBBF24' : '#4ADE80' }]}>
+                  {fueraDeVentana
+                    ? '⏸️ Fuera de la ventana de liquidación mensual'
+                    : `🟢 Ventana de liquidación abierta · día hábil ${ventana.dia_habil} de 5`}
+                </Text>
+                <Text style={s.ventanaTexto}>
+                  {fueraDeVentana
+                    ? `Las liquidaciones mensuales solo pueden procesarse durante los primeros 5 días hábiles del mes. Próxima apertura: ${ddmm(ventana.proxima_apertura)}. Las liquidaciones ya generadas sí pueden pagarse.`
+                    : `Puedes generar y pagar liquidaciones hasta el ${ddmm(ventana.cierra)} (lunes a viernes).`}
+                </Text>
+              </View>
+            )}
             {pendientes.length === 0 ? (
               <View style={s.emptyState}>
                 <Text style={{ fontSize: 48 }}>💸</Text>
@@ -162,16 +188,33 @@ export default function AdminLiquidacionesScreen() {
                     </View>
                   )}
 
-                  <TouchableOpacity
-                    style={[s.btnPagar, procesando === r.negocio_id && s.btnDisabled]}
-                    onPress={() => { setModalPago(r); setReferencia(''); }}
-                    disabled={!!procesando}
-                  >
-                    {procesando === r.negocio_id
-                      ? <ActivityIndicator color={Colors.white} size="small" />
-                      : <Text style={s.btnPagarText}>💸 Registrar transferencia · Q{r.neto.toFixed(2)}</Text>
-                    }
-                  </TouchableOpacity>
+                  {(() => {
+                    const monto = montoPagable(r);
+                    const bloqueada = fueraDeVentana && monto <= 0;
+                    return (
+                      <>
+                        {fueraDeVentana && !bloqueada && monto < r.neto && (
+                          <Text style={s.ventanaNota}>
+                            Solo se paga lo ya generado (Q{monto.toFixed(2)}). El resto se liquida desde el {ddmm(ventana?.proxima_apertura)}.
+                          </Text>
+                        )}
+                        <TouchableOpacity
+                          style={[s.btnPagar, (procesando === r.negocio_id || bloqueada) && s.btnDisabled, bloqueada && s.btnBloqueado]}
+                          onPress={() => { setModalPago({ ...r, neto: monto }); setReferencia(''); }}
+                          disabled={!!procesando || bloqueada}
+                        >
+                          {procesando === r.negocio_id
+                            ? <ActivityIndicator color={Colors.white} size="small" />
+                            : <Text style={s.btnPagarText}>
+                                {bloqueada
+                                  ? `🔒 Liquidación disponible desde el ${ddmm(ventana?.proxima_apertura)}`
+                                  : `💸 Registrar transferencia · Q${monto.toFixed(2)}`}
+                              </Text>
+                          }
+                        </TouchableOpacity>
+                      </>
+                    );
+                  })()}
                 </View>
               ))
             )}
@@ -313,6 +356,13 @@ const s = StyleSheet.create({
   btnPagar: { backgroundColor: Colors.green, borderRadius: 12, padding: 14, alignItems: 'center' },
   btnPagarText: { color: Colors.white, fontWeight: '800', fontSize: 14 },
   btnDisabled: { opacity: 0.5 },
+  btnBloqueado: { backgroundColor: '#475569' },
+  ventanaCard: { borderRadius: 14, padding: 14, marginBottom: 14, borderWidth: 1 },
+  ventanaAbierta: { backgroundColor: '#052E16', borderColor: '#166534' },
+  ventanaCerrada: { backgroundColor: '#422006', borderColor: '#92400E' },
+  ventanaTitulo: { fontSize: 13, fontWeight: '800', marginBottom: 4 },
+  ventanaTexto: { fontSize: 12, color: '#CBD5E1', lineHeight: 17 },
+  ventanaNota: { fontSize: 11, color: '#FBBF24', marginBottom: 8 },
   histCard: { backgroundColor: DARK, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#334155' },
   histHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   histNombre: { fontSize: 15, fontWeight: '800', color: Colors.white },

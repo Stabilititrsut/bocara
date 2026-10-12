@@ -8,10 +8,13 @@ import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRealtime } from '@/src/context/RealtimeContext';
+import { hoyGuatemala, fechaGuatemalaDe } from '@/src/utils/horarioRecogida';
+import { detectarNuevosConfirmados, reproducirAlertaNuevoPedido, prepararAudioWeb } from '@/src/utils/alertaPedido';
 
 // 'cancelado' fuera de las pestañas a propósito: los pedidos cancelados/no
 // confirmados no deben mostrarse en ningún panel — ver filtro en cargar().
-const ESTADOS = ['todos', 'confirmado', 'en_preparacion', 'listo', 'completado'];
+// Sin pestaña "Todos": el panel abre en "Confirmado", lo que hay que atender ya.
+const ESTADOS = ['confirmado', 'en_preparacion', 'listo', 'completado'];
 const ESTADO_LABELS: Record<string, string> = {
   confirmado: 'Confirmado', en_preparacion: 'En preparación',
   listo: 'Listo', completado: 'Recogido', recogido: 'Recogido', cancelado: 'Cancelado', pendiente: 'Pendiente',
@@ -110,9 +113,14 @@ export default function PedidosRestauranteScreen() {
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filtro, setFiltro] = useState('todos');
+  const [filtro, setFiltro] = useState('confirmado');
   const [scannerVisible, setScannerVisible] = useState(false);
   const pollingRef = useRef<any>(null);
+  // Ids de pedidos ya vistos en esta sesión de la pantalla. null hasta la
+  // primera carga exitosa: lo que ya existía al abrir nunca suena.
+  const vistosRef = useRef<Set<string> | null>(null);
+  const [avisoNuevos, setAvisoNuevos] = useState(0);
+  const avisoTimerRef = useRef<any>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -121,11 +129,27 @@ export default function PedidosRestauranteScreen() {
       // cancelados (un pedido puede pagarse y luego cancelarse) — esta pantalla
       // nunca debe mostrarlos.
       const reales = (res.data || []).filter((p: any) => p.estado !== 'cancelado');
+      // Alerta sonora + vibración por cada tanda de confirmados nuevos (polling,
+      // realtime o pull-to-refresh). El conjunto se actualiza de forma síncrona:
+      // dos cargas que se cruzan no hacen sonar dos veces el mismo pedido.
+      const { nuevos, vistos } = detectarNuevosConfirmados<any>(vistosRef.current, reales);
+      vistosRef.current = vistos;
+      if (nuevos.length > 0) {
+        reproducirAlertaNuevoPedido(nuevos.length, nuevos[0].codigo_recogida);
+        // Aviso visual: respaldo si el navegador bloqueó el audio.
+        setAvisoNuevos((n) => n + nuevos.length);
+        clearTimeout(avisoTimerRef.current);
+        avisoTimerRef.current = setTimeout(() => setAvisoNuevos(0), 8000);
+      }
       setPedidos(reales);
     } catch { } finally { setLoading(false); setRefreshing(false); }
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  // Web: desbloquea el audio con el primer toque en la página (autoplay).
+  useEffect(() => prepararAudioWeb(), []);
+  useEffect(() => () => clearTimeout(avisoTimerRef.current), []);
 
   // Respaldo web para detectar pedidos y cambios aunque el push no esté disponible.
   useEffect(() => {
@@ -179,7 +203,17 @@ export default function PedidosRestauranteScreen() {
     );
   }
 
-  const filtrados = pedidos.filter((p) => filtro === 'todos' || p.estado === filtro);
+  // "Recogido" muestra solo lo entregado HOY (hora de Guatemala), según
+  // completado_en — lo sella un trigger al pasar a completado; updated_at es
+  // el respaldo para filas anteriores a esa columna. El histórico completo
+  // vive en restaurante/historial.tsx. 'recogido' es el nombre heredado de
+  // 'completado' (sql/renombrar-recogido-completado.sql).
+  const hoy = hoyGuatemala();
+  const filtrados = filtro === 'completado'
+    ? pedidos.filter((p) =>
+        (p.estado === 'completado' || p.estado === 'recogido') &&
+        fechaGuatemalaDe(p.completado_en || p.updated_at) === hoy)
+    : pedidos.filter((p) => p.estado === filtro);
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
 
@@ -194,11 +228,19 @@ export default function PedidosRestauranteScreen() {
         )}
       </View>
 
+      {avisoNuevos > 0 && (
+        <TouchableOpacity style={s.avisoNuevos} onPress={() => { setFiltro('confirmado'); setAvisoNuevos(0); }}>
+          <Text style={s.avisoNuevosTexto}>
+            🛎️ {avisoNuevos === 1 ? '¡Nuevo pedido confirmado!' : `¡${avisoNuevos} pedidos nuevos confirmados!`} Toca para verlos
+          </Text>
+        </TouchableOpacity>
+      )}
+
       <View style={s.filtros}>
         {ESTADOS.map((e) => (
           <TouchableOpacity key={e} style={[s.filtroChip, filtro === e && s.filtroActive]} onPress={() => setFiltro(e)}>
             <Text style={[s.filtroText, filtro === e && s.filtroTextActive]}>
-              {e === 'todos' ? 'Todos' : (ESTADO_LABELS[e] || e)}
+              {e === 'completado' ? 'Recogido hoy' : (ESTADO_LABELS[e] || e)}
             </Text>
           </TouchableOpacity>
         ))}
@@ -211,7 +253,7 @@ export default function PedidosRestauranteScreen() {
         {filtrados.length === 0 && (
           <View style={s.empty}>
             <Text style={{ fontSize: 40 }}>📋</Text>
-            <Text style={s.emptyText}>No hay pedidos en esta categoría</Text>
+            <Text style={s.emptyText}>{filtro === 'completado' ? 'Hoy todavía no se ha recogido ningún pedido' : 'No hay pedidos en esta categoría'}</Text>
           </View>
         )}
         {filtrados.map((p: any) => (
@@ -290,6 +332,8 @@ const s = StyleSheet.create({
   scanBtn: { backgroundColor: Colors.brown, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
   scanBtnText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
   filtros: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, marginVertical: 10 },
+  avisoNuevos: { marginHorizontal: 14, marginTop: 10, backgroundColor: Colors.orange, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14 },
+  avisoNuevosTexto: { color: Colors.white, fontWeight: '800', fontSize: 13, textAlign: 'center' },
   filtroChip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 7, backgroundColor: Colors.white },
   filtroActive: { backgroundColor: Colors.orange, borderColor: Colors.orange },
   filtroText: { fontSize: 13, color: Colors.textSecondary, fontWeight: '600' },

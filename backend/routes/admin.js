@@ -9,6 +9,7 @@ const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const {
   esMesValido, ultimoMesCerrado, resumirPendientes, cargarPedidosPendientes, cargarLiquidacionesVivas,
   planParaNegocio, crearLiquidacionMensual, guardarComprobanteSeguro, urlFirmadaComprobante,
+  ventanaLiquidacion, puedeForzarVentana, MENSAJE_FUERA_DE_VENTANA,
 } = require('../services/liquidaciones');
 const { validarModeracion } = require('../services/resenas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
@@ -22,6 +23,9 @@ const {
 const {
   resolverPeriodo, resolverFiltros, obtenerIndicadores, obtenerEmbudo, validarInversion, listarInversiones,
 } = require('../services/metricas');
+const {
+  resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
+} = require('../services/desgloseFinanciero');
 const router = express.Router();
 
 const ESTADOS_LIQUIDACION = ['pendiente', 'pagado', 'liquidado', 'anulado'];
@@ -45,14 +49,21 @@ async function adminOnly(req, res, next) {
   next();
 }
 
-// GET /api/admin/stats
+// GET /api/admin/stats?periodo=hoy|semana|mes|todo[&mes=AAAA-MM]
+//
+// `periodo` (por defecto 'todo', el histórico de siempre) filtra solo las
+// cifras de pedidos — cobrado, comisiones, desglose —; los conteos de usuarios
+// y negocios son siempre del estado actual.
 router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
+  const rango = resolverPeriodoFinanciero(req.query, { porDefecto: 'todo' });
+  if (rango.error) return res.status(400).json({ error: rango.error });
   const [usersRes, negociosRes, pedidosRes] = await Promise.all([
     supabase.from('usuarios').select('id', { count: 'exact', head: true }),
     supabase.from('negocios').select('id,verificado,activo,estado_verificacion'),
     // id y bolsa_id se piden para el impacto ambiental de más abajo: son la
     // llave hacia pedido_items (y hacia la bolsa, en los pedidos heredados).
-    supabase.from('pedidos').select('id,bolsa_id,total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon'),
+    // snapshot_financiero trae el tipo (Tiempo Limitado / Promoción) por línea.
+    aplicarRango(supabase.from('pedidos').select('id,negocio_id,bolsa_id,total,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,snapshot_financiero,created_at'), rango),
   ]);
   const pedidos = pedidosRes.data || [];
   // 'cancelado' excluido explícitamente: /pedidos/:id/cancelar (admin, con reembolso)
@@ -110,7 +121,33 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   } catch (err) {
     console.error('[ADMIN STATS] impacto ambiental no disponible:', err.message);
   }
+
+  // Separación contable Tiempo Limitado (25%) vs Promoción (20%) desde el
+  // snapshot de cada pedido (services/desgloseFinanciero.js).
+  const { totales: f } = resumirFinanzas(pagados, { bolsasPorId: await cargarBolsasPorId(supabase, pagados) });
   res.json({
+    periodo: { periodo: rango.periodo, mes: rango.mes || null, desde: rango.desde, hasta: rango.hasta },
+    resumen_financiero: {
+      ventas_tiempo_limitado: f.ventas_tiempo_limitado,
+      comision_tiempo_limitado: f.comision_tiempo_limitado,
+      porcentaje_tiempo_limitado: f.porcentaje_tiempo_limitado,
+      unidades_tiempo_limitado: f.unidades_tiempo_limitado,
+      ventas_promocion: f.ventas_promocion,
+      comision_promocion: f.comision_promocion,
+      porcentaje_promocion: f.porcentaje_promocion,
+      unidades_promocion: f.unidades_promocion,
+      cargo_cliente_plataforma: f.cargo_plataforma,
+      total_bocara: f.total_bocara,               // comisiones + 3.5%, antes de cupones
+      descuentos_cupon: f.descuento_cupon,
+      total_bocara_neto: f.total_bocara_neto,     // después de cupones (puede ser negativo)
+      pago_restaurantes: f.pago_restaurante,      // monto_neto_restaurante: producto neto + envío + propinas
+      pago_restaurantes_sin_propinas: f.pago_restaurante_sin_propinas,
+      propinas: f.propinas,                       // 100% restaurante
+      envios: f.envios,
+      total_cobrado: f.total_cobrado,
+      pedidos: f.pedidos,
+      pedidos_tipo_inferido: f.pedidos_tipo_inferido,
+    },
     total_usuarios: usersRes.count || 0,
     total_negocios: negocios.length,
     negocios_activos: negocios.filter(n => n.activo !== false).length,
@@ -423,9 +460,12 @@ router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) =
   res.json(data);
 });
 
-// GET /api/admin/financiero — resumen por restaurante
+// GET /api/admin/financiero?periodo=hoy|7d|30d|mes|todo[&mes=AAAA-MM]
+// Resumen por restaurante ("Top restaurantes"), con desglose Tiempo Limitado
+// (25%) vs Promoción (20%). Los rangos se cortan en hora de Guatemala.
 router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
-  const { periodo } = req.query; // '7d' | '30d' | 'todo'
+  const rango = resolverPeriodoFinanciero(req.query, { porDefecto: 'todo' });
+  if (rango.error) return res.status(400).json({ error: rango.error });
 
   // Venta real = hubo transacción monetaria confirmada por Cubo, sin importar si
   // ya se recogió. No exigir estado IN (completado,recogido): un pedido confirmado/
@@ -439,25 +479,20 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   // evidencia confiable de un pago confirmado por Cubo (ver confirmar_pago_cubo).
   let query = supabase
     .from('pedidos')
-    .select('id,total,estado,estado_pago,negocio_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,negocios(id,nombre,zona)')
+    .select('id,total,estado,estado_pago,negocio_id,bolsa_id,created_at,creado_en,cubo_payment_intent_token,cubo_identifier,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,snapshot_financiero,negocios(id,nombre,zona)')
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
     .not('cubo_payment_intent_token', 'is', null)
     .not('cubo_identifier', 'is', null);
-
-  if (periodo === '7d') {
-    const desde = new Date(Date.now() - 7 * 86400000).toISOString();
-    query = query.gte('created_at', desde);
-  } else if (periodo === '30d') {
-    const desde = new Date(Date.now() - 30 * 86400000).toISOString();
-    query = query.gte('created_at', desde);
-  }
+  query = aplicarRango(query, rango);
 
   let { data, error } = await query;
   if (error) {
-    const r = await supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,cubo_payment_intent_token,cubo_identifier')
+    // Respaldo sin el join a negocios — pero CON el mismo rango: antes este
+    // camino devolvía el histórico completo aunque se pidieran 7 días.
+    const r = await aplicarRango(supabase.from('pedidos').select('id,total,estado,estado_pago,negocio_id,bolsa_id,created_at,precio_bolsa,cantidad,costo_envio,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,descuento_cupon,snapshot_financiero,cubo_payment_intent_token,cubo_identifier')
       .eq('estado_pago', 'pagado').neq('estado', 'cancelado')
-      .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null);
+      .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null), rango);
     data = r.data; error = r.error;
   }
   if (error) return res.status(500).json({ error: error.message });
@@ -526,7 +561,31 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   }), { bruto: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0, descuentoCupon: 0, envios: 0, totalCobrado: 0 });
   totales.comision = totales.comisionBocara + totales.cargoPlataforma - totales.descuentoCupon; // ingreso Bocara neto de cupones
 
-  res.json({ resumen, totales });
+  // Desglose Tiempo Limitado (25%) vs Promoción (20%) por negocio, mezclado en
+  // cada fila de `resumen` (mismas filas que arriba, campos snake_case nuevos).
+  const desglose = resumirFinanzas(data, { bolsasPorId: await cargarBolsasPorId(supabase, data), porNegocio: true });
+  const desglosePorNegocio = new Map(desglose.negocios.map((n) => [n.negocio_id, n]));
+  const columnasTop = (d) => ({
+    unidades_tiempo_limitado: d.unidades_tiempo_limitado,
+    unidades_promocion: d.unidades_promocion,
+    ventas_tiempo_limitado: d.ventas_tiempo_limitado,
+    ventas_promocion: d.ventas_promocion,
+    comision_bocara_tiempo_limitado: d.comision_tiempo_limitado,
+    comision_bocara_promocion: d.comision_promocion,
+    neto_restaurante: d.pago_restaurante,
+    total: d.total_cobrado,
+  });
+  const resumenConDesglose = resumen.map((r) => ({ ...r, ...columnasTop(desglosePorNegocio.get(r.negocio_id) || {}) }));
+
+  res.json({
+    periodo: { periodo: rango.periodo, mes: rango.mes || null, desde: rango.desde, hasta: rango.hasta },
+    resumen: resumenConDesglose,
+    totales: { ...totales, ...columnasTop(desglose.totales) },
+    porcentajes: {
+      tiempo_limitado: desglose.totales.porcentaje_tiempo_limitado,
+      promocion: desglose.totales.porcentaje_promocion,
+    },
+  });
 });
 
 // GET /api/admin/pedidos-todos — ventas reales, verificadas por Cubo, para
@@ -679,20 +738,25 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
       liquidaciones: liquidaciones || [],
       filtros: { mes: mes || null, estado: estado || null, negocio_id: negocioId || null },
       ultimo_mes_cerrado: ultimoCerrado,
+      // La app deshabilita "generar liquidación" fuera de la ventana con esto.
+      ventana_liquidacion: ventanaLiquidacion(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/admin/liquidaciones — { negocio_id, mes: 'YYYY-MM' }
+// POST /api/admin/liquidaciones — { negocio_id, mes: 'YYYY-MM', forzar? }
 // Genera la liquidación mensual con la RPC atómica (bloquea pedidos, suma del
 // snapshot, inserta y vincula en una transacción) y su comprobante PDF.
 // Exige liquidar del mes más antiguo al más reciente (409 mes_anterior_pendiente).
+// Solo durante los primeros 5 días hábiles del mes (400 fuera_de_ventana);
+// `forzar: true` lo omite únicamente fuera de producción (puedeForzarVentana).
 router.post('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
   try {
     const r = await crearLiquidacionMensual({
       negocioId: req.body?.negocio_id, mes: req.body?.mes, adminId: req.usuario.id,
+      forzarVentana: puedeForzarVentana(req.body?.forzar),
     });
     res.status(r.status).json(r.body);
   } catch (err) {
@@ -745,10 +809,17 @@ router.post('/liquidaciones/:id/pagar', authMiddleware, adminOnly, async (req, r
     } else {
       negocioId = id;
       const plan = await planParaNegocio(negocioId);
-      for (const mes of plan.mesesAGenerar) {
-        const r = await crearLiquidacionMensual({ negocioId, mes, adminId: req.usuario.id, validarOrden: false });
-        if (r.status !== 201 && !['mes_ya_liquidado', 'sin_pedidos_pendientes'].includes(r.body.resultado)) {
-          return res.status(r.status).json(r.body);
+      // Fuera de los 5 primeros días hábiles no se generan cortes nuevos, pero
+      // las liquidaciones YA generadas y pendientes se pagan igual.
+      const forzarVentana = puedeForzarVentana(req.body?.forzar);
+      const ventana = ventanaLiquidacion();
+      const puedeGenerar = ventana.dentro || forzarVentana;
+      if (puedeGenerar) {
+        for (const mes of plan.mesesAGenerar) {
+          const r = await crearLiquidacionMensual({ negocioId, mes, adminId: req.usuario.id, validarOrden: false, forzarVentana });
+          if (r.status !== 201 && !['mes_ya_liquidado', 'sin_pedidos_pendientes'].includes(r.body.resultado)) {
+            return res.status(r.status).json(r.body);
+          }
         }
       }
       const { data: pendientes, error } = await supabase
@@ -756,6 +827,9 @@ router.post('/liquidaciones/:id/pagar', authMiddleware, adminOnly, async (req, r
       if (error) return res.status(500).json({ error: error.message });
       ids = (pendientes || []).map((l) => l.id);
       if (ids.length === 0) {
+        if (!puedeGenerar && plan.mesesAGenerar.length > 0) {
+          return res.status(400).json({ error: MENSAJE_FUERA_DE_VENTANA, resultado: 'fuera_de_ventana', ventana });
+        }
         return res.status(400).json({ error: 'No hay pedidos completados pendientes de liquidar en meses cerrados' });
       }
     }

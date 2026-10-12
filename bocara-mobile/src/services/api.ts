@@ -153,7 +153,8 @@ export const negociosAPI = {
   // deja el negocio inactivo); PUT /negocios/:id no acepta estados.
   reenviarSolicitud: () => api.post('/negocios/mi-negocio/reenviar'),
   estadisticas: (id: string) => api.get(`/negocios/${id}/estadisticas`),
-  ganancias: (periodo?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo } }),
+  // periodo: hoy | semana | mes_actual | mes (+ mes AAAA-MM) | todo — rangos en hora de Guatemala.
+  ganancias: (periodo?: string, mes?: string) => api.get('/negocios/mi-negocio/ganancias', { params: { periodo, mes } }),
   solicitarCambios: (data: any) => api.post('/negocios/mi-negocio/solicitar-cambios', data),
   cambiosPendientes: () => api.get('/negocios/mi-negocio/cambios-pendientes'),
   impacto: (id: string) => api.get(`/negocios/${id}/impacto`),
@@ -243,7 +244,8 @@ export const uploadsAPI = {
 };
 
 export const adminAPI = {
-  stats: () => api.get('/admin/stats'),
+  // periodo: hoy | semana | mes | todo (por defecto, histórico) — filtra solo las cifras de pedidos.
+  stats: (periodo?: string) => api.get('/admin/stats', { params: { periodo } }),
   negocioDetalle: (id: string) => api.get(`/negocios/${id}`),
   usuarios: (params?: any) => api.get('/admin/usuarios', { params }),
   gestionarUsuario: (id: string, data: any) => api.put(`/admin/usuarios/${id}`, data),
@@ -257,7 +259,8 @@ export const adminAPI = {
   rechazarNegocio: (id: string, motivo?: string, campos_incorrectos?: string[]) =>
     api.put(`/admin/negocios/${id}/rechazar`, { motivo, campos_incorrectos }),
   toggleNegocio: (id: string, motivo?: string) => api.put(`/admin/negocios/${id}/toggle`, { motivo }),
-  financiero: (periodo?: string) => api.get('/admin/financiero', { params: { periodo } }),
+  // periodo: hoy | 7d | 30d | mes (+ mes AAAA-MM) | todo.
+  financiero: (periodo?: string, mes?: string) => api.get('/admin/financiero', { params: { periodo, mes } }),
   pedidosTodos: (params?: any) => api.get('/admin/pedidos-todos', { params }),
   getConfig: () => api.get('/admin/config'),
   updateConfig: (data: any) => api.put('/admin/config', data),

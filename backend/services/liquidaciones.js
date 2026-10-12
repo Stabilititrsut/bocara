@@ -122,6 +122,62 @@ function fechaLimitePago(mes, { diasHabiles = DIAS_HABILES_PAGO, feriadosExtra =
   return { fecha, limiteISO: finDia.toISOString() };
 }
 
+// ── Ventana de liquidación mensual ───────────────────────────────────────────
+//
+// Las liquidaciones mensuales (el corte) solo se generan durante los primeros 5
+// días hábiles del mes en hora de Guatemala (CAMBIOS FINALES, Fase 4). Aquí
+// "hábil" es lunes a viernes, SIN descontar asuetos — regla del documento. Es
+// distinta de fechaLimitePago(), que sí salta asuetos; la fecha límite (3er día
+// hábil con asuetos) siempre cae dentro de esta ventana, porque en los primeros
+// 5 días de semana de un mes hay a lo sumo 2 asuetos (Jueves y Viernes Santo).
+//
+// Solo restringe GENERAR liquidaciones. Pagar las ya generadas (aunque estén
+// vencidas) se permite siempre: bloquearlo retrasaría deudas con restaurantes.
+
+const DIAS_HABILES_VENTANA_LIQUIDACION = 5;
+const MENSAJE_FUERA_DE_VENTANA = 'Las liquidaciones mensuales solo pueden procesarse durante los primeros 5 días hábiles del mes';
+const SIN_ASUETOS = new Set();
+
+// Los primeros `n` días lunes–viernes de `mes` (YYYY-MM) → ['YYYY-MM-DD', …].
+function primerosDiasHabiles(mes, n = DIAS_HABILES_VENTANA_LIQUIDACION) {
+  const dias = [];
+  for (let fecha = `${mes}-01`; dias.length < n; fecha = sumarDias(fecha, 1)) {
+    if (esDiaHabil(fecha, SIN_ASUETOS)) dias.push(fecha);
+  }
+  return dias;
+}
+
+// Estado de la ventana para el instante dado (hora de Guatemala):
+//   dentro        → hoy es uno de los primeros 5 días hábiles del mes
+//   dia_habil     → cuál de ellos (1–5), o null fuera de la ventana
+//   dias          → las 5 fechas de la ventana del mes en curso
+//   abre / cierra → primera y última fecha de esa ventana
+//   proxima_apertura → próximo día en que se puede liquidar (null si es hoy)
+function ventanaLiquidacion(fecha = new Date()) {
+  const hoy = hoyGuatemala(fecha);
+  const dias = primerosDiasHabiles(hoy.slice(0, 7));
+  const indice = dias.indexOf(hoy);
+  const dentro = indice !== -1;
+  let proximaApertura = null;
+  if (!dentro) proximaApertura = hoy < dias[0] ? dias[0] : primerosDiasHabiles(mesSiguiente(hoy.slice(0, 7)), 1)[0];
+  return {
+    dentro, hoy, dia_habil: dentro ? indice + 1 : null, dias,
+    abre: dias[0], cierra: dias[dias.length - 1], proxima_apertura: proximaApertura,
+    mensaje: dentro ? null : MENSAJE_FUERA_DE_VENTANA,
+  };
+}
+
+function esVentanaCincoDiasHabiles(fecha = new Date()) {
+  return ventanaLiquidacion(fecha).dentro;
+}
+
+// Bypass documentado para pruebas y entornos no productivos: `forzar: true`
+// en el body SOLO se acepta si NODE_ENV no es 'production' (render.yaml fija
+// NODE_ENV=production, así que en producción se ignora y la regla aplica igual).
+function puedeForzarVentana(forzar, env = process.env) {
+  return forzar === true && env.NODE_ENV !== 'production';
+}
+
 // ── Orden de liquidación ─────────────────────────────────────────────────────
 
 // Qué meses hay que liquidar, en orden, para cubrir los pedidos pendientes.
@@ -423,7 +479,13 @@ async function urlFirmadaComprobante(liq, { descargar = false, segundos = URL_FI
 
 // Genera la liquidación de `mes` vía la RPC atómica y su comprobante.
 // Devuelve { status, body } listo para la ruta.
-async function crearLiquidacionMensual({ negocioId, mes, adminId, referencia = new Date(), validarOrden = true }) {
+async function crearLiquidacionMensual({ negocioId, mes, adminId, referencia = new Date(), validarOrden = true, forzarVentana = false }) {
+  // Primero la ventana: fuera de los 5 primeros días hábiles no se genera
+  // ningún corte, sea cual sea el negocio o el mes pedido.
+  const ventana = ventanaLiquidacion(referencia);
+  if (!ventana.dentro && !forzarVentana) {
+    return { status: 400, body: { error: MENSAJE_FUERA_DE_VENTANA, resultado: 'fuera_de_ventana', ventana } };
+  }
   if (!negocioId) return { status: 400, body: { error: 'negocio_id es requerido' } };
   if (!esMesValido(mes)) return { status: 400, body: { error: MENSAJES_RESULTADO.mes_invalido, resultado: 'mes_invalido' } };
   // La RPC lo vuelve a verificar; aquí va primero para que "el mes no ha
@@ -489,6 +551,12 @@ module.exports = {
   domingoDePascua,
   feriadosGuatemala,
   fechaLimitePago,
+  DIAS_HABILES_VENTANA_LIQUIDACION,
+  MENSAJE_FUERA_DE_VENTANA,
+  primerosDiasHabiles,
+  ventanaLiquidacion,
+  esVentanaCincoDiasHabiles,
+  puedeForzarVentana,
   planDeLiquidacion,
   validarOrdenLiquidacion,
   montosPedido,
