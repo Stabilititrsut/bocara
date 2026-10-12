@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, SafeAreaView,
   TouchableOpacity, RefreshControl, Dimensions,
@@ -19,8 +19,81 @@ const GREEN  = '#22C55E';
 const BLUE   = '#3B82F6';
 const SCREEN = Dimensions.get('window').width;
 
-const CACHE_STATS = 'bocara_admin_stats_v3';
-const CACHE_FIN   = 'bocara_admin_fin_v3';
+// v4: la respuesta trae el desglose Tiempo Limitado / Promoción y se cachea por periodo.
+const CACHE_STATS = 'bocara_admin_stats_v4';
+const CACHE_FIN   = 'bocara_admin_fin_v4';
+
+// "Resumen general" y "Resumen financiero" (GET /admin/stats?periodo=…).
+type PeriodoGeneral = 'hoy' | 'semana' | 'mes' | 'todo';
+const PERIODOS_GENERAL: { key: PeriodoGeneral; label: string; titulo: string }[] = [
+  { key: 'hoy',    label: 'Hoy',    titulo: 'hoy' },
+  { key: 'semana', label: 'Semana', titulo: 'últimos 7 días' },
+  { key: 'mes',    label: 'Mes',    titulo: 'mes en curso' },
+  { key: 'todo',   label: 'Todo',   titulo: 'histórico total' },
+];
+
+// "Top restaurantes" (GET /admin/financiero?periodo=…).
+type PeriodoTop = 'hoy' | '7d' | '30d' | 'mes' | 'todo';
+const PERIODOS_TOP: { key: PeriodoTop; label: string; titulo: string }[] = [
+  { key: 'hoy',  label: 'Hoy',     titulo: 'hoy' },
+  { key: '7d',   label: '7 días',  titulo: '7 días' },
+  { key: '30d',  label: '30 días', titulo: '30 días' },
+  { key: 'mes',  label: 'Mes',     titulo: 'mes en curso' },
+  { key: 'todo', label: 'Todo',    titulo: 'histórico' },
+];
+
+const q = (v: number | null | undefined) => `Q${(v || 0).toFixed(2)}`;
+
+// Columnas de "Top restaurantes": ancho FIJO por columna (mismo valor en
+// encabezado y filas, así nunca se desalinean) y sin `flex` — en
+// react-native-web, `flex: 1` deja flexBasis 0% y las columnas colapsaban a
+// ancho 0, encimando todos los textos. Suman 850; la tabla mide al menos
+// ANCHO_MIN_TABLA y lo que sobra se lo lleva la columna Restaurante.
+type AlineacionCol = 'left' | 'center' | 'right';
+const COL_TOP = {
+  nombre:   { ancho: 180, align: 'left' as AlineacionCol },
+  unidades: { ancho: 70,  align: 'center' as AlineacionCol },
+  ventas:   { ancho: 85,  align: 'right' as AlineacionCol },
+  comision: { ancho: 90,  align: 'right' as AlineacionCol },
+  neto:     { ancho: 90,  align: 'right' as AlineacionCol },
+  total:    { ancho: 90,  align: 'right' as AlineacionCol },
+};
+const ANCHO_MIN_TABLA = 900;
+
+function Celda({ col, children, encabezado, crecer, estilo }: {
+  col: { ancho: number; align: AlineacionCol };
+  children: ReactNode;
+  encabezado?: boolean;
+  crecer?: boolean;
+  estilo?: any;
+}) {
+  return (
+    <View style={[s.celda, { width: col.ancho, minWidth: col.ancho }, crecer && { flexGrow: 1 }]}>
+      {typeof children === 'string' || typeof children === 'number' ? (
+        <Text
+          style={[encabezado ? s.thTexto : s.tdTexto, { textAlign: col.align }, estilo]}
+          numberOfLines={encabezado ? 2 : 1}
+        >
+          {children}
+        </Text>
+      ) : children}
+    </View>
+  );
+}
+
+function Chips<K extends string>({ opciones, valor, onChange }: {
+  opciones: { key: K; label: string }[]; valor: K; onChange: (k: K) => void;
+}) {
+  return (
+    <View style={s.chips}>
+      {opciones.map(({ key, label }) => (
+        <TouchableOpacity key={key} style={[s.chip, valor === key && s.chipActivo]} onPress={() => onChange(key)}>
+          <Text style={[s.chipTexto, valor === key && s.chipTextoActivo]}>{label}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
 
 function card(extra?: any) {
   return {
@@ -89,60 +162,80 @@ export default function AdminDashboard() {
   const [financiero, setFinanciero] = useState<any>(null);
   const [pedidos,    setPedidos]    = useState<any[]>([]);
   const [comisionPct, setComisionPct] = useState(25);
+  const [comisionPromoPct, setComisionPromoPct] = useState(20);
+  const [periodoGeneral, setPeriodoGeneral] = useState<PeriodoGeneral>('todo');
+  const [periodoTop, setPeriodoTop] = useState<PeriodoTop>('30d');
   const [skelStats,  setSkelStats]  = useState(true);
   const [skelFin,    setSkelFin]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const pollingRef = useRef<any>(null);
+  // El polling corre fuera del ciclo de render: lee el periodo vigente de aquí.
+  const periodoGeneralRef = useRef<PeriodoGeneral>('todo');
   const { logout } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    Promise.all([
-      AsyncStorage.getItem(CACHE_STATS).catch(() => null),
-      AsyncStorage.getItem(CACHE_FIN).catch(() => null),
-    ]).then(([sc, fc]) => {
-      if (sc) { try { setStats(JSON.parse(sc)); setSkelStats(false); } catch {} }
-      if (fc) { try { setFinanciero(JSON.parse(fc)); setSkelFin(false); } catch {} }
-    });
-    loadStats();
-    const t = setTimeout(loadFinanciero, 400);
     adminAPI.getConfig().then(res => {
       const pct = parseFloat(res.data?.comision_porcentaje);
       if (!isNaN(pct)) setComisionPct(pct);
+      const pctPromo = parseFloat(res.data?.comision_promocion_porcentaje);
+      if (!isNaN(pctPromo)) setComisionPromoPct(pctPromo);
     }).catch(() => {});
-    pollingRef.current = setInterval(loadStats, 30000);
-    return () => { clearInterval(pollingRef.current); clearTimeout(t); };
+    pollingRef.current = setInterval(() => loadStats(periodoGeneralRef.current), 30000);
+    return () => clearInterval(pollingRef.current);
   }, []);
 
-  async function loadStats() {
+  // Cada cambio de periodo: primero lo cacheado de ESE periodo (pinta al
+  // instante), luego la respuesta fresca del servidor.
+  useEffect(() => {
+    periodoGeneralRef.current = periodoGeneral;
+    AsyncStorage.getItem(`${CACHE_STATS}_${periodoGeneral}`).catch(() => null).then((sc) => {
+      if (sc) { try { setStats(JSON.parse(sc)); setSkelStats(false); } catch {} }
+      else setSkelStats(true);
+    });
+    loadStats(periodoGeneral);
+  }, [periodoGeneral]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(`${CACHE_FIN}_${periodoTop}`).catch(() => null).then((fc) => {
+      if (fc) { try { setFinanciero(JSON.parse(fc)); setSkelFin(false); } catch {} }
+      else setSkelFin(true);
+    });
+    const t = setTimeout(() => loadFinanciero(periodoTop), 400);
+    return () => clearTimeout(t);
+  }, [periodoTop]);
+
+  async function loadStats(periodo: PeriodoGeneral) {
     try {
-      const res = await adminAPI.stats();
+      const res = await adminAPI.stats(periodo);
+      // Descarta respuestas de un periodo que el admin ya cambió.
+      if (periodo !== periodoGeneralRef.current) return;
       setStats(res.data);
       setSkelStats(false);
       setLastUpdated(new Date());
-      AsyncStorage.setItem(CACHE_STATS, JSON.stringify(res.data)).catch(() => {});
+      AsyncStorage.setItem(`${CACHE_STATS}_${periodo}`, JSON.stringify(res.data)).catch(() => {});
     } catch {}
   }
 
-  async function loadFinanciero() {
+  async function loadFinanciero(periodo: PeriodoTop) {
     try {
       const [finRes, pedRes] = await Promise.all([
-        adminAPI.financiero('30d'),
+        adminAPI.financiero(periodo),
         adminAPI.pedidosTodos({ limite: 100 }),
       ]);
       setFinanciero(finRes.data);
       setPedidos(pedRes.data || []);
       setSkelFin(false);
-      AsyncStorage.setItem(CACHE_FIN, JSON.stringify(finRes.data)).catch(() => {});
+      AsyncStorage.setItem(`${CACHE_FIN}_${periodo}`, JSON.stringify(finRes.data)).catch(() => {});
     } catch {}
   }
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([loadStats(), loadFinanciero()]);
+    await Promise.all([loadStats(periodoGeneral), loadFinanciero(periodoTop)]);
     setRefreshing(false);
-  }, []);
+  }, [periodoGeneral, periodoTop]);
 
   const comision         = stats?.comision_generada || 0; // total Bocara NETO: comisión 25% + cargo plataforma 3.5% − descuentos de cupón
   const totalCobrado     = stats?.ingresos_totales  || 0;
@@ -155,6 +248,21 @@ export default function AdminDashboard() {
   const descuentosCupon  = stats?.descuentos_cupon  || 0; // absorbido por Bocara, nunca por el restaurante
   const costosEnvio      = stats?.costos_envio      || 0;
   const comisionEsPerdida = comision < 0;
+  // Desglose Tiempo Limitado (25%) / Promoción (20%) del backend. Si falta
+  // (backend anterior), todo cae en Tiempo Limitado, la única tarifa de antes.
+  const rf = stats?.resumen_financiero;
+  const ventasTL     = rf?.ventas_tiempo_limitado   ?? ventasBrutas;
+  const comisionTL   = rf?.comision_tiempo_limitado ?? comisionBocaraQ;
+  const ventasPromo  = rf?.ventas_promocion         ?? 0;
+  const comisionPromo = rf?.comision_promocion      ?? 0;
+  const totalBocara  = rf?.total_bocara             ?? (comisionBocaraQ + cargoPlataforma);
+  // Las etiquetas muestran la TARIFA configurada (25% / 20%), no el %
+  // efectivo de los datos: promociones vendidas antes de existir la tarifa
+  // del 20% se cobraron al 25% y hacían decir "Promo (25%)" a la etiqueta.
+  const pctTL    = `${comisionPct}%`;
+  const pctPromo = `${comisionPromoPct}%`;
+  const tituloGeneral = PERIODOS_GENERAL.find(p => p.key === periodoGeneral)?.titulo;
+  const tituloTop     = PERIODOS_TOP.find(p => p.key === periodoTop)?.titulo;
   const resumen   = financiero?.resumen || [];
   const chartData = buildChartData(pedidos);
 
@@ -197,8 +305,10 @@ export default function AdminDashboard() {
           </TouchableOpacity>
         )}
 
-        {/* Métricas principales */}
-        <Text style={s.sectionTitle}>Resumen general — histórico total</Text>
+        {/* Métricas principales — el periodo filtra cobrado y comisiones (y el
+            resumen financiero de abajo); restaurantes y pedidos siguen la misma regla. */}
+        <Text style={s.sectionTitle}>Resumen general — {tituloGeneral}</Text>
+        <Chips opciones={PERIODOS_GENERAL} valor={periodoGeneral} onChange={setPeriodoGeneral} />
         <View style={s.metricsGrid}>
           {skelStats ? (
             [1,2,3,4].map(k => (
@@ -209,8 +319,8 @@ export default function AdminDashboard() {
               </View>
             ))
           ) : [
-            { label: 'Cobrado a clientes', val: `Q${totalCobrado.toFixed(2)}`, sub: 'desde el inicio', color: TEXT, icon: 'trending-up' as any },
-            { label: comisionEsPerdida ? 'Bocara: PÉRDIDA' : 'Comisión Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, sub: descuentosCupon > 0 ? `neto de -Q${descuentosCupon.toFixed(2)} en cupones` : `${comisionPct}% + 3.5% plataforma`, color: comisionEsPerdida ? '#DC2626' : GOLD, icon: comisionEsPerdida ? 'alert-circle' : 'wallet' as any },
+            { label: 'Cobrado a clientes', val: `Q${totalCobrado.toFixed(2)}`, sub: tituloGeneral, color: TEXT, icon: 'trending-up' as any },
+            { label: comisionEsPerdida ? 'Bocara: PÉRDIDA' : 'Comisión Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, sub: descuentosCupon > 0 ? `neto de -Q${descuentosCupon.toFixed(2)} en cupones` : `TL ${pctTL} · Promo ${pctPromo} + 3.5%`, color: comisionEsPerdida ? '#DC2626' : GOLD, icon: comisionEsPerdida ? 'alert-circle' : 'wallet' as any },
             { label: 'Restaurantes',    val: stats?.negocios_activos || 0, sub: 'activos',             color: GREEN,  icon: 'storefront'      as any },
             { label: 'Pedidos totales', val: stats?.total_pedidos || 0,    sub: `${stats?.pedidos_completados || 0} completados`, color: BLUE, icon: 'bag-check' as any },
           ].map(({ label, val, sub, color, icon }) => (
@@ -238,21 +348,24 @@ export default function AdminDashboard() {
         </View>
 
         {/* Resumen financiero */}
-        <Text style={s.sectionTitle}>Resumen financiero — histórico total</Text>
+        <Text style={s.sectionTitle}>Resumen financiero — {tituloGeneral}</Text>
         <Text style={s.sectionCaption}>
-          Estas cifras son acumuladas desde el inicio y no coinciden con la tabla de abajo, que es solo de los últimos 30 días.
+          Mismo periodo que el resumen general. La tabla de abajo tiene su propio selector.
           Desglose separado: nunca mezclar lo que se queda Bocara con lo que recibe el restaurante.
         </Text>
         <View style={[card(), { marginBottom: 20 }]}>
           {[
-            { label: 'Ventas brutas (solo productos)',       val: `Q${ventasBrutas.toFixed(2)}`,      color: TEXT  },
-            { label: `Comisión Bocara (${comisionPct}% del producto)`, val: `Q${comisionBocaraQ.toFixed(2)}`, color: GOLD },
-            { label: 'Cargo al cliente (3.5%)',               val: `Q${cargoPlataforma.toFixed(2)}`,   color: GOLD  },
+            { label: 'Ventas Tiempo Limitado (producto)',     val: q(ventasTL),          color: TEXT  },
+            { label: `Comisión Tiempo Limitado (${pctTL})`,   val: q(comisionTL),        color: GOLD  },
+            { label: 'Ventas Promoción (producto)',           val: q(ventasPromo),       color: TEXT  },
+            { label: `Comisión Promoción (${pctPromo})`,      val: q(comisionPromo),     color: GOLD  },
+            { label: 'Cargo al cliente (3.5%)',               val: q(cargoPlataforma),   color: GOLD  },
+            { label: 'Total Bocara (comisiones + 3.5%)',      val: q(totalBocara),       color: GOLD, bold: true },
             ...(descuentosCupon > 0 ? [
               { label: '— Descuentos de cupón (Bocara los absorbe)', val: `-Q${descuentosCupon.toFixed(2)}`, color: '#DC2626' },
+              { label: comisionEsPerdida ? 'Total Bocara neto — PÉRDIDA' : 'Total Bocara neto de cupones', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, color: comisionEsPerdida ? '#DC2626' : GOLD, bold: true },
             ] : []),
-            { label: comisionEsPerdida ? 'Total Bocara — PÉRDIDA' : 'Total Bocara', val: `${comisionEsPerdida ? '-' : ''}Q${Math.abs(comision).toFixed(2)}`, color: comisionEsPerdida ? '#DC2626' : GOLD, bold: true },
-            { label: `— Pago restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${restaurante75.toFixed(2)}`, color: GREEN },
+            { label: '— Pago restaurantes (producto neto + envío)', val: q(restaurante75), color: GREEN },
             ...(costosEnvio > 0 ? [
               { label: '— Incluye envíos para restaurantes', val: `Q${costosEnvio.toFixed(2)}`, color: GREEN },
             ] : []),
@@ -268,41 +381,57 @@ export default function AdminDashboard() {
         </View>
 
         {/* Tabla restaurantes */}
-        <Text style={s.sectionTitle}>Top restaurantes (30 días)</Text>
+        <Text style={s.sectionTitle}>Top restaurantes — {tituloTop}</Text>
+        <Chips opciones={PERIODOS_TOP} valor={periodoTop} onChange={setPeriodoTop} />
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
-          <View style={s.tableHead}>
-            <Text style={[s.th, { flex: 2 }]}>Restaurante</Text>
-            <Text style={s.th}>Pedidos</Text>
-            <Text style={s.th}>Ventas</Text>
-            <Text style={s.th}>Comisión</Text>
-          </View>
-          {skelFin ? (
-            [1,2,3].map(k => (
-              <View key={k} style={s.tableRow}>
-                <Sk h={14} w="60%" r={4} />
+          {/* 9 columnas: scroll horizontal para que quepan en el teléfono. */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ minWidth: ANCHO_MIN_TABLA }}>
+            <View style={{ minWidth: ANCHO_MIN_TABLA, flexGrow: 1 }}>
+              <View style={s.tablaFilaHead}>
+                <Celda col={COL_TOP.nombre} encabezado crecer>Restaurante</Celda>
+                <Celda col={COL_TOP.unidades} encabezado>Unid. TL</Celda>
+                <Celda col={COL_TOP.unidades} encabezado>Unid. Promo</Celda>
+                <Celda col={COL_TOP.ventas} encabezado>Ventas TL</Celda>
+                <Celda col={COL_TOP.ventas} encabezado>Ventas Promo</Celda>
+                <Celda col={COL_TOP.comision} encabezado>{`Com. TL (${pctTL})`}</Celda>
+                <Celda col={COL_TOP.comision} encabezado>{`Com. Promo (${pctPromo})`}</Celda>
+                <Celda col={COL_TOP.neto} encabezado>Neto Rest.</Celda>
+                <Celda col={COL_TOP.total} encabezado>Total</Celda>
               </View>
-            ))
-          ) : resumen.length === 0 ? (
-            <View style={{ padding: 24, alignItems: 'center' }}>
-              <Text style={{ color: TEXT2, fontSize: 13 }}>Sin ventas en el período</Text>
-            </View>
-          ) : (
-            resumen.slice(0, 10).map((r: any, i: number) => (
-              <TouchableOpacity
-                key={r.negocio_id}
-                style={[s.tableRow, i % 2 === 1 && { backgroundColor: '#F9FAFB' }]}
-                onPress={() => router.push(`/admin/restaurante-detalle?id=${r.negocio_id}` as any)}
-              >
-                <View style={{ flex: 2 }}>
-                  <Text style={s.tdName} numberOfLines={1}>{r.nombre}</Text>
-                  {r.zona ? <Text style={s.tdSub}>{r.zona}</Text> : null}
+              {skelFin ? (
+                [1,2,3].map(k => (
+                  <View key={k} style={[s.tablaFila, { paddingHorizontal: 8, paddingVertical: 12 }]}>
+                    <Sk h={14} w={ANCHO_MIN_TABLA - 40} r={4} />
+                  </View>
+                ))
+              ) : resumen.length === 0 ? (
+                <View style={{ padding: 24 }}>
+                  <Text style={{ color: TEXT2, fontSize: 13 }}>Sin ventas en el período</Text>
                 </View>
-                <Text style={s.td}>{r.pedidos}</Text>
-                <Text style={[s.td, { color: TEXT }]}>Q{r.bruto.toFixed(2)}</Text>
-                <Text style={[s.td, { color: GOLD, fontWeight: '700' }]}>Q{r.comision.toFixed(2)}</Text>
-              </TouchableOpacity>
-            ))
-          )}
+              ) : (
+                resumen.slice(0, 10).map((r: any, i: number) => (
+                  <TouchableOpacity
+                    key={r.negocio_id}
+                    style={[s.tablaFila, i % 2 === 1 && { backgroundColor: '#F9FAFB' }]}
+                    onPress={() => router.push(`/admin/restaurante-detalle?id=${r.negocio_id}` as any)}
+                  >
+                    <Celda col={COL_TOP.nombre} crecer>
+                      <Text style={s.tdName} numberOfLines={1}>{r.nombre}</Text>
+                      <Text style={s.tdSub} numberOfLines={1}>{r.zona ? `${r.zona} · ` : ''}{r.pedidos} pedidos</Text>
+                    </Celda>
+                    <Celda col={COL_TOP.unidades}>{String(r.unidades_tiempo_limitado ?? '—')}</Celda>
+                    <Celda col={COL_TOP.unidades}>{String(r.unidades_promocion ?? '—')}</Celda>
+                    <Celda col={COL_TOP.ventas} estilo={{ color: TEXT }}>{q(r.ventas_tiempo_limitado ?? r.bruto)}</Celda>
+                    <Celda col={COL_TOP.ventas} estilo={{ color: TEXT }}>{q(r.ventas_promocion)}</Celda>
+                    <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_tiempo_limitado ?? r.comisionBocara)}</Celda>
+                    <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_promocion)}</Celda>
+                    <Celda col={COL_TOP.neto} estilo={{ color: GREEN, fontWeight: '700' }}>{q(r.neto_restaurante ?? r.neto)}</Celda>
+                    <Celda col={COL_TOP.total} estilo={{ color: TEXT, fontWeight: '700' }}>{q(r.total ?? r.totalCobrado)}</Celda>
+                  </TouchableOpacity>
+                ))
+              )}
+            </View>
+          </ScrollView>
         </View>
 
         {/* Estadísticas secundarias */}
@@ -368,12 +497,20 @@ const s = StyleSheet.create({
   finLabel:     { fontSize: 13, color: TEXT2 },
   finVal:       { fontSize: 15, fontWeight: '800' },
 
-  tableHead:  { flexDirection: 'row', padding: 10, borderBottomWidth: 1, borderBottomColor: BORDER, backgroundColor: '#F9FAFB' },
-  th:         { flex: 1, fontSize: 10, color: TEXT2, fontWeight: '700', textTransform: 'uppercase', textAlign: 'center' },
-  tableRow:   { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: BORDER },
   tdName:     { fontSize: 13, fontWeight: '700', color: TEXT },
   tdSub:      { fontSize: 10, color: TEXT2 },
-  td:         { flex: 1, fontSize: 12, color: TEXT2, textAlign: 'center' },
+  // Tabla de Top restaurantes (anchos por columna en COL_TOP; sin flex).
+  tablaFilaHead: { flexDirection: 'row', alignItems: 'stretch', borderBottomWidth: 1, borderBottomColor: BORDER, backgroundColor: '#F9FAFB' },
+  tablaFila:     { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: BORDER },
+  celda:         { flexShrink: 0, flexGrow: 0, paddingHorizontal: 8, paddingVertical: 10, justifyContent: 'center' },
+  thTexto:       { fontSize: 10, color: TEXT2, fontWeight: '700', textTransform: 'uppercase' },
+  tdTexto:       { fontSize: 12, color: TEXT2, fontVariant: ['tabular-nums'] },
+
+  chips:          { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
+  chip:           { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
+  chipActivo:     { backgroundColor: GOLD, borderColor: GOLD },
+  chipTexto:      { fontSize: 12, fontWeight: '600', color: TEXT2 },
+  chipTextoActivo: { color: '#fff', fontWeight: '800' },
 
   statsRow:   { flexDirection: 'row', gap: 10, marginBottom: 16 },
   statMini:   { flex: 1, padding: 12, alignItems: 'center', gap: 4 },

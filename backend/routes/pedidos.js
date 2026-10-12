@@ -235,6 +235,32 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // la máquina, no una matriz alterna: la validación real la hace validarTransicion.
 const ESTADOS_SOLICITABLES_RESTAURANTE = ['en_preparacion', 'listo', 'completado', 'recogido', 'cancelado'];
 
+// Marca de tiempo que sella cada estado (tiempos operativos de /admin/indicadores,
+// RPC obtener_kpis_admin). El trigger pedidos_sellar_marcas_estado (migración
+// 202610070900) ya las sella en BD; el backend las manda además de forma
+// explícita como respaldo por si el trigger no está desplegado. No hay
+// doble escritura: el trigger hace COALESCE(NEW.marca, now()) y respeta este valor.
+const MARCA_POR_ESTADO = {
+  en_preparacion: 'aceptado_en',
+  listo: 'listo_en',
+  completado: 'completado_en',
+  recogido: 'completado_en',
+};
+
+// Cambios del UPDATE de estado: `{ estado }` más la marca del estado destino,
+// equivalente a COALESCE(marca, now()): solo se escribe si la columna existe
+// (viene en el SELECT *) y sigue vacía. Nunca se manda null ni se pisa una
+// marca ya sellada. Si la migración no está aplicada, la columna no existe y
+// el UPDATE queda igual que antes (sin columnas desconocidas para PostgREST).
+function cambiosDeEstado(pedido, estado, ahora = new Date()) {
+  const cambios = { estado };
+  const marca = MARCA_POR_ESTADO[estado];
+  if (marca && Object.prototype.hasOwnProperty.call(pedido, marca) && pedido[marca] == null) {
+    cambios[marca] = ahora.toISOString();
+  }
+  return cambios;
+}
+
 // PUT /api/pedidos/:id/estado — cambiar estado (restaurante)
 router.put('/:id/estado', authMiddleware, async (req, res) => {
   const { estado } = req.body;
@@ -248,7 +274,10 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
 
   const { data: pedido, error: pedidoErr } = await supabase
     .from('pedidos')
-    .select('estado, estado_pago, cubo_payment_intent_token, cubo_identifier, usuario_id, negocio_id, codigo_recogida, total, tipo_entrega, negocios(propietario_id), usuarios(expo_push_token)')
+    // `*` (no una lista fija) para que las marcas de tiempo vengan solo si la
+    // columna existe: pedir aceptado_en por nombre rompería la lectura en una
+    // BD sin la migración 202610070900 (ver cambiosDeEstado).
+    .select('*, negocios(propietario_id), usuarios(expo_push_token)')
     .eq('id', req.params.id)
     .maybeSingle();
 
@@ -299,7 +328,7 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
   try {
     const r = await supabase
       .from('pedidos')
-      .update({ estado })
+      .update(cambiosDeEstado(pedido, estado))
       .eq('id', req.params.id)
       .eq('estado', pedido.estado)
       .select()

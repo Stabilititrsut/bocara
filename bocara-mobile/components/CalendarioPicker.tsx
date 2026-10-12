@@ -87,20 +87,53 @@ export default function CalendarioPicker({
   const [abierto, setAbierto] = useState(false);
   const hoy = new Date();
   const hoyISO = aISO(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-  const inicial = parse(value) || { anio: hoy.getFullYear(), mes: hoy.getMonth(), dia: hoy.getDate() };
+
+  // Límites normalizados a la granularidad del modo: en modo mes se comparan
+  // 'YYYY-MM' (comparar '2026-10' con '2026-10-05' como texto daría el mes
+  // de minDate por deshabilitado); en modo día, las fechas completas.
+  const limite = (v?: string) => (v ? (modo === 'mes' ? v.slice(0, 7) : v) : undefined);
+  const min = limite(minDate);
+  const max = limite(maxDate);
+  const fueraDeRango = (valorISO: string) => {
+    const v = limite(valorISO) as string;
+    return (!!min && v < min) || (!!max && v > max);
+  };
+
+  // Mes (o año, en modo mes) donde abre el calendario: el del valor si es
+  // elegible; si no (p. ej. la fecha fin vieja de una publicación que se
+  // edita), el del límite más cercano — nunca un mes que no se puede usar.
+  function puntoDeApertura() {
+    if (value && !fueraDeRango(value)) return parse(value);
+    if (min && hoyISO.slice(0, min.length) < min) return parse(minDate as string);
+    if (max && hoyISO.slice(0, max.length) > max) return parse(maxDate as string);
+    return { anio: hoy.getFullYear(), mes: hoy.getMonth(), dia: hoy.getDate() };
+  }
+
+  const inicial = puntoDeApertura() || { anio: hoy.getFullYear(), mes: hoy.getMonth(), dia: hoy.getDate() };
   const [visAnio, setVisAnio] = useState(inicial.anio);
   const [visMes, setVisMes] = useState(inicial.mes);
 
   function abrir() {
     if (disabled) return;
-    const p = parse(value) || { anio: hoy.getFullYear(), mes: hoy.getMonth(), dia: hoy.getDate() };
+    const p = puntoDeApertura() || inicial;
     setVisAnio(p.anio);
     setVisMes(p.mes);
     setAbierto(true);
   }
 
+  // ¿Hay algo elegible antes / después de lo visible? Modo día: por mes;
+  // modo mes: por año. Si no, la flecha se deshabilita (no se navega al pasado
+  // de minDate ni al futuro de maxDate).
+  const visible = modo === 'mes' ? String(visAnio) : aMesISO(visAnio, visMes);
+  const minNav = minDate ? (modo === 'mes' ? minDate.slice(0, 4) : minDate.slice(0, 7)) : null;
+  const maxNav = maxDate ? (modo === 'mes' ? maxDate.slice(0, 4) : maxDate.slice(0, 7)) : null;
+  const puedeRetroceder = !minNav || visible > minNav;
+  const puedeAvanzar = !maxNav || visible < maxNav;
+
   // Modo día: ±1 mes. Modo mes: ±1 año.
   function navegar(delta: number) {
+    if (delta < 0 && !puedeRetroceder) return;
+    if (delta > 0 && !puedeAvanzar) return;
     if (modo === 'mes') { setVisAnio(visAnio + delta); return; }
     let m = visMes + delta;
     let a = visAnio;
@@ -111,12 +144,14 @@ export default function CalendarioPicker({
   }
 
   function elegir(valorISO: string) {
+    if (fueraDeRango(valorISO)) return;
     onChange(valorISO);
     setAbierto(false);
   }
 
-  const fueraDeRango = (valorISO: string) =>
-    (!!minDate && valorISO < minDate) || (!!maxDate && valorISO > maxDate);
+  // Valor ya guardado que quedó fuera de rango (fecha fin vieja al editar):
+  // el campo lo marca para que se elija una nueva en vez de parecer válido.
+  const valorFueraDeRango = !!value && fueraDeRango(value);
 
   const seleccionado = parse(value);
   const legible = value ? formatoLegible(value, modo) : '';
@@ -127,7 +162,7 @@ export default function CalendarioPicker({
       <View style={st.gridMeses}>
         {MESES_CORTOS.map((nombre, mes) => {
           const valorMes = aMesISO(visAnio, mes);
-          const esSeleccionado = !!seleccionado && seleccionado.anio === visAnio && seleccionado.mes === mes;
+          const esSeleccionado = !!seleccionado && seleccionado.anio === visAnio && seleccionado.mes === mes && !fueraDeRango(valorMes);
           const deshabilitado = fueraDeRango(valorMes);
           return (
             <TouchableOpacity
@@ -166,7 +201,7 @@ export default function CalendarioPicker({
           {celdas.map((dia, i) => {
             if (dia === null) return <View key={`v${i}`} style={st.celda} />;
             const fechaCelda = aISO(visAnio, visMes, dia);
-            const esSeleccionado = !!seleccionado && seleccionado.anio === visAnio && seleccionado.mes === visMes && seleccionado.dia === dia;
+            const esSeleccionado = !!seleccionado && seleccionado.anio === visAnio && seleccionado.mes === visMes && seleccionado.dia === dia && !fueraDeRango(fechaCelda);
             const esHoy = fechaCelda === hoyISO;
             const deshabilitada = fueraDeRango(fechaCelda);
             return (
@@ -196,7 +231,7 @@ export default function CalendarioPicker({
     <View>
       {!!label && <Text style={st.label}>{label}</Text>}
       <TouchableOpacity
-        style={[st.boton, disabled && st.botonDeshabilitado]}
+        style={[st.boton, disabled && st.botonDeshabilitado, valorFueraDeRango && st.botonFueraDeRango]}
         onPress={abrir}
         disabled={disabled}
         accessibilityRole="button"
@@ -207,6 +242,13 @@ export default function CalendarioPicker({
         </Text>
         <Text style={st.botonIcono}>📅</Text>
       </TouchableOpacity>
+      {valorFueraDeRango && (
+        <Text style={st.avisoFueraDeRango}>
+          {min && (limite(value) as string) < min
+            ? `Elige una fecha a partir del ${formatoLegible(minDate as string, modo)}`
+            : `Elige una fecha hasta el ${formatoLegible(maxDate as string, modo)}`}
+        </Text>
+      )}
 
       <Modal visible={abierto} transparent animationType="fade" onRequestClose={() => setAbierto(false)}>
         <View style={st.overlay}>
@@ -216,12 +258,24 @@ export default function CalendarioPicker({
             {!!label && <Text style={st.titulo} numberOfLines={1}>{label.replace(/\s*\*$/, '')}</Text>}
 
             <View style={st.cabeceraMes}>
-              <TouchableOpacity style={st.flecha} onPress={() => navegar(-1)} accessibilityLabel={modo === 'mes' ? 'Año anterior' : 'Mes anterior'}>
-                <Text style={st.flechaTexto}>‹</Text>
+              <TouchableOpacity
+                style={st.flecha}
+                onPress={() => navegar(-1)}
+                disabled={!puedeRetroceder}
+                accessibilityState={{ disabled: !puedeRetroceder }}
+                accessibilityLabel={modo === 'mes' ? 'Año anterior' : 'Mes anterior'}
+              >
+                <Text style={[st.flechaTexto, !puedeRetroceder && st.flechaDeshabilitada]}>‹</Text>
               </TouchableOpacity>
               <Text style={st.mesTexto}>{modo === 'mes' ? visAnio : `${MESES[visMes]} ${visAnio}`}</Text>
-              <TouchableOpacity style={st.flecha} onPress={() => navegar(1)} accessibilityLabel={modo === 'mes' ? 'Año siguiente' : 'Mes siguiente'}>
-                <Text style={st.flechaTexto}>›</Text>
+              <TouchableOpacity
+                style={st.flecha}
+                onPress={() => navegar(1)}
+                disabled={!puedeAvanzar}
+                accessibilityState={{ disabled: !puedeAvanzar }}
+                accessibilityLabel={modo === 'mes' ? 'Año siguiente' : 'Mes siguiente'}
+              >
+                <Text style={[st.flechaTexto, !puedeAvanzar && st.flechaDeshabilitada]}>›</Text>
               </TouchableOpacity>
             </View>
 
@@ -249,6 +303,8 @@ const st = StyleSheet.create({
     borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 4,
   },
   botonDeshabilitado: { opacity: 0.5 },
+  botonFueraDeRango: { borderColor: Colors.error },
+  avisoFueraDeRango: { fontSize: 11, color: Colors.error, fontWeight: '600', marginBottom: 4 },
   botonTexto: { flexShrink: 1, fontSize: 14, color: Colors.textPrimary, fontWeight: '700', textTransform: 'capitalize' },
   botonPlaceholder: { color: Colors.textLight, fontWeight: '400', textTransform: 'none' },
   botonIcono: { fontSize: 15, marginLeft: 6 },
@@ -266,6 +322,7 @@ const st = StyleSheet.create({
   cabeceraMes: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
   flecha: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   flechaTexto: { fontSize: 22, lineHeight: 24, fontWeight: '700', color: Colors.textPrimary },
+  flechaDeshabilitada: { color: Colors.border },
   mesTexto: { fontSize: 15, fontWeight: '800', color: Colors.textPrimary, textTransform: 'capitalize' },
 
   filaSemana: { flexDirection: 'row', marginBottom: 2 },

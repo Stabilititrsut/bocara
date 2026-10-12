@@ -344,24 +344,56 @@ function kpisDesdeRpc(rpc, periodo) {
     if (r.periodo_abierto != null) extra.periodo_abierto = r.periodo_abierto;
     return construirKpi(clave, { numerador: r.numerador, denominador: r.denominador, escala, periodo, extra });
   };
-  const mediana = (claveRpc, nombre, formula) => construirMediana({
-    clave: claveRpc, nombre, formula, mediana: k[claveRpc]?.valor ?? null, muestras: k[claveRpc]?.muestras ?? 0, periodo,
-  });
-  const recibido = mediana('tiempo_recibido_aceptado', 'Recibido → aceptado', 'Mediana de aceptado_en − pagado_en');
-  const desglose = [
-    recibido,
-    mediana('tiempo_aceptado_listo', 'Aceptado → listo (preparación)', 'Mediana de listo_en − aceptado_en'),
-    mediana('tiempo_listo_completado', 'Listo → completado (espera de recogida)', 'Mediana de completado_en − listo_en'),
-  ];
-  const def = DEFINICIONES.tiempos_operativos;
   return {
     pedidos_completados: desdeRpc('pedidos_completados', 100),
     recompra: desdeRpc('recompra', 100),
     ticket_promedio: desdeRpc('ticket_promedio', 1),
-    tiempos_operativos: {
-      ...recibido, clave: 'tiempos_operativos', nombre: def.nombre, formula: def.formula, desglose,
-    },
+    tiempos_operativos: armarTiemposOperativos(k, periodo),
   };
+}
+
+// Tramos de tiempos operativos: [clave, nombre, marca inicial, marca final].
+const TRAMOS_OPERATIVOS = [
+  ['tiempo_recibido_aceptado', 'Recibido → aceptado', 'pagado_en', 'aceptado_en'],
+  ['tiempo_aceptado_listo', 'Aceptado → listo (preparación)', 'aceptado_en', 'listo_en'],
+  ['tiempo_listo_completado', 'Listo → completado (espera de recogida)', 'listo_en', 'completado_en'],
+];
+
+// KPI compuesto a partir de `{ [clave]: { valor, muestras } }` — el bloque
+// `kpis` de la RPC o el cálculo de respaldo (tiemposOperativosDesdePedidos).
+function armarTiemposOperativos(k, periodo, extra = {}) {
+  const desglose = TRAMOS_OPERATIVOS.map(([clave, nombre, desde, hasta]) => construirMediana({
+    clave, nombre, formula: `Mediana de ${hasta} − ${desde}`,
+    mediana: k[clave]?.valor ?? null, muestras: k[clave]?.muestras ?? 0, periodo,
+  }));
+  const def = DEFINICIONES.tiempos_operativos;
+  return { ...desglose[0], clave: 'tiempos_operativos', nombre: def.nombre, formula: def.formula, desglose, ...extra };
+}
+
+// Mediana continua, igual que percentile_cont(0.5) de Postgres: con n impar es
+// el valor central; con n par, el promedio de los dos centrales. Con una sola
+// muestra es esa muestra (un pedido medido NO es "Sin datos").
+function medianaContinua(valores) {
+  const v = valores.filter(Number.isFinite).sort((a, b) => a - b);
+  if (v.length === 0) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+// Espejo en JS de agg_cohorte de obtener_kpis_admin, para cuando la RPC no
+// responde: cohorte = pedidos con pago verificado por Cubo y created_at en
+// [desde, hasta) — el periodo ya viene resuelto en hora de Guatemala
+// (resolverPeriodo) — y, por tramo, solo los pedidos con ambas marcas.
+function tiemposOperativosDesdePedidos(pedidos, periodo) {
+  const cohorte = (pedidos || []).filter((p) => p.cubo_payment_intent_token != null && p.cubo_identifier != null
+    && ms(p.created_at) >= ms(periodo.desde) && ms(p.created_at) < ms(periodo.hasta));
+  const k = {};
+  for (const [clave, , desde, hasta] of TRAMOS_OPERATIVOS) {
+    const minutos = cohorte.filter((p) => p[desde] != null && p[hasta] != null)
+      .map((p) => (ms(p[hasta]) - ms(p[desde])) / 60000);
+    k[clave] = { valor: medianaContinua(minutos), muestras: minutos.length };
+  }
+  return k;
 }
 
 function kpiConversion({ sesiones, cobertura, periodo }) {
@@ -648,6 +680,30 @@ async function obtenerIndicadores({ periodo, filtros, ahora = new Date(), client
     ticket_promedio: sinDatos('ticket_promedio'), tiempos_operativos: sinDatos('tiempos_operativos'),
   });
 
+  // Sin RPC, los tiempos operativos se calculan igual desde las marcas de
+  // pedidos (misma cohorte y misma mediana que el SQL), en vez de mostrar
+  // "Sin datos" cuando sí hay pedidos medidos. Si las columnas de marcas
+  // tampoco existen, esta lectura falla aislada y el KPI queda sin_datos.
+  if (!rpc.ok) {
+    const marcasR = await cargar(advertencias, 'pedidos_marcas_tiempo', () => leerPaginado(() => cliente.from('pedidos')
+      .select(`${COLUMNAS_PEDIDO},aceptado_en,listo_en,completado_en`)
+      .not('cubo_payment_intent_token', 'is', null).not('cubo_identifier', 'is', null)
+      .gte('created_at', periodo.desde).lt('created_at', periodo.hasta).order('id')));
+    if (marcasR.ok) {
+      const sinItems = marcasR.datos.map((p) => p.id).filter((idPedido) => !itemsPorPedido.has(idPedido));
+      if (filtros.tipo && sinItems.length) {
+        const extraR = await cargar(advertencias, 'pedido_items', () => leerPorIds(cliente, 'pedido_items', 'id,pedido_id,bolsa_id,cantidad', 'pedido_id', sinItems));
+        for (const it of extraR.datos || []) {
+          if (!itemsPorPedido.has(it.pedido_id)) itemsPorPedido.set(it.pedido_id, []);
+          itemsPorPedido.get(it.pedido_id).push(it);
+        }
+      }
+      kpis.tiempos_operativos = armarTiemposOperativos(
+        tiemposOperativosDesdePedidos(marcasR.datos.filter(filtro.pedidoOk), periodo), periodo,
+        { fuente_calculo: 'respaldo_pedidos' });
+    }
+  }
+
   const cobertura = eventosR.ok ? coberturaAnalitica(eventosR.datos.primero, periodo) : { instrumentado: false, cobertura_desde: null };
   const eventos = eventosR.datos?.eventos || [];
   const ventasFiltradas = new Set(ventas.filter(filtro.pedidoOk).map((v) => v.id));
@@ -799,5 +855,6 @@ async function listarInversiones({ desde, hasta, canal } = {}, cliente = supabas
 module.exports = {
   PERIODOS, INICIO_HISTORICO, VENTANA_ABANDONO_MINUTOS, FUENTES_META, DEFINICIONES, ORDEN_KPIS, PASOS_EMBUDO,
   resolverPeriodo, resolverFiltros, construirKpi, construirMediana, esVentaValida, finVigencia,
+  medianaContinua, tiemposOperativosDesdePedidos, armarTiemposOperativos,
   obtenerIndicadores, obtenerEmbudo, validarInversion, listarInversiones,
 };

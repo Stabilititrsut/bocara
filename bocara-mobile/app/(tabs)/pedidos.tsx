@@ -73,8 +73,11 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosici
 
       {pedido.tipo_entrega === 'recogida' && ['confirmado','en_preparacion','listo'].includes(pedido.estado) && (
         <View style={[s.codigoBox, pedido.estado === 'listo' && s.codigoBoxListo]}>
-          <Text style={s.codigoLabel}>{pedido.estado === 'listo' ? '¡Tu bolsa está lista!' : 'Código de recogida'}</Text>
-          <Text style={s.codigo}>{pedido.codigo_recogida}</Text>
+          {/* En 'listo' la caja toma fondo Colors.primary (#0A2A2A), el mismo
+              tono que textPrimary/textSecondary: sin forzar blanco, el código
+              de recogida quedaba invisible justo cuando el cliente lo necesita. */}
+          <Text style={[s.codigoLabel, pedido.estado === 'listo' && { color: Colors.white }]}>{pedido.estado === 'listo' ? '¡Tu bolsa está lista!' : 'Código de recogida'}</Text>
+          <Text style={[s.codigo, pedido.estado === 'listo' && { color: Colors.white }]}>{pedido.codigo_recogida}</Text>
           <View style={s.codigoHoraRow}>
             <Ionicons name="time-outline" size={13} color={pedido.estado === 'listo' ? Colors.white : Colors.textSecondary} />
             <Text style={[s.codigoHora, pedido.estado === 'listo' && { color: 'rgba(255,255,255,0.8)' }]}>

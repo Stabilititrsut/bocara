@@ -5,33 +5,43 @@ import {
 } from 'react-native';
 import { negociosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import CalendarioPicker from '@/components/CalendarioPicker';
+import { hoyGuatemala } from '@/src/utils/horarioRecogida';
 
-type Periodo = 'dia' | 'semana' | 'mes' | 'todo';
+// 'mes' = un mes calendario (el actual o uno anterior, ver selector de mes).
+type Periodo = 'hoy' | 'semana' | 'mes' | 'todo';
 
 const PERIODOS: { key: Periodo; label: string }[] = [
-  { key: 'dia',    label: 'Hoy' },
+  { key: 'hoy',    label: 'Hoy' },
   { key: 'semana', label: '7 días' },
-  { key: 'mes',    label: '30 días' },
+  { key: 'mes',    label: 'Mes' },
   { key: 'todo',   label: 'Todo' },
 ];
 
+// Tarifas por defecto, solo para la etiqueta cuando el periodo no tiene ventas
+// de ese tipo. Con ventas, el % sale de lo cobrado (snapshot de cada pedido).
+const COMISION_TL_DEFECTO = 25;
+const COMISION_PROMO_DEFECTO = 20;
+
 export default function GananciasScreen() {
+  const mesActual = hoyGuatemala().slice(0, 7);
   const [periodo, setPeriodo] = useState<Periodo>('mes');
+  const [mes, setMes] = useState(mesActual);
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const cargar = useCallback(async (p: Periodo = periodo) => {
+  const cargar = useCallback(async () => {
     try {
-      const res = await negociosAPI.ganancias(p);
+      const res = await negociosAPI.ganancias(periodo, periodo === 'mes' ? mes : undefined);
       setData(res.data);
     } catch { } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [periodo]);
+  }, [periodo, mes]);
 
-  useEffect(() => { cargar(periodo); }, [periodo, cargar]);
+  useEffect(() => { cargar(); }, [cargar]);
 
   if (loading) return (
     <View style={s.loading}>
@@ -42,14 +52,21 @@ export default function GananciasScreen() {
   const resumen = data?.resumen || {};
   const liquidaciones = data?.liquidaciones || [];
   const banco = data?.negocio?.datos_bancarios;
-  // % real de comisión de ESTE período: derivado de los montos que ya devolvió
-  // el backend (snapshot financiero por pedido, nunca recalculado con el %
-  // configurado actual — ver negocios.js), no de un 25% fijo en el frontend.
-  // Puede no ser exactamente 25 si el período mezcla pedidos de antes/después
-  // de un cambio de configuración del admin.
-  const pctComision = resumen.ventas_brutas > 0
-    ? Math.round((resumen.comision_bocara / resumen.ventas_brutas) * 100)
-    : null;
+  // Desglose por tipo (Tiempo Limitado / Promoción) del backend. Con un backend
+  // anterior sin `desglose_tipos`, todo cae en Tiempo Limitado.
+  const dt = data?.desglose_tipos;
+  const tl = dt?.tiempo_limitado ?? {
+    ventas: resumen.ventas_brutas || 0, comision_bocara: resumen.comision_bocara || 0,
+    ganancia: resumen.neto_restaurante || 0, unidades: null, porcentaje_comision: null,
+  };
+  const promo = dt?.promocion ?? { ventas: 0, comision_bocara: 0, ganancia: 0, unidades: 0, porcentaje_comision: null };
+  const totalARecibir = dt?.total_a_recibir ?? resumen.total_a_recibir ?? 0;
+  // % real de comisión de ESTE período por tipo: lo devuelve el backend desde
+  // el snapshot de cada pedido, nunca recalculado con el % configurado hoy.
+  const pctTL = tl.porcentaje_comision ?? COMISION_TL_DEFECTO;
+  const pctPromo = promo.porcentaje_comision ?? COMISION_PROMO_DEFECTO;
+  const unidades = (n: number | null) => (n ? ` · ${n} unid.` : '');
+  const complemento = (p: number) => Math.round((100 - p) * 10) / 10;
 
   return (
     <SafeAreaView style={s.root}>
@@ -59,7 +76,7 @@ export default function GananciasScreen() {
 
       <ScrollView
         contentContainerStyle={s.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(periodo); }} tintColor={Colors.orange} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
       >
         {/* Selector de periodo */}
         <View style={s.periodoRow}>
@@ -74,10 +91,29 @@ export default function GananciasScreen() {
           ))}
         </View>
 
+        {/* Mes actual o meses anteriores (nunca futuros). */}
+        {periodo === 'mes' && (
+          <View style={s.mesPicker}>
+            <CalendarioPicker
+              label=""
+              modo="mes"
+              value={mes}
+              onChange={setMes}
+              maxDate={mesActual}
+              placeholder="Seleccionar mes"
+            />
+            {mes !== mesActual && (
+              <TouchableOpacity onPress={() => setMes(mesActual)}>
+                <Text style={s.mesActualLink}>Volver al mes actual</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
         {/* Card principal — venta neta de comisión + propina íntegra, lo que realmente se paga */}
         <View style={s.mainCard}>
           <Text style={s.mainCardLabel}>Lo que recibirás</Text>
-          <Text style={s.mainCardVal}>Q{(resumen.total_a_recibir || 0).toFixed(2)}</Text>
+          <Text style={s.mainCardVal}>Q{totalARecibir.toFixed(2)}</Text>
           <Text style={s.mainCardSub}>{resumen.total_pedidos || 0} pedidos</Text>
         </View>
 
@@ -103,19 +139,20 @@ export default function GananciasScreen() {
         {resumen.total_pedidos > 0 && <View style={s.desglose}>
           <Text style={s.desgloseTitle}>Desglose</Text>
           {[
-            { label: 'Ventas brutas (producto)', val: resumen.ventas_brutas || 0,       color: Colors.textPrimary },
-            { label: `Comisión Bocara${pctComision !== null ? ` (${pctComision}%)` : ''}`,    val: -(resumen.comision_bocara || 0),  color: Colors.error, neg: true },
-            { label: `Tu ganancia por ventas${pctComision !== null ? ` (${100 - pctComision}%)` : ''}`, val: resumen.neto_restaurante || 0, color: Colors.textPrimary },
-            ...(resumen.total_envios > 0 ? [
-              { label: 'Envíos recibidos (100%)', val: resumen.total_envios, color: '#22C55E' },
+            { label: `Ventas Tiempo Limitado${unidades(tl.unidades)}`, val: tl.ventas, color: Colors.textPrimary, grupo: true },
+            { label: `Comisión Bocara (${pctTL}%)`,                    val: -tl.comision_bocara, color: Colors.error, neg: true, sub: true },
+            { label: `Tu ganancia Tiempo Limitado (${complemento(pctTL)}%)`,  val: tl.ganancia, color: Colors.textPrimary, sub: true },
+            { label: `Ventas Promoción${unidades(promo.unidades)}`,     val: promo.ventas, color: Colors.textPrimary, grupo: true },
+            { label: `Comisión Bocara (${pctPromo}%)`,                  val: -promo.comision_bocara, color: Colors.error, neg: true, sub: true },
+            { label: `Tu ganancia Promoción (${complemento(pctPromo)}%)`,      val: promo.ganancia, color: Colors.textPrimary, sub: true },
+            ...((dt?.envios ?? resumen.total_envios) > 0 ? [
+              { label: 'Envíos recibidos (100%)', val: dt?.envios ?? resumen.total_envios, color: '#22C55E' },
             ] : []),
-            ...(resumen.total_propinas > 0 ? [
-              { label: 'Propinas recibidas (100%)', val: resumen.total_propinas, color: '#22C55E' },
-            ] : []),
-            { label: 'Total a recibir',          val: resumen.total_a_recibir || 0,     color: Colors.green, bold: true },
-          ].map(({ label, val, color, bold, neg }: any) => (
-            <View key={label} style={s.desgloseRow}>
-              <Text style={s.desgloseLabel}>{label}</Text>
+            { label: 'Propinas (100%)',           val: dt?.propinas ?? resumen.total_propinas ?? 0, color: '#22C55E' },
+            { label: 'Total a recibir',           val: totalARecibir,  color: Colors.green, bold: true },
+          ].map(({ label, val, color, bold, neg, sub, grupo }: any) => (
+            <View key={label} style={[s.desgloseRow, grupo && s.desgloseGrupo]}>
+              <Text style={[s.desgloseLabel, sub && s.desgloseSub, grupo && s.desgloseLabelGrupo]}>{label}</Text>
               <Text style={[s.desgloseVal, { color }, bold && s.desgloseBold]}>
                 {neg ? '−' : ''}Q{Math.abs(val).toFixed(2)}
               </Text>
@@ -214,6 +251,11 @@ const s = StyleSheet.create({
   desgloseLabel: { fontSize: 13, color: Colors.textSecondary },
   desgloseVal: { fontSize: 14, fontWeight: '700' },
   desgloseBold: { fontSize: 16, fontWeight: '900' },
+  desgloseGrupo: { marginTop: 6 },
+  desgloseLabelGrupo: { color: Colors.textPrimary, fontWeight: '700' },
+  desgloseSub: { paddingLeft: 12, fontSize: 12 },
+  mesPicker: { marginTop: -6, marginBottom: 16 },
+  mesActualLink: { fontSize: 12, color: Colors.orange, fontWeight: '700', marginTop: 6, textAlign: 'right' },
   bancoCard: { backgroundColor: Colors.white, borderRadius: 16, padding: 16, marginBottom: 16, borderWidth: 1.5, borderColor: Colors.border },
   bancoTitle: { fontSize: 14, fontWeight: '800', color: Colors.brown, marginBottom: 12 },
   bancoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.border },

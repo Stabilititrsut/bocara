@@ -12,11 +12,12 @@ const {
   co2PorUnidad, factorCO2, PESO_UNIDAD_DEFECTO_KG,
 } = require('../services/impactoAmbiental');
 const {
-  ahoraGuatemala, hoyGuatemala, validarHorarioFuturo,
+  ahoraGuatemala, hoyGuatemala, validarHorarioFuturo, validarFechaDisponibleNoPasada,
   MENSAJE_HORARIO_VENCIDO,
 } = require('../services/horarioGuatemala');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { MENSAJE_FOTO_PUBLICACION, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
+const { MENSAJE_ENLACES_MAPA, tieneEnlacesMapa } = require('../services/enlacesMapa');
 const {
   TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
   estaEliminada, activarSinAprobacionEsInvalido,
@@ -446,6 +447,11 @@ router.post('/', authMiddleware, async (req, res) => {
   });
   if (errorValidacion) return res.status(400).json({ error: errorValidacion });
 
+  // La fecha de publicación/inicio nunca puede ser anterior a hoy en Guatemala
+  // (el calendario de la app ya lo bloquea; el backend no confía en eso).
+  const errorFechaInicio = validarFechaDisponibleNoPasada(fecha_disponible);
+  if (errorFechaInicio) return res.status(400).json({ error: errorFechaInicio });
+
   // La ventana de recogida debe terminar estrictamente en el futuro según la hora
   // de Guatemala (UTC-6). Publicar algo ya vencido dejaría un registro que ningún
   // endpoint público mostraría.
@@ -457,10 +463,24 @@ router.post('/', authMiddleware, async (req, res) => {
   }
 
   const { data: negocio } = await supabase
-    .from('negocios').select('id,categoria').eq('propietario_id', req.usuario.id).single();
+    .from('negocios').select('id,categoria,google_maps_url,waze_url').eq('propietario_id', req.usuario.id).single();
   // Admins pueden especificar negocio_id; restaurantes solo pueden usar su propio negocio
   const nId = req.usuario.rol === 'admin' ? (negocio_id || negocio?.id) : negocio?.id;
   if (!nId) return res.status(400).json({ error: 'Negocio no encontrado' });
+
+  // Sin los enlaces de Google Maps y Waze el cliente no tiene cómo llegar a
+  // recoger: no se crea la publicación (services/enlacesMapa.js). Se valida el
+  // negocio DESTINO — si un admin publica para otro negocio, es ese el que cuenta.
+  let negocioDestino = negocio;
+  if (negocio?.id !== nId) {
+    const { data } = await supabase
+      .from('negocios').select('id,google_maps_url,waze_url').eq('id', nId).single();
+    negocioDestino = data;
+  }
+  if (!negocioDestino) return res.status(400).json({ error: 'Negocio no encontrado' });
+  if (!tieneEnlacesMapa(negocioDestino)) {
+    return res.status(400).json({ error: MENSAJE_ENLACES_MAPA });
+  }
 
   // Verificar que no exista una bolsa activa con el mismo nombre en este negocio
   const { data: existentes } = await supabase
@@ -709,6 +729,14 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // fuera de catálogo no debe impedir corregir otros campos.
   const errorValidacion = validarDatosBolsa({ ...datosResultantes, tipo: updates.tipo }, { permiteCantidadCero: true });
   if (errorValidacion) return res.status(400).json({ error: errorValidacion });
+
+  // fecha_disponible solo se valida si la edición la cambia: mover el inicio
+  // hacia el pasado no se permite, pero conservar el de una publicación que
+  // ya empezó (reenviado tal cual por el formulario) sí.
+  if (updates.fecha_disponible !== undefined) {
+    const errorFechaInicio = validarFechaDisponibleNoPasada(updates.fecha_disponible, { fechaAnterior: bolsa.fecha_disponible });
+    if (errorFechaInicio) return res.status(400).json({ error: errorFechaInicio });
+  }
 
   // El horario resultante debe terminar en el futuro (hora de Guatemala) cuando la
   // edición toca el horario/la fecha, o cuando reactiva la publicación. Se valida

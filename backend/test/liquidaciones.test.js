@@ -210,7 +210,10 @@ const M2 = mesRelativo(-2);
 const M0 = mesRelativo(0);  // mes en curso
 const sembrar = (...pedidos) => { fake.tabla('pedidos').push(...pedidos); return pedidos; };
 const liquidaciones = () => fake.tabla('liquidaciones');
-const crear = (body, como = IDS.admin) => pedir('POST', '/api/admin/liquidaciones', { como, body });
+// `forzar: true` (bypass de pruebas, fuera de producción): estas pruebas cubren
+// orden, RPC y PDF con meses relativos al reloj real — la ventana de los 5
+// primeros días hábiles tiene sus propias pruebas al final del archivo.
+const crear = (body, como = IDS.admin) => pedir('POST', '/api/admin/liquidaciones', { como, body: { forzar: true, ...body } });
 
 test.before(iniciar);
 test.after(detener);
@@ -349,7 +352,7 @@ test('POST /admin/liquidaciones/:negocio/pagar (contrato legacy): genera en orde
   const mostrado = antes.body.pendientes.find((p) => p.negocio_id === IDS.olaAzul).neto;
 
   const r = await pedir('POST', `/api/admin/liquidaciones/${IDS.olaAzul}/pagar`, {
-    como: IDS.admin, body: { datos_transferencia: { referencia: ' TRX-1 ', banco: 'BI' } },
+    como: IDS.admin, body: { forzar: true, datos_transferencia: { referencia: ' TRX-1 ', banco: 'BI' } },
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.monto_total, mostrado, 'paga exactamente lo que la app mostró');
@@ -439,3 +442,120 @@ test('GET /negocios/mi-negocio/liquidaciones/:id/comprobante: ownership estricto
   anulada.estado = 'anulado';
   assert.equal((await pedir('GET', `/api/negocios/mi-negocio/liquidaciones/${propia.id}/comprobante`, { como: IDS.restaurante })).status, 404);
 });
+
+// ── Ventana de liquidación: primeros 5 días hábiles (lun–vie) del mes ───────
+
+const { mock } = require('node:test');
+
+test('primerosDiasHabiles: exactos en meses que inician en distinto día de la semana', () => {
+  const casos = {
+    '2026-08': ['2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06', '2026-08-07'], // inicia sábado
+    '2026-11': ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-05', '2026-11-06'], // inicia domingo
+    '2026-10': ['2026-10-01', '2026-10-02', '2026-10-05', '2026-10-06', '2026-10-07'], // inicia jueves
+    '2027-01': ['2027-01-01', '2027-01-04', '2027-01-05', '2027-01-06', '2027-01-07'], // viernes, asueto: cuenta
+    '2027-02': ['2027-02-01', '2027-02-02', '2027-02-03', '2027-02-04', '2027-02-05'], // inicia lunes
+  };
+  for (const [mes, dias] of Object.entries(casos)) assert.deepEqual(L.primerosDiasHabiles(mes), dias, mes);
+});
+
+test('esVentanaCincoDiasHabiles: bordes en hora de Guatemala (UTC-6), no UTC', () => {
+  const dentro = (iso) => L.esVentanaCincoDiasHabiles(new Date(iso));
+  assert.equal(dentro('2026-10-01T06:00:00Z'), true, '1 oct 00:00 GT');
+  assert.equal(dentro('2026-10-01T05:59:59Z'), false, '30 sep 23:59 GT');
+  assert.equal(dentro('2026-10-03T18:00:00Z'), false, 'sábado dentro de las fechas no cuenta');
+  assert.equal(dentro('2026-10-08T05:59:59Z'), true, '7 oct 23:59 GT, 5º día hábil');
+  assert.equal(dentro('2026-10-08T06:00:00Z'), false, '8 oct 00:00 GT, 6º día hábil');
+  assert.equal(dentro('2026-08-01T18:00:00Z'), false, 'mes que inicia sábado: el día 1 no es hábil');
+  assert.equal(dentro('2026-08-03T18:00:00Z'), true);
+});
+
+test('ventanaLiquidacion: día hábil y próxima apertura', () => {
+  const v = L.ventanaLiquidacion(new Date('2026-10-06T18:00:00Z'));
+  assert.deepEqual([v.dentro, v.dia_habil, v.abre, v.cierra, v.proxima_apertura], [true, 4, '2026-10-01', '2026-10-07', null]);
+  assert.equal(L.ventanaLiquidacion(new Date('2026-10-11T18:00:00Z')).proxima_apertura, '2026-11-02');
+  assert.equal(L.ventanaLiquidacion(new Date('2026-08-01T18:00:00Z')).proxima_apertura, '2026-08-03');
+  assert.equal(L.ventanaLiquidacion(new Date('2026-10-11T18:00:00Z')).mensaje, L.MENSAJE_FUERA_DE_VENTANA);
+});
+
+test('la fecha límite de pago (3er día hábil con asuetos) siempre cae dentro de la ventana', () => {
+  for (let anio = 2026; anio <= 2030; anio++) {
+    for (let m = 1; m <= 12; m++) {
+      const mes = `${anio}-${String(m).padStart(2, '0')}`;
+      const limite = L.fechaLimitePago(mes).fecha;
+      assert.ok(L.primerosDiasHabiles(L.mesSiguiente(mes)).includes(limite), `${mes} → ${limite}`);
+    }
+  }
+});
+
+test('puedeForzarVentana: solo `forzar === true` y nunca en producción', () => {
+  assert.equal(L.puedeForzarVentana(true, { NODE_ENV: 'test' }), true);
+  assert.equal(L.puedeForzarVentana(true, {}), true);
+  assert.equal(L.puedeForzarVentana(true, { NODE_ENV: 'production' }), false);
+  assert.equal(L.puedeForzarVentana('true', { NODE_ENV: 'test' }), false);
+  assert.equal(L.puedeForzarVentana(undefined, { NODE_ENV: 'test' }), false);
+});
+
+// Reloj fijado a un día concreto (solo Date): fuera de ventana el 15 de
+// octubre de 2026, dentro el 5. Septiembre 2026 es el mes cerrado a liquidar.
+const conReloj = (iso, fn) => async () => {
+  mock.timers.enable({ apis: ['Date'], now: Date.parse(iso) });
+  try { await fn(); } finally { mock.timers.reset(); }
+};
+const FUERA = '2026-10-15T18:00:00.000Z';
+const DENTRO = '2026-10-05T18:00:00.000Z';
+const postSinForzar = (body) => pedir('POST', '/api/admin/liquidaciones', { como: IDS.admin, body });
+
+test('POST /admin/liquidaciones fuera de los 5 días hábiles → 400 con mensaje y sin tocar la RPC', conReloj(FUERA, async () => {
+  sembrar(pedidoPagado({ mes: '2026-09' }));
+  const r = await postSinForzar({ negocio_id: IDS.olaAzul, mes: '2026-09' });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.error, 'Las liquidaciones mensuales solo pueden procesarse durante los primeros 5 días hábiles del mes');
+  assert.equal(r.body.resultado, 'fuera_de_ventana');
+  assert.equal(r.body.ventana.proxima_apertura, '2026-11-02');
+  assert.equal(llamadasRpc.length, 0);
+  assert.equal(liquidaciones().length, 0);
+}));
+
+test('POST /admin/liquidaciones dentro de la ventana → se genera', conReloj(DENTRO, async () => {
+  sembrar(pedidoPagado({ mes: '2026-09' }));
+  const r = await postSinForzar({ negocio_id: IDS.olaAzul, mes: '2026-09' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+}));
+
+test('POST /admin/liquidaciones: `forzar` omite la ventana fuera de producción, pero en producción se ignora', conReloj(FUERA, async () => {
+  sembrar(pedidoPagado({ mes: '2026-09' }));
+  const original = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    assert.equal((await postSinForzar({ negocio_id: IDS.olaAzul, mes: '2026-09', forzar: true })).status, 400);
+  } finally {
+    if (original === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = original;
+  }
+  assert.equal((await postSinForzar({ negocio_id: IDS.olaAzul, mes: '2026-09', forzar: true })).status, 201);
+}));
+
+test('pagar (legacy) fuera de ventana: no genera cortes nuevos → 400; las ya generadas se pagan igual', conReloj(FUERA, async () => {
+  sembrar(pedidoPagado({ mes: '2026-09' }));
+  const sinGenerar = await pedir('POST', `/api/admin/liquidaciones/${IDS.olaAzul}/pagar`, {
+    como: IDS.admin, body: { datos_transferencia: { referencia: 'TRX-V1' } },
+  });
+  assert.equal(sinGenerar.status, 400);
+  assert.equal(sinGenerar.body.resultado, 'fuera_de_ventana');
+  assert.equal(liquidaciones().length, 0);
+
+  // Generada dentro de la ventana (aquí, con el bypass de pruebas)…
+  assert.equal((await postSinForzar({ negocio_id: IDS.olaAzul, mes: '2026-09', forzar: true })).status, 201);
+  // …y pagada después del día 5 hábil: pagar una deuda vencida nunca se bloquea.
+  const pago = await pedir('POST', `/api/admin/liquidaciones/${IDS.olaAzul}/pagar`, {
+    como: IDS.admin, body: { datos_transferencia: { referencia: 'TRX-V2' } },
+  });
+  assert.equal(pago.status, 200, JSON.stringify(pago.body));
+  assert.equal(liquidaciones()[0].estado, 'pagado');
+}));
+
+test('GET /admin/liquidaciones expone el estado de la ventana para la app', conReloj(FUERA, async () => {
+  const r = await pedir('GET', '/api/admin/liquidaciones', { como: IDS.admin });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ventana_liquidacion.dentro, false);
+  assert.equal(r.body.ventana_liquidacion.cierra, '2026-10-07');
+}));

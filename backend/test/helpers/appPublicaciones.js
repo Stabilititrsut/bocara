@@ -38,11 +38,14 @@ function datosBase() {
         id: IDS.olaAzul, nombre: 'Ola Azul', propietario_id: IDS.restaurante,
         activo: true, estado_verificacion: 'aprobado', zona: '10', ciudad: 'Guatemala',
         categoria: 'Restaurante', latitud: 14.6, longitud: -90.5, calificacion_promedio: 4.5,
+        // Sin los dos enlaces POST /api/bolsas rechaza crear (services/enlacesMapa.js).
+        google_maps_url: 'https://maps.app.goo.gl/olaazul', waze_url: 'https://waze.com/ul?ll=14.6,-90.5',
       },
       {
         id: IDS.otroNegocio, nombre: 'Otro', propietario_id: IDS.otroRestaurante,
         activo: true, estado_verificacion: 'aprobado', zona: '4', ciudad: 'Guatemala',
         categoria: 'Cafetería', calificacion_promedio: 4,
+        google_maps_url: 'https://maps.app.goo.gl/otro', waze_url: 'https://waze.com/ul?ll=14.6,-90.5',
       },
     ],
     bolsas: [],
