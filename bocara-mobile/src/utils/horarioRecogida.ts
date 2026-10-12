@@ -31,6 +31,21 @@ function ahoraGuatemala(referencia: Date): AhoraGuatemala {
   return { fecha: FMT_FECHA.format(referencia), hora: `${get('hour')}:${get('minute')}:${get('second')}` };
 }
 
+// Fecha de hoy ('YYYY-MM-DD') en Guatemala — espejo de hoyGuatemala() del
+// backend. Úsala como minDate de CalendarioPicker en vez del reloj local del
+// dispositivo, para que el límite coincida con el que aplica el servidor.
+export function hoyGuatemala(now = new Date()): string {
+  return FMT_FECHA.format(now);
+}
+
+// Día ('YYYY-MM-DD', hora de Guatemala) de un instante ISO/timestamptz — p. ej.
+// `completado_en`. null si el valor no es una fecha válida.
+export function fechaGuatemalaDe(instante?: string | Date | null): string | null {
+  if (!instante) return null;
+  const d = instante instanceof Date ? instante : new Date(instante);
+  return Number.isNaN(d.getTime()) ? null : FMT_FECHA.format(d);
+}
+
 // 'HH:MM' | 'HH:MM:SS' → 'HH:MM:SS'; cualquier otra cosa → null.
 function normalizarHora(hora?: string | null): string | null {
   if (typeof hora !== 'string') return null;

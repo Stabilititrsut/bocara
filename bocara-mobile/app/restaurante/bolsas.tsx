@@ -1,10 +1,10 @@
-import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { publicacionVencida, hoyGuatemala } from '@/src/utils/horarioRecogida';
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, SafeAreaView,
   Modal, TextInput, Alert, RefreshControl, Switch, Image, ActivityIndicator, Platform,
 } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
@@ -30,6 +30,9 @@ interface BolsaRestaurante extends Bolsa {
 // no lo restringe) — es una lista fija solo para esta UI, no un contrato de
 // backend (ver BolsaForm.categoria más abajo, tipado como string por eso).
 const TIPOS_DESCUENTO = ['Porcentaje', 'Monto fijo', '2x1', 'Gratis', 'Especial'] as const;
+
+// Mismo texto que devuelve POST /bolsas (backend/routes/bolsas.js).
+const MENSAJE_ENLACES_MAPA = 'Debes configurar los enlaces de Google Maps y Waze de tu negocio antes de publicar';
 
 const CATEGORIAS_ALIMENTO = [
   { value: 'cereales',          label: 'Cereales y panadería', emoji: '🌾' },
@@ -168,6 +171,10 @@ export default function BolsasRestauranteScreen() {
   const [form, setForm] = useState<BolsaForm>(FORM_INIT);
   const [editId, setEditId] = useState<string | null>(null);
   const [negocioId, setNegocioId] = useState('');
+  // null = todavía no se sabe (carga pendiente o fallida): no se bloquea en
+  // la UI y decide el backend, que exige los dos enlaces al crear igual.
+  const [faltanEnlacesMapa, setFaltanEnlacesMapa] = useState<boolean | null>(null);
+  const router = useRouter();
   const [uploadingFoto, setUploadingFoto] = useState(false);
   const [uploadFotoError, setUploadFotoError] = useState('');
   const [tabVista, setTabVista] = useState<'todos' | 'bolsa' | 'cupon'>('todos');
@@ -226,6 +233,10 @@ export default function BolsasRestauranteScreen() {
     try {
       const [negRes, bolRes] = await Promise.all([negociosAPI.miNegocio(), bolsasAPI.listar({ mi_negocio: true })]);
       setNegocioId(negRes.data?.id || '');
+      if (negRes.data) {
+        const tieneEnlace = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+        setFaltanEnlacesMapa(!tieneEnlace(negRes.data.google_maps_url) || !tieneEnlace(negRes.data.waze_url));
+      }
       // Deduplicar por id en caso de datos duplicados en BD
       const raw: BolsaRestaurante[] = bolRes.data || [];
       const dedup = Array.from(new Map(raw.map(b => [String(b.id), b])).values());
@@ -245,7 +256,23 @@ export default function BolsasRestauranteScreen() {
   // una edición en curso (mismo criterio que restaurante/perfil.tsx).
   useFocusEffect(useCallback(() => { cargar(); }, [cargar]));
 
+  // Publicar exige que el cliente pueda llegar al negocio: sin los enlaces de
+  // Google Maps y Waze no se abre el formulario de una publicación nueva (el
+  // backend lo rechaza igual en POST /bolsas). Editar las existentes sí se permite.
+  function avisarFaltanEnlacesMapa() {
+    const msg = MENSAJE_ENLACES_MAPA;
+    if (Platform.OS === 'web') {
+      if ((window as any).confirm(`${msg}\n\n¿Ir a tu perfil ahora?`)) router.push('/restaurante/perfil' as any);
+      return;
+    }
+    Alert.alert('Faltan enlaces de ubicación', msg, [
+      { text: 'Ahora no', style: 'cancel' },
+      { text: 'Ir a mi perfil', onPress: () => router.push('/restaurante/perfil' as any) },
+    ]);
+  }
+
   function abrir(b?: BolsaRestaurante) {
+    if (!b && faltanEnlacesMapa) return avisarFaltanEnlacesMapa();
     setUploadFotoError('');
     setFotoFaltante(false);
     setSaving(false);
@@ -336,6 +363,18 @@ export default function BolsasRestauranteScreen() {
       return alertar(form.tipo_form === 'cupon'
         ? 'La fecha de publicación es obligatoria'
         : 'La fecha de inicio es obligatoria');
+    }
+
+    // Nunca en el pasado (hoy en Guatemala, igual que el backend). Al editar
+    // solo se exige si la fecha cambió: una publicación vigente que empezó
+    // ayer debe poder seguir editándose sin mover su fecha de inicio.
+    const hoy = hoyGuatemala();
+    const fechaOriginal = edicionInicial.current?.payload.fecha_disponible;
+    const cambioFecha = !editId || form.fecha_disponible !== fechaOriginal;
+    if (cambioFecha && form.fecha_disponible < hoy) {
+      return alertar(form.tipo_form === 'cupon'
+        ? 'La fecha de publicación no puede ser anterior a hoy'
+        : 'La fecha de inicio no puede ser anterior a hoy');
     }
 
     // Tiempo limitado también necesita fecha fin, y no puede ser anterior al
@@ -432,6 +471,10 @@ export default function BolsasRestauranteScreen() {
     : items.filter(b => tabVista === 'cupon' ? b.tipo === 'cupon' : b.tipo !== 'cupon');
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.aqua} size="large" /></View>;
+
+  // Límite inferior de los calendarios: hoy en Guatemala, no el reloj del
+  // dispositivo — el mismo día que valida POST/PUT /bolsas.
+  const hoyISO = hoyGuatemala();
 
   return (
     <SafeAreaView style={s.root}>
@@ -716,6 +759,7 @@ export default function BolsasRestauranteScreen() {
                 label="Fecha de publicación *"
                 value={form.fecha_disponible}
                 onChange={set('fecha_disponible')}
+                minDate={hoyISO}
               />
             ) : (
               // Tiempo limitado: rango fecha inicio → fecha fin, ambas por
@@ -724,7 +768,7 @@ export default function BolsasRestauranteScreen() {
               // igual el backend, ver validarDatosBolsa).
               <View style={s.priceRow}>
                 <View style={{ flex: 1 }}>
-                  <CalendarioPicker label="Fecha inicio *" value={form.fecha_disponible} onChange={set('fecha_disponible')} />
+                  <CalendarioPicker label="Fecha inicio *" value={form.fecha_disponible} onChange={set('fecha_disponible')} minDate={hoyISO} />
                 </View>
                 <View style={{ width: 12 }} />
                 <View style={{ flex: 1 }}>
@@ -732,7 +776,8 @@ export default function BolsasRestauranteScreen() {
                     label="Fecha fin *"
                     value={form.fecha_caducidad}
                     onChange={set('fecha_caducidad')}
-                    minDate={form.fecha_disponible || undefined}
+                    // 'YYYY-MM-DD' se compara bien como texto: la mayor entre hoy y el inicio.
+                    minDate={form.fecha_disponible > hoyISO ? form.fecha_disponible : hoyISO}
                   />
                 </View>
               </View>

@@ -194,9 +194,25 @@ function noHaIniciado(bolsa, ahora = ahoraGuatemala()) {
   return inicio ? inicio > ahora.fecha : false;
 }
 
+const MENSAJE_FECHA_DISPONIBLE_PASADA = 'La fecha de inicio/publicación no puede ser anterior a hoy';
+
+// Valida (para escrituras) que `fecha_disponible` no quede en el pasado según
+// el día de hoy en Guatemala. Al editar se pasa `fechaAnterior` (la guardada):
+// si la fecha no cambió no se valida, para que una publicación vigente que
+// empezó ayer pueda seguir editándose sin mover su fecha de inicio.
+// Devuelve el mensaje de error, o null si es válida (o no viene).
+function validarFechaDisponibleNoPasada(fechaNueva, { fechaAnterior } = {}, ahora = ahoraGuatemala()) {
+  const fecha = normalizarFecha(fechaNueva);
+  if (!fecha) return null;
+  if (fechaAnterior !== undefined && normalizarFecha(fechaAnterior) === fecha) return null;
+  return fecha < ahora.fecha ? MENSAJE_FECHA_DISPONIBLE_PASADA : null;
+}
+
 module.exports = {
   ZONA_GUATEMALA,
   MENSAJE_HORARIO_VENCIDO,
+  MENSAJE_FECHA_DISPONIBLE_PASADA,
+  validarFechaDisponibleNoPasada,
   ahoraGuatemala,
   hoyGuatemala,
   normalizarHora,

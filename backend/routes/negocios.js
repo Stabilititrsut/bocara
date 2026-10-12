@@ -11,6 +11,9 @@ const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../ser
 const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { esMesValido, urlFirmadaComprobante } = require('../services/liquidaciones');
+const {
+  resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
+} = require('../services/desgloseFinanciero');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -338,18 +341,20 @@ router.post('/', authMiddleware, async (req, res) => {
   res.status(201).json(data);
 });
 
-// GET /api/negocios/mi-negocio/ganancias
+// GET /api/negocios/mi-negocio/ganancias?periodo=hoy|semana|mes_actual|mes&mes=AAAA-MM|todo
+//
+// Rangos en hora de Guatemala (services/desgloseFinanciero.js). Compatibilidad
+// con versiones anteriores de la app: 'dia' = 'hoy' y 'mes' SIN `mes` sigue
+// siendo "últimos 30 días", que es lo que esas versiones muestran con ese botón.
 router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   const { data: negocio } = await supabase
     .from('negocios').select('id,nombre,datos_bancarios').eq('propietario_id', req.usuario.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
 
-  const { periodo = 'mes' } = req.query;
-  let desde = null;
-  if (periodo === 'dia')         desde = new Date(Date.now() - 86400000);
-  else if (periodo === 'semana') desde = new Date(Date.now() - 7 * 86400000);
-  else if (periodo === 'mes')    desde = new Date(Date.now() - 30 * 86400000);
-  // periodo === 'todo' → desde queda null, sin límite de fecha (histórico completo)
+  const periodoPedido = req.query.periodo === 'mes' && !req.query.mes ? '30d' : req.query.periodo;
+  const rango = resolverPeriodoFinanciero({ periodo: periodoPedido, mes: req.query.mes }, { porDefecto: 'mes_actual' });
+  if (rango.error) return res.status(400).json({ error: rango.error });
+  const periodo = rango.periodo;
 
   // Mismo criterio de "venta real" que el resto del sistema: dinero confirmado
   // por Cubo (estado_pago='pagado', no cancelado, con token+identifier de Cubo),
@@ -358,13 +363,13 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   // estado IN (completado,recogido) sin verificar pago real ni excluir cancelados.
   let query = supabase
     .from('pedidos')
-    .select('id,total,precio_bolsa,cantidad,costo_envio,descuento_cupon,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,created_at')
+    .select('id,negocio_id,bolsa_id,total,precio_bolsa,cantidad,costo_envio,descuento_cupon,comision_bocara,comision_pasarela,monto_neto_restaurante,propina,estado,estado_pago,cubo_payment_intent_token,cubo_identifier,snapshot_financiero,created_at')
     .eq('negocio_id', negocio.id)
     .eq('estado_pago', 'pagado')
     .neq('estado', 'cancelado')
     .not('cubo_payment_intent_token', 'is', null)
     .not('cubo_identifier', 'is', null);
-  if (desde) query = query.gte('created_at', desde.toISOString());
+  query = aplicarRango(query, rango);
   const { data: pedidos } = await query;
 
   const ventas = pedidos || [];
@@ -398,9 +403,33 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(20);
 
+  // Separación por tipo: Tiempo Limitado (comisión 25% → 75% para el
+  // restaurante) y Promoción (20% → 80%), desde el snapshot de cada pedido.
+  const { totales: f } = resumirFinanzas(ventas, { bolsasPorId: await cargarBolsasPorId(supabase, ventas) });
+
   res.json({
     periodo,
+    rango: { mes: rango.mes || null, desde: rango.desde, hasta: rango.hasta },
     negocio: { id: negocio.id, nombre: negocio.nombre, datos_bancarios: negocio.datos_bancarios },
+    desglose_tipos: {
+      tiempo_limitado: {
+        unidades: f.unidades_tiempo_limitado,
+        ventas: f.ventas_tiempo_limitado,
+        comision_bocara: f.comision_tiempo_limitado,
+        porcentaje_comision: f.porcentaje_tiempo_limitado,
+        ganancia: f.neto_tiempo_limitado, // ~75% de las ventas
+      },
+      promocion: {
+        unidades: f.unidades_promocion,
+        ventas: f.ventas_promocion,
+        comision_bocara: f.comision_promocion,
+        porcentaje_comision: f.porcentaje_promocion,
+        ganancia: f.neto_promocion,       // ~80% de las ventas
+      },
+      propinas: f.propinas,               // 100% del restaurante
+      envios: f.envios,
+      total_a_recibir: f.pago_restaurante,
+    },
     resumen: {
       total_pedidos: ventas.length,
       ventas_brutas: parseFloat(bruto.toFixed(2)),          // producto, sin propina
