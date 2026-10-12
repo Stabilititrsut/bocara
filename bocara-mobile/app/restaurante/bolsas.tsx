@@ -378,9 +378,13 @@ export default function BolsasRestauranteScreen() {
     }
 
     // Tiempo limitado también necesita fecha fin, y no puede ser anterior al
-    // inicio (Promoción no tiene fecha fin — ver construirPayload).
+    // inicio (Promoción no tiene fecha fin — ver construirPayload) ni a hoy:
+    // al editar una publicación vieja, la fecha fin que trae puede haber
+    // quedado en el pasado aunque el usuario no la toque (el backend la
+    // rechazaría igual — validarHorarioFuturo).
     if (form.tipo_form === 'bolsa') {
       if (!form.fecha_caducidad) return alertar('La fecha de fin es obligatoria');
+      if (form.fecha_caducidad < hoy) return alertar('La fecha de fin no puede ser anterior a hoy. Elige una nueva fecha fin.');
       if (form.fecha_caducidad < form.fecha_disponible) {
         return alertar('La fecha de fin no puede ser anterior a la fecha de inicio');
       }
@@ -475,6 +479,10 @@ export default function BolsasRestauranteScreen() {
   // Límite inferior de los calendarios: hoy en Guatemala, no el reloj del
   // dispositivo — el mismo día que valida POST/PUT /bolsas.
   const hoyISO = hoyGuatemala();
+  // Fecha fin: la mayor entre hoy y la fecha de inicio ('YYYY-MM-DD' se
+  // compara bien como texto). Si la fecha de inicio quedó en el pasado (una
+  // publicación vieja que se edita), el mínimo es HOY.
+  const minFechaFin = form.fecha_disponible && form.fecha_disponible > hoyISO ? form.fecha_disponible : hoyISO;
 
   return (
     <SafeAreaView style={s.root}>
@@ -776,8 +784,7 @@ export default function BolsasRestauranteScreen() {
                     label="Fecha fin *"
                     value={form.fecha_caducidad}
                     onChange={set('fecha_caducidad')}
-                    // 'YYYY-MM-DD' se compara bien como texto: la mayor entre hoy y el inicio.
-                    minDate={form.fecha_disponible > hoyISO ? form.fecha_disponible : hoyISO}
+                    minDate={minFechaFin}
                   />
                 </View>
               </View>

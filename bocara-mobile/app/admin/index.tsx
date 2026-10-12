@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, SafeAreaView,
   TouchableOpacity, RefreshControl, Dimensions,
@@ -43,7 +43,43 @@ const PERIODOS_TOP: { key: PeriodoTop; label: string; titulo: string }[] = [
 ];
 
 const q = (v: number | null | undefined) => `Q${(v || 0).toFixed(2)}`;
-const pct = (v: number | null | undefined, porDefecto: number) => `${v ?? porDefecto}%`;
+
+// Columnas de "Top restaurantes": ancho FIJO por columna (mismo valor en
+// encabezado y filas, así nunca se desalinean) y sin `flex` — en
+// react-native-web, `flex: 1` deja flexBasis 0% y las columnas colapsaban a
+// ancho 0, encimando todos los textos. Suman 850; la tabla mide al menos
+// ANCHO_MIN_TABLA y lo que sobra se lo lleva la columna Restaurante.
+type AlineacionCol = 'left' | 'center' | 'right';
+const COL_TOP = {
+  nombre:   { ancho: 180, align: 'left' as AlineacionCol },
+  unidades: { ancho: 70,  align: 'center' as AlineacionCol },
+  ventas:   { ancho: 85,  align: 'right' as AlineacionCol },
+  comision: { ancho: 90,  align: 'right' as AlineacionCol },
+  neto:     { ancho: 90,  align: 'right' as AlineacionCol },
+  total:    { ancho: 90,  align: 'right' as AlineacionCol },
+};
+const ANCHO_MIN_TABLA = 900;
+
+function Celda({ col, children, encabezado, crecer, estilo }: {
+  col: { ancho: number; align: AlineacionCol };
+  children: ReactNode;
+  encabezado?: boolean;
+  crecer?: boolean;
+  estilo?: any;
+}) {
+  return (
+    <View style={[s.celda, { width: col.ancho, minWidth: col.ancho }, crecer && { flexGrow: 1 }]}>
+      {typeof children === 'string' || typeof children === 'number' ? (
+        <Text
+          style={[encabezado ? s.thTexto : s.tdTexto, { textAlign: col.align }, estilo]}
+          numberOfLines={encabezado ? 2 : 1}
+        >
+          {children}
+        </Text>
+      ) : children}
+    </View>
+  );
+}
 
 function Chips<K extends string>({ opciones, valor, onChange }: {
   opciones: { key: K; label: string }[]; valor: K; onChange: (k: K) => void;
@@ -220,8 +256,11 @@ export default function AdminDashboard() {
   const ventasPromo  = rf?.ventas_promocion         ?? 0;
   const comisionPromo = rf?.comision_promocion      ?? 0;
   const totalBocara  = rf?.total_bocara             ?? (comisionBocaraQ + cargoPlataforma);
-  const pctTL    = pct(rf?.porcentaje_tiempo_limitado, comisionPct);
-  const pctPromo = pct(rf?.porcentaje_promocion, comisionPromoPct);
+  // Las etiquetas muestran la TARIFA configurada (25% / 20%), no el %
+  // efectivo de los datos: promociones vendidas antes de existir la tarifa
+  // del 20% se cobraron al 25% y hacían decir "Promo (25%)" a la etiqueta.
+  const pctTL    = `${comisionPct}%`;
+  const pctPromo = `${comisionPromoPct}%`;
   const tituloGeneral = PERIODOS_GENERAL.find(p => p.key === periodoGeneral)?.titulo;
   const tituloTop     = PERIODOS_TOP.find(p => p.key === periodoTop)?.titulo;
   const resumen   = financiero?.resumen || [];
@@ -346,23 +385,23 @@ export default function AdminDashboard() {
         <Chips opciones={PERIODOS_TOP} valor={periodoTop} onChange={setPeriodoTop} />
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
           {/* 9 columnas: scroll horizontal para que quepan en el teléfono. */}
-          <ScrollView horizontal showsHorizontalScrollIndicator>
-            <View>
-              <View style={s.tableHead}>
-                <Text style={[s.th, s.colNombre]}>Restaurante</Text>
-                <Text style={[s.th, s.colNum]}>Unid. TL</Text>
-                <Text style={[s.th, s.colNum]}>Unid. Promo</Text>
-                <Text style={[s.th, s.colMonto]}>Ventas TL</Text>
-                <Text style={[s.th, s.colMonto]}>Ventas Promo</Text>
-                <Text style={[s.th, s.colMonto]}>Com. TL ({pct(financiero?.porcentajes?.tiempo_limitado, comisionPct)})</Text>
-                <Text style={[s.th, s.colMonto]}>Com. Promo ({pct(financiero?.porcentajes?.promocion, comisionPromoPct)})</Text>
-                <Text style={[s.th, s.colMonto]}>Neto rest.</Text>
-                <Text style={[s.th, s.colMonto]}>Total</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ minWidth: ANCHO_MIN_TABLA }}>
+            <View style={{ minWidth: ANCHO_MIN_TABLA, flexGrow: 1 }}>
+              <View style={s.tablaFilaHead}>
+                <Celda col={COL_TOP.nombre} encabezado crecer>Restaurante</Celda>
+                <Celda col={COL_TOP.unidades} encabezado>Unid. TL</Celda>
+                <Celda col={COL_TOP.unidades} encabezado>Unid. Promo</Celda>
+                <Celda col={COL_TOP.ventas} encabezado>Ventas TL</Celda>
+                <Celda col={COL_TOP.ventas} encabezado>Ventas Promo</Celda>
+                <Celda col={COL_TOP.comision} encabezado>{`Com. TL (${pctTL})`}</Celda>
+                <Celda col={COL_TOP.comision} encabezado>{`Com. Promo (${pctPromo})`}</Celda>
+                <Celda col={COL_TOP.neto} encabezado>Neto Rest.</Celda>
+                <Celda col={COL_TOP.total} encabezado>Total</Celda>
               </View>
               {skelFin ? (
                 [1,2,3].map(k => (
-                  <View key={k} style={s.tableRow}>
-                    <Sk h={14} w={300} r={4} />
+                  <View key={k} style={[s.tablaFila, { paddingHorizontal: 8, paddingVertical: 12 }]}>
+                    <Sk h={14} w={ANCHO_MIN_TABLA - 40} r={4} />
                   </View>
                 ))
               ) : resumen.length === 0 ? (
@@ -373,21 +412,21 @@ export default function AdminDashboard() {
                 resumen.slice(0, 10).map((r: any, i: number) => (
                   <TouchableOpacity
                     key={r.negocio_id}
-                    style={[s.tableRow, i % 2 === 1 && { backgroundColor: '#F9FAFB' }]}
+                    style={[s.tablaFila, i % 2 === 1 && { backgroundColor: '#F9FAFB' }]}
                     onPress={() => router.push(`/admin/restaurante-detalle?id=${r.negocio_id}` as any)}
                   >
-                    <View style={s.colNombre}>
+                    <Celda col={COL_TOP.nombre} crecer>
                       <Text style={s.tdName} numberOfLines={1}>{r.nombre}</Text>
                       <Text style={s.tdSub} numberOfLines={1}>{r.zona ? `${r.zona} · ` : ''}{r.pedidos} pedidos</Text>
-                    </View>
-                    <Text style={[s.td, s.colNum]}>{r.unidades_tiempo_limitado ?? '—'}</Text>
-                    <Text style={[s.td, s.colNum]}>{r.unidades_promocion ?? '—'}</Text>
-                    <Text style={[s.td, s.colMonto, { color: TEXT }]}>{q(r.ventas_tiempo_limitado ?? r.bruto)}</Text>
-                    <Text style={[s.td, s.colMonto, { color: TEXT }]}>{q(r.ventas_promocion)}</Text>
-                    <Text style={[s.td, s.colMonto, { color: GOLD, fontWeight: '700' }]}>{q(r.comision_bocara_tiempo_limitado ?? r.comisionBocara)}</Text>
-                    <Text style={[s.td, s.colMonto, { color: GOLD, fontWeight: '700' }]}>{q(r.comision_bocara_promocion)}</Text>
-                    <Text style={[s.td, s.colMonto, { color: GREEN, fontWeight: '700' }]}>{q(r.neto_restaurante ?? r.neto)}</Text>
-                    <Text style={[s.td, s.colMonto, { color: TEXT, fontWeight: '700' }]}>{q(r.total ?? r.totalCobrado)}</Text>
+                    </Celda>
+                    <Celda col={COL_TOP.unidades}>{String(r.unidades_tiempo_limitado ?? '—')}</Celda>
+                    <Celda col={COL_TOP.unidades}>{String(r.unidades_promocion ?? '—')}</Celda>
+                    <Celda col={COL_TOP.ventas} estilo={{ color: TEXT }}>{q(r.ventas_tiempo_limitado ?? r.bruto)}</Celda>
+                    <Celda col={COL_TOP.ventas} estilo={{ color: TEXT }}>{q(r.ventas_promocion)}</Celda>
+                    <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_tiempo_limitado ?? r.comisionBocara)}</Celda>
+                    <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_promocion)}</Celda>
+                    <Celda col={COL_TOP.neto} estilo={{ color: GREEN, fontWeight: '700' }}>{q(r.neto_restaurante ?? r.neto)}</Celda>
+                    <Celda col={COL_TOP.total} estilo={{ color: TEXT, fontWeight: '700' }}>{q(r.total ?? r.totalCobrado)}</Celda>
                   </TouchableOpacity>
                 ))
               )}
@@ -458,16 +497,14 @@ const s = StyleSheet.create({
   finLabel:     { fontSize: 13, color: TEXT2 },
   finVal:       { fontSize: 15, fontWeight: '800' },
 
-  tableHead:  { flexDirection: 'row', padding: 10, borderBottomWidth: 1, borderBottomColor: BORDER, backgroundColor: '#F9FAFB' },
-  th:         { flex: 1, fontSize: 10, color: TEXT2, fontWeight: '700', textTransform: 'uppercase', textAlign: 'center' },
-  tableRow:   { flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: BORDER },
   tdName:     { fontSize: 13, fontWeight: '700', color: TEXT },
   tdSub:      { fontSize: 10, color: TEXT2 },
-  td:         { flex: 1, fontSize: 12, color: TEXT2, textAlign: 'center' },
-  // Anchos fijos (no flex) dentro del scroll horizontal de Top restaurantes.
-  colNombre:  { width: 150, flex: 0, textAlign: 'left' },
-  colNum:     { width: 64, flex: 0 },
-  colMonto:   { width: 96, flex: 0 },
+  // Tabla de Top restaurantes (anchos por columna en COL_TOP; sin flex).
+  tablaFilaHead: { flexDirection: 'row', alignItems: 'stretch', borderBottomWidth: 1, borderBottomColor: BORDER, backgroundColor: '#F9FAFB' },
+  tablaFila:     { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: BORDER },
+  celda:         { flexShrink: 0, flexGrow: 0, paddingHorizontal: 8, paddingVertical: 10, justifyContent: 'center' },
+  thTexto:       { fontSize: 10, color: TEXT2, fontWeight: '700', textTransform: 'uppercase' },
+  tdTexto:       { fontSize: 12, color: TEXT2, fontVariant: ['tabular-nums'] },
 
   chips:          { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
   chip:           { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
