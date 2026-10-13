@@ -9,6 +9,7 @@ import { Colors } from '@/constants/Colors';
 import { pagosAPI } from '@/src/services/api';
 import { useCart } from '@/src/context/CartContext';
 import { volver } from '@/src/utils/backNavigation';
+import { trackEvent } from '@/lib/metaPixel';
 
 export type ResultType = 'success' | 'rejected' | 'cancelled' | 'verifying';
 export type EstadoBackendPago = 'verificando' | 'confirmado' | 'fallido' | 'cancelado' | 'pendiente' | 'error';
@@ -76,11 +77,14 @@ export default function PagoExitosoScreen() {
       intentos++;
       try {
         const res = await pagosAPI.estado(pedidoId);
-        const { estado_pago, estado, codigo_recogida, tipo_entrega } = res.data;
+        const { estado_pago, estado, codigo_recogida, tipo_entrega, total } = res.data;
 
         if (estado_pago === 'pagado' && estado === 'confirmado') {
           clearInterval(pollingRef.current!);
           if (!activo) return;
+          // Solo con el pago confirmado por el backend y con su total. eventID =
+          // pedidoId: Meta deduplica si la pantalla se recarga.
+          trackEvent('Purchase', { value: Number(total) || 0, currency: 'GTQ' }, `purchase-${pedidoId}`);
           if (!limpiadoRef.current) { limpiadoRef.current = true; limpiar(); }
           setEstadoBackend('confirmado');
           setConfirmado(true);

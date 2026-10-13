@@ -9,6 +9,7 @@ import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { bolsasAPI } from '@/src/services/api';
 import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
 import { Colors } from '@/constants/Colors';
+import { trackEvent } from '@/lib/metaPixel';
 
 const MSG_REVALIDACION = 'No pudimos verificar la disponibilidad. Revisa tu conexión e intenta de nuevo.';
 
@@ -71,6 +72,13 @@ export default function CarritoScreen() {
       mostrarErrorCarrito({ ok: false, motivo: 'agotado' }); return;
     }
     checkoutPending.current = true;
+    trackEvent('InitiateCheckout', {
+      content_ids: items.map(i => i.bolsa.id),
+      content_type: 'product',
+      num_items: items.reduce((n, i) => n + i.cantidad, 0),
+      value: total,
+      currency: 'GTQ',
+    });
     router.push('/pago');
   }
 

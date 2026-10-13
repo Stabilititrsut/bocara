@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text } from 'react-native';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, usePathname, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from '@/src/context/AuthContext';
 import { CartProvider } from '@/src/context/CartContext';
@@ -12,6 +12,7 @@ import { RealtimeProvider } from '@/src/context/RealtimeContext';
 import { resolverRutaNotificacion } from '@/src/utils/resolverRutaNotificacion';
 import { recordarPushToken } from '@/src/services/pushToken';
 import { iniciarAnalitica, establecerAnaliticaHabilitada } from '@/src/utils/analitica';
+import { iniciarMetaPixel, trackPageView } from '@/lib/metaPixel';
 import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 
@@ -212,6 +213,16 @@ function AuthGuard() {
   useEffect(() => {
     establecerAnaliticaHabilitada(!rolUsuario || rolUsuario === 'cliente');
   }, [rolUsuario]);
+
+  // Meta Pixel (solo web): el script dispara el PageView de la carga inicial;
+  // cada navegación posterior dentro de la SPA emite el suyo.
+  const pathname = usePathname();
+  const ultimaRutaPixel = useRef<string | null>(null);
+  useEffect(() => { iniciarMetaPixel(); }, []);
+  useEffect(() => {
+    if (ultimaRutaPixel.current !== null && ultimaRutaPixel.current !== pathname) trackPageView();
+    ultimaRutaPixel.current = pathname;
+  }, [pathname]);
 
   // Rotación del token: FCM/APNs pueden reemplazar el token nativo en
   // cualquier momento (reinstalación de servicios, restauración de backup).
