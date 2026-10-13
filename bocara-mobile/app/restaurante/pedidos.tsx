@@ -4,6 +4,8 @@ import {
   SafeAreaView, RefreshControl, Alert, ActivityIndicator,
   Modal, TextInput, Platform,
 } from 'react-native';
+import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -110,6 +112,7 @@ function QRScannerModal({ visible, onClose, onScanned }: {
 }
 
 export default function PedidosRestauranteScreen() {
+  const router = useRouter();
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -221,11 +224,23 @@ export default function PedidosRestauranteScreen() {
     <SafeAreaView style={s.root}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Pedidos</Text>
-        {Platform.OS !== 'web' && CameraView && (
-          <TouchableOpacity style={s.scanBtn} onPress={() => setScannerVisible(true)}>
-            <Text style={s.scanBtnText}>📷 Escanear QR</Text>
+        <View style={s.headerAcciones}>
+          {/* Historial completo (filtrable por mes) — pestaña oculta del layout. */}
+          <TouchableOpacity
+            style={s.historialBtn}
+            onPress={() => router.push('/restaurante/historial' as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Ver historial de pedidos"
+          >
+            <Ionicons name="time-outline" size={16} color={Colors.brown} />
+            <Text style={s.historialBtnText}>Ver historial</Text>
           </TouchableOpacity>
-        )}
+          {Platform.OS !== 'web' && CameraView && (
+            <TouchableOpacity style={s.scanBtn} onPress={() => setScannerVisible(true)}>
+              <Text style={s.scanBtnText}>📷 Escanear QR</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {avisoNuevos > 0 && (
@@ -329,6 +344,9 @@ const s = StyleSheet.create({
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown },
+  headerAcciones: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  historialBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1.5, borderColor: Colors.brown, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  historialBtnText: { color: Colors.brown, fontWeight: '700', fontSize: 13 },
   scanBtn: { backgroundColor: Colors.brown, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
   scanBtnText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
   filtros: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 14, marginVertical: 10 },

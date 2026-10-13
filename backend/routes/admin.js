@@ -8,6 +8,7 @@ const { obtenerConfig, obtenerComisionFraccion, COMISION_PLATAFORMA_FRACCION } =
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const {
   esMesValido, ultimoMesCerrado, resumirPendientes, cargarPedidosPendientes, cargarLiquidacionesVivas,
+  resumirAcumuladoMes, cargarPedidosMesEnCurso,
   planParaNegocio, crearLiquidacionMensual, guardarComprobanteSeguro, urlFirmadaComprobante,
   ventanaLiquidacion, puedeForzarVentana, MENSAJE_FUERA_DE_VENTANA,
 } = require('../services/liquidaciones');
@@ -24,8 +25,9 @@ const {
   resolverPeriodo, resolverFiltros, obtenerIndicadores, obtenerEmbudo, validarInversion, listarInversiones,
 } = require('../services/metricas');
 const {
-  resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
+  resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango, serieCobrado,
 } = require('../services/desgloseFinanciero');
+const { ESTADOS_MONITOR, construirMonitor } = require('../services/monitorOperativo');
 const router = express.Router();
 
 const ESTADOS_LIQUIDACION = ['pendiente', 'pagado', 'liquidado', 'anulado'];
@@ -127,6 +129,8 @@ router.get('/stats', authMiddleware, adminOnly, async (req, res) => {
   const { totales: f } = resumirFinanzas(pagados, { bolsasPorId: await cargarBolsasPorId(supabase, pagados) });
   res.json({
     periodo: { periodo: rango.periodo, mes: rango.mes || null, desde: rango.desde, hasta: rango.hasta },
+    // Gráfico "Cobrado a clientes" con el mismo periodo que las tarjetas.
+    serie_cobrado: serieCobrado(pagados, rango),
     resumen_financiero: {
       ventas_tiempo_limitado: f.ventas_tiempo_limitado,
       comision_tiempo_limitado: f.comision_tiempo_limitado,
@@ -620,6 +624,22 @@ router.get('/pedidos-todos', authMiddleware, adminOnly, async (req, res) => {
   res.json(data || []);
 });
 
+// GET /api/admin/monitor-pedidos — monitor operativo en vivo: pedidos en curso
+// (pagado/confirmado/en_preparacion/listo) con minutos en su estado actual y
+// semáforo verde/amarillo/rojo (services/monitorOperativo.js). `*` en vez de
+// lista fija: aceptado_en/listo_en solo existen con la migración 202610070900.
+router.get('/monitor-pedidos', authMiddleware, adminOnly, async (req, res) => {
+  const { data, error } = await supabase
+    .from('pedidos')
+    .select('*,negocios(id,nombre,zona,telefono)')
+    .in('estado', ESTADOS_MONITOR)
+    .order('created_at', { ascending: true })
+    .limit(300);
+  if (error) return res.status(500).json({ error: error.message });
+  const pedidos = data || [];
+  res.json(construirMonitor(pedidos, { bolsasPorId: await cargarBolsasPorId(supabase, pedidos) }));
+});
+
 // POST /api/admin/geocodificar — geocodifica todos los negocios sin coordenadas (endpoint canónico)
 router.post('/geocodificar', authMiddleware, adminOnly, async (req, res) => {
   const { data: negocios, error } = await supabase
@@ -722,6 +742,18 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
     const ultimoCerrado = ultimoMesCerrado();
     const pendientes = resumirPendientes({ pedidos, liquidacionesVivas: vivas, ultimoCerrado });
 
+    // Acumulado del mes en curso (aún no liquidable). Informativo: si falla, la
+    // respuesta sigue con lo pagable, que es lo que mueve dinero.
+    let acumuladoMes = null;
+    if (!negocioId) {
+      try {
+        const { mes: mesEnCurso, pedidos: delMes } = await cargarPedidosMesEnCurso();
+        acumuladoMes = resumirAcumuladoMes({ pedidos: delMes, mes: mesEnCurso });
+      } catch (err) {
+        console.warn('[ADMIN LIQUIDACIONES] acumulado del mes no disponible:', err.message);
+      }
+    }
+
     // Enriquecer con push token del propietario
     const propIds = [...new Set(pendientes.map((r) => r.propietario_id).filter(Boolean))];
     if (propIds.length > 0) {
@@ -738,6 +770,7 @@ router.get('/liquidaciones', authMiddleware, adminOnly, async (req, res) => {
       liquidaciones: liquidaciones || [],
       filtros: { mes: mes || null, estado: estado || null, negocio_id: negocioId || null },
       ultimo_mes_cerrado: ultimoCerrado,
+      acumulado_mes_en_curso: acumuladoMes,
       // La app deshabilita "generar liquidación" fuera de la ventana con esto.
       ventana_liquidacion: ventanaLiquidacion(),
     });

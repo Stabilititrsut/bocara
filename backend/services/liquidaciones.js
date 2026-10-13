@@ -305,9 +305,67 @@ function resumirPendientes({ pedidos = [], liquidacionesVivas = [], ultimoCerrad
     .sort((a, b) => b.neto - a.neto);
 }
 
+// Acumulado del mes en curso por negocio: lo que irá al próximo corte si todo
+// se entrega. Mismo criterio de mes que la RPC (mesDePedido) y mismos montos
+// del snapshot (montosPedido). Los pedidos pagados que aún no se entregan van
+// sumados, pero también apartados en *_en_curso: solo los entregados entran al
+// corte, y uno en curso todavía puede cancelarse.
+function resumirAcumuladoMes({ pedidos = [], mes }) {
+  const porNegocio = new Map();
+  for (const p of pedidos) {
+    if (mesDePedido(p) !== mes) continue;
+    if (!porNegocio.has(p.negocio_id)) {
+      porNegocio.set(p.negocio_id, {
+        negocio_id: p.negocio_id,
+        nombre: p.negocios?.nombre || 'Sin nombre',
+        pedidos: 0, bruto: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, envios: 0, neto: 0,
+        pedidos_en_curso: 0, neto_en_curso: 0, pedidosSinDesglose: 0,
+      });
+    }
+    const r = porNegocio.get(p.negocio_id);
+    const m = montosPedido(p);
+    if (m.neto == null) { r.pedidosSinDesglose += 1; continue; }
+    r.pedidos += 1;
+    r.bruto += m.bruto; r.comisionBocara += m.comision; r.cargoPlataforma += m.plataforma;
+    r.propinas += m.propina; r.envios += m.envio; r.neto += m.neto;
+    if (!['completado', 'recogido'].includes(p.estado)) {
+      r.pedidos_en_curso += 1;
+      r.neto_en_curso += m.neto;
+    }
+  }
+  const negocios = [...porNegocio.values()].map((r) => {
+    for (const k of ['bruto', 'comisionBocara', 'cargoPlataforma', 'propinas', 'envios', 'neto', 'neto_en_curso']) {
+      r[k] = redondearMoneda(r[k]);
+    }
+    return r;
+  }).sort((a, b) => b.bruto - a.bruto);
+  const totales = { pedidos: 0, bruto: 0, comisionBocara: 0, neto: 0 };
+  for (const r of negocios) for (const k of Object.keys(totales)) totales[k] += r[k];
+  for (const k of ['bruto', 'comisionBocara', 'neto']) totales[k] = redondearMoneda(totales[k]);
+  return { mes, negocios, totales };
+}
+
 // ── Acceso a datos ───────────────────────────────────────────────────────────
 
 const COLUMNAS_PEDIDO = 'id,negocio_id,pagado_en,created_at,snapshot_financiero,monto_neto_restaurante,comision_bocara,comision_pasarela,propina,costo_envio,negocios(id,nombre,datos_bancarios,propietario_id)';
+
+// Pedidos pagados (verificados por Cubo), no cancelados ni liquidados, del mes
+// en curso. created_at se acota desde el mes anterior porque el corte usa
+// pagado_en: un pedido creado el 31 y pagado el 1 cuenta en el mes nuevo.
+async function cargarPedidosMesEnCurso(referencia = new Date()) {
+  const mes = hoyGuatemala(referencia).slice(0, 7);
+  const { data, error } = await supabase
+    .from('pedidos')
+    .select(`estado,${COLUMNAS_PEDIDO}`)
+    .in('estado', ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido'])
+    .eq('estado_pago', 'pagado')
+    .not('cubo_payment_intent_token', 'is', null)
+    .not('cubo_identifier', 'is', null)
+    .is('liquidacion_id', null)
+    .gte('created_at', rangoMesGuatemalaUTC(mesAnterior(mes)).desde);
+  if (error) throw new Error(`No se pudieron leer los pedidos del mes en curso: ${error.message}`);
+  return { mes, pedidos: data || [] };
+}
 
 // Mismo filtro de elegibilidad que la RPC (sin el corte de fecha, que en
 // PostgREST no se puede expresar con COALESCE y se aplica en memoria).
@@ -561,7 +619,9 @@ module.exports = {
   validarOrdenLiquidacion,
   montosPedido,
   resumirPendientes,
+  resumirAcumuladoMes,
   cargarPedidosPendientes,
+  cargarPedidosMesEnCurso,
   cargarLiquidacionesVivas,
   planParaNegocio,
   generarPdfLiquidacion,

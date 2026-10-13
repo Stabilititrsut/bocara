@@ -180,7 +180,7 @@ export default function GananciasScreen() {
               <Text style={s.bancoLabel}>Titular</Text>
               <Text style={s.bancoVal}>{banco.titular || '—'}</Text>
             </View>
-            <Text style={s.bancoHint}>Los pagos se realizan cada semana los viernes.</Text>
+            <Text style={s.bancoHint}>Los pagos se liquidan mensualmente durante los primeros 5 días hábiles del mes.</Text>
           </View>
         ) : (
           <View style={s.sinBancoCard}>
