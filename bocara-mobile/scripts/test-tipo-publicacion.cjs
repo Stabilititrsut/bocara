@@ -41,6 +41,8 @@ function load(file, mocks = {}, globals = {}, extraSource = '') {
       if (name === 'react/jsx-runtime') return require(name);
       // Analítica (src/utils/analitica.ts): no-op salvo que la prueba pase su double.
       if (name.endsWith('utils/analitica')) return { registrarEvento() {}, vaciarAnalitica: async () => {}, iniciarAnalitica: () => () => {}, establecerAnaliticaHabilitada() {} };
+      // Meta Pixel (lib/metaPixel.ts): solo web; no-op en las pruebas.
+      if (name.endsWith('lib/metaPixel')) return { iniciarMetaPixel() {}, trackPageView() {}, trackEvent() {} };
       throw new Error(`Import sin double: ${name}`);
     },
   }, { filename: file });

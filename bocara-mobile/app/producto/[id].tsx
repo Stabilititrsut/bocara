@@ -19,6 +19,7 @@ import { etiquetaTipoProducto, emojiTipoProducto } from '@/src/utils/tipoPublica
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
 import { registrarEvento } from '@/src/utils/analitica';
+import { trackEvent } from '@/lib/metaPixel';
 
 const { height: SH } = Dimensions.get('window');
 const IMG_H = Math.round(SH * 0.48);
@@ -142,6 +143,13 @@ export default function ProductoScreen() {
       if (!data || !data.id) throw new Error('Bolsa no encontrada');
       setBolsa(data);
       registrarEvento('view_item', { bolsa_id: data.id, negocio_id: data.negocio_id });
+      trackEvent('ViewContent', {
+        content_ids: [data.id],
+        content_type: 'product',
+        content_name: data.nombre,
+        value: Number(data.precio_descuento) || 0,
+        currency: 'GTQ',
+      });
       setHorario(calcularEstadoHorario(data.hora_recogida_inicio, data.hora_recogida_fin));
       if (data.negocio_id) {
         resenasAPI.listarPorNegocio(data.negocio_id).then(r => setResenas(r.data || [])).catch(() => {});
