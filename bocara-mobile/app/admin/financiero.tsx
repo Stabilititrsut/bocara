@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, RefreshControl, ActivityIndicator, Share, Alert, Platform,
@@ -7,6 +7,9 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as XLSX from 'xlsx';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
+import SelectorPeriodo, {
+  mesEnCurso, tituloPeriodo, mesParam, clavePeriodo, type SeleccionPeriodo,
+} from '@/components/SelectorPeriodo';
 
 const BG     = '#F8FAFC';
 const CARD   = '#FFFFFF';
@@ -25,7 +28,22 @@ const ESTADO_LABELS: Record<string, string> = {
   recogido:        'Recogido',
 };
 
-type Periodo = '7d' | '30d' | 'todo';
+const q = (v: number | null | undefined) => `Q${(v || 0).toFixed(2)}`;
+
+// Desglose Tiempo Limitado (25%) / Promoción (20%) de una fila o de los
+// totales de GET /admin/financiero. Sin los campos nuevos (backend anterior)
+// todo cae en Tiempo Limitado, la única tarifa de antes.
+function desglose(r: any) {
+  const ventasTL = r?.ventas_tiempo_limitado ?? r?.bruto ?? 0;
+  const ventasPromo = r?.ventas_promocion ?? 0;
+  const comisionTL = r?.comision_bocara_tiempo_limitado ?? r?.comisionBocara ?? 0;
+  const comisionPromo = r?.comision_bocara_promocion ?? 0;
+  return {
+    ventasTL, ventasPromo, comisionTL, comisionPromo,
+    ventas: ventasTL + ventasPromo,
+    comision: comisionTL + comisionPromo,
+  };
+}
 
 function card(extra?: any) {
   return {
@@ -41,25 +59,33 @@ export default function AdminFinancieroScreen() {
   const [datos,         setDatos]         = useState<any>(null);
   const [loading,       setLoading]       = useState(true);
   const [refreshing,    setRefreshing]    = useState(false);
-  const [periodo,       setPeriodo]       = useState<Periodo>('30d');
+  const [periodo,       setPeriodo]       = useState<SeleccionPeriodo>(() => ({ periodo: '30d', mes: mesEnCurso() }));
   const [expandido,     setExpandido]     = useState<string | null>(null);
   const [pedidos,       setPedidos]       = useState<any[]>([]);
   const [mostrarPedidos, setMostrarPedidos] = useState(false);
   const [exporting,     setExporting]     = useState(false);
   const [comisionPct,   setComisionPct]   = useState(25);
+  const [comisionPromoPct, setComisionPromoPct] = useState(20);
+  const clave = clavePeriodo(periodo);
+  const consulta = useRef(0);
 
   const cargar = useCallback(async () => {
+    const id = ++consulta.current;
     try {
       const [finRes, pedRes] = await Promise.all([
-        adminAPI.financiero(periodo),
+        adminAPI.financiero(periodo.periodo, mesParam(periodo)),
         adminAPI.pedidosTodos({ limite: 200 }),
       ]);
+      if (id !== consulta.current) return; // el admin ya cambió de periodo
       setDatos(finRes.data);
       // El backend ya filtra a ventas reales (pagadas, no canceladas) —
       // incluye confirmado/en_preparacion/listo, no solo completado/recogido.
       setPedidos(pedRes.data || []);
-    } catch {} finally { setLoading(false); setRefreshing(false); }
-  }, [periodo]);
+    } catch {} finally {
+      if (id === consulta.current) { setLoading(false); setRefreshing(false); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clave]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -67,6 +93,8 @@ export default function AdminFinancieroScreen() {
     adminAPI.getConfig().then(res => {
       const pct = parseFloat(res.data?.comision_porcentaje);
       if (!isNaN(pct)) setComisionPct(pct);
+      const pctPromo = parseFloat(res.data?.comision_promocion_porcentaje);
+      if (!isNaN(pctPromo)) setComisionPromoPct(pctPromo);
     }).catch(() => {});
   }, []);
 
@@ -76,18 +104,24 @@ export default function AdminFinancieroScreen() {
     try {
       const wb = XLSX.utils.book_new();
 
+      const dt = desglose(datos.totales);
       const hoja1: any[][] = [
-        ['Bocara — Reporte Financiero', '', `Período: ${periodo}`],
+        ['Bocara — Reporte Financiero', '', `Período: ${tituloPeriodo(periodo)}`],
         [],
         ['Métrica', 'Valor'],
         ['Ventas reales (pagadas)', datos.totales.pedidos],
-        ['Ventas brutas (Q)', datos.totales.bruto],
-        [`Comisión Bocara ${comisionPct}% (Q)`, datos.totales.comisionBocara],
-        ['Cargo de plataforma 3.5% (Q)', datos.totales.cargoPlataforma],
+        ['Ventas Tiempo Limitado (Q)', Number(dt.ventasTL.toFixed(2))],
+        [`Comisión Bocara TL ${comisionPct}% (Q)`, Number(dt.comisionTL.toFixed(2))],
+        ['Ventas Promoción (Q)', Number(dt.ventasPromo.toFixed(2))],
+        [`Comisión Bocara Promo ${comisionPromoPct}% (Q)`, Number(dt.comisionPromo.toFixed(2))],
+        ['Ventas brutas totales (Q)', datos.totales.bruto],
+        ['Comisión Bocara total (Q)', Number(dt.comision.toFixed(2))],
+        ['Cargo al cliente 3.5% (Q)', datos.totales.cargoPlataforma],
+        ['Total Bocara, antes de cupones (Q)', Number((dt.comision + datos.totales.cargoPlataforma).toFixed(2))],
         ['Envíos para restaurantes (Q)', datos.totales.envios || 0],
         ['Descuentos de cupón — Bocara los absorbe (Q)', -datos.totales.descuentoCupon],
         ['Total Bocara, neto de cupones (Q)', datos.totales.comision],
-        [`Pago a restaurantes ${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío (Q)`, datos.totales.neto - datos.totales.propinas],
+        ['Pago a restaurantes: producto neto + envío (Q)', datos.totales.neto - datos.totales.propinas],
         ['Propinas recibidas (Q)', datos.totales.propinas],
         ['Total a restaurantes (Q)', datos.totales.neto],
         ['Total cobrado a clientes (Q)', datos.totales.totalCobrado || 0],
@@ -96,10 +130,12 @@ export default function AdminFinancieroScreen() {
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(hoja1), 'Dashboard');
 
       const hoja2: any[][] = [
-        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas de producto (Q)', 'Comisión Bocara (Q)', 'Cargo al cliente (Q)', 'Envíos (Q)', 'Descuentos cupón (Q)', 'Propinas (Q)', 'Pago a restaurante (Q)', 'Total cobrado a clientes (Q)', 'Promedio de producto por pedido (Q)'],
+        ['Restaurante', 'Zona', 'Pedidos', 'Ventas brutas de producto (Q)', `Comisión TL ${comisionPct}% (Q)`, `Comisión Promo ${comisionPromoPct}% (Q)`, 'Comisión Bocara total (Q)', 'Cargo al cliente (Q)', 'Envíos (Q)', 'Descuentos cupón (Q)', 'Propinas (Q)', 'Neto a pagar al comercio (Q)', 'Total cobrado a clientes (Q)', 'Promedio de producto por pedido (Q)'],
         ...datos.resumen.map((r: any) => [
           r.nombre, r.zona || '', r.pedidos,
           Number(r.bruto.toFixed(2)),
+          Number(desglose(r).comisionTL.toFixed(2)),
+          Number(desglose(r).comisionPromo.toFixed(2)),
           Number(r.comisionBocara.toFixed(2)),
           Number(r.cargoPlataforma.toFixed(2)),
           Number((r.envios || 0).toFixed(2)),
@@ -111,6 +147,8 @@ export default function AdminFinancieroScreen() {
         ]),
         ['TOTAL', '', datos.totales.pedidos,
           Number(datos.totales.bruto.toFixed(2)),
+          Number(dt.comisionTL.toFixed(2)),
+          Number(dt.comisionPromo.toFixed(2)),
           Number(datos.totales.comisionBocara.toFixed(2)),
           Number(datos.totales.cargoPlataforma.toFixed(2)),
           Number((datos.totales.envios || 0).toFixed(2)),
@@ -172,8 +210,11 @@ export default function AdminFinancieroScreen() {
 
   const totales = datos?.totales || { bruto: 0, comision: 0, comisionBocara: 0, cargoPlataforma: 0, propinas: 0, neto: 0, pedidos: 0, descuentoCupon: 0, envios: 0, totalCobrado: 0 };
   const resumen = datos?.resumen || [];
-  const restaurante75Total = totales.neto - totales.propinas; // solo la parte del 75% + envío, sin propina
+  const restaurante75Total = totales.neto - totales.propinas; // producto neto (75% TL / 80% Promo) + envío, sin propina
   const totalEsPerdida = totales.comision < 0;
+  const dt = desglose(totales);
+  const pctTL = `${comisionPct}%`;
+  const pctPromo = `${comisionPromoPct}%`;
 
   return (
     <SafeAreaView style={s.root}>
@@ -190,15 +231,9 @@ export default function AdminFinancieroScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Período */}
+      {/* Período: Hoy · 7 días · 30 días · Mes (histórico) · Todo */}
       <View style={s.periodos}>
-        {(['7d', '30d', 'todo'] as Periodo[]).map((p) => (
-          <TouchableOpacity key={p} style={[s.periodoChip, periodo === p && s.periodoActive]} onPress={() => setPeriodo(p)}>
-            <Text style={[s.periodoText, periodo === p && s.periodoTextActive]}>
-              {p === '7d' ? '7 días' : p === '30d' ? '30 días' : 'Todo'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        <SelectorPeriodo valor={periodo} onChange={setPeriodo} />
       </View>
 
       <ScrollView
@@ -206,18 +241,21 @@ export default function AdminFinancieroScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={GOLD} />}
       >
         {/* Resumen total */}
-        <Text style={s.sectionTitle}>Resumen del período</Text>
+        <Text style={s.sectionTitle}>Resumen del período — {tituloPeriodo(periodo)}</Text>
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
           {[
             { label: 'Ventas reales (pagadas)',              val: String(totales.pedidos),                    color: TEXT,  icon: 'bag-check'    as any },
-            { label: 'Ventas brutas (solo productos)',       val: `Q${totales.bruto.toFixed(2)}`,             color: TEXT,  icon: 'trending-up'  as any },
-            { label: `Comisión Bocara (${comisionPct}% del producto)`, val: `Q${totales.comisionBocara.toFixed(2)}`, color: GOLD, icon: 'wallet' as any },
-            { label: 'Cargo al cliente (3.5%)',               val: `Q${totales.cargoPlataforma.toFixed(2)}`,   color: GOLD,  icon: 'card'         as any },
+            { label: 'Ventas Tiempo Limitado (producto)',    val: q(dt.ventasTL),                             color: TEXT,  icon: 'time'         as any },
+            { label: `Comisión Bocara TL (${pctTL})`,        val: q(dt.comisionTL),                           color: GOLD,  icon: 'wallet'       as any },
+            { label: 'Ventas Promoción (producto)',          val: q(dt.ventasPromo),                          color: TEXT,  icon: 'pricetags'    as any },
+            { label: `Comisión Bocara Promo (${pctPromo})`,  val: q(dt.comisionPromo),                        color: GOLD,  icon: 'wallet'       as any },
+            { label: 'Cargo al cliente (3.5%)',               val: q(totales.cargoPlataforma),                 color: GOLD,  icon: 'card'         as any },
+            { label: 'Total Bocara (comisiones + 3.5%)',      val: q(dt.comision + totales.cargoPlataforma),   color: GOLD,  icon: 'wallet'       as any, bold: true },
             ...(totales.descuentoCupon > 0 ? [
               { label: '— Descuentos de cupón (Bocara los absorbe)', val: `-Q${totales.descuentoCupon.toFixed(2)}`, color: '#DC2626', icon: 'pricetag' as any },
             ] : []),
-            { label: totalEsPerdida ? 'Total Bocara — PÉRDIDA' : 'Total Bocara', val: `${totalEsPerdida ? '-' : ''}Q${Math.abs(totales.comision).toFixed(2)}`, color: totalEsPerdida ? '#DC2626' : GOLD, icon: totalEsPerdida ? 'alert-circle' : 'wallet' as any, bold: true },
-            { label: `— Pago a restaurantes (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${restaurante75Total.toFixed(2)}`, color: GREEN, icon: 'storefront' as any },
+            ...(totales.descuentoCupon > 0 ? [{ label: totalEsPerdida ? 'Total Bocara neto — PÉRDIDA' : 'Total Bocara neto de cupones', val: `${totalEsPerdida ? '-' : ''}Q${Math.abs(totales.comision).toFixed(2)}`, color: totalEsPerdida ? '#DC2626' : GOLD, icon: totalEsPerdida ? 'alert-circle' : 'wallet' as any, bold: true }] : []),
+            { label: '— Pago a restaurantes (producto neto + envío)', val: q(restaurante75Total), color: GREEN, icon: 'storefront' as any },
             ...(totales.envios > 0 ? [
               { label: '— Incluye envíos para restaurantes', val: `Q${totales.envios.toFixed(2)}`, color: GREEN, icon: 'bicycle' as any },
             ] : []),
@@ -251,20 +289,34 @@ export default function AdminFinancieroScreen() {
             <View style={s.restRow}>
               <View style={{ flex: 1 }}>
                 <Text style={s.restNombre}>{r.nombre}</Text>
-                {r.zona ? <Text style={s.restZona}>Zona {r.zona}</Text> : null}
-              </View>
-              <View style={{ alignItems: 'flex-end', marginRight: 8 }}>
-                <Text style={[s.restNeto, { color: GREEN }]}>Q{r.neto.toFixed(2)}</Text>
-                <Text style={s.restSub}>{r.pedidos} pedidos</Text>
+                <Text style={s.restZona}>{r.zona ? `Zona ${r.zona} · ` : ''}{r.pedidos} pedido{r.pedidos !== 1 ? 's' : ''}</Text>
               </View>
               <Ionicons name={expandido === r.negocio_id ? 'chevron-up' : 'chevron-down'} size={16} color={TEXT2} />
+            </View>
+            <View style={s.restCifras}>
+              <View style={s.restCifra}>
+                <Text style={s.restCifraLabel}>Ventas brutas</Text>
+                <Text style={[s.restCifraVal, { color: TEXT }]}>{q(desglose(r).ventas)}</Text>
+              </View>
+              <View style={s.restCifra}>
+                <Text style={s.restCifraLabel}>Comisión Bocara</Text>
+                <Text style={[s.restCifraVal, { color: GOLD }]}>{q(desglose(r).comision)}</Text>
+                <Text style={s.restCifraSub}>{pctTL} + {pctPromo}</Text>
+              </View>
+              <View style={s.restCifra}>
+                <Text style={s.restCifraLabel}>Neto al comercio</Text>
+                <Text style={[s.restCifraVal, { color: GREEN }]}>{q(r.neto)}</Text>
+              </View>
             </View>
 
             {expandido === r.negocio_id && (
               <View style={{ borderTopWidth: 1, borderTopColor: BORDER }}>
                 {[
-                  { label: 'Ventas brutas (solo productos)',       val: `Q${r.bruto.toFixed(2)}`,                        color: TEXT },
-                  { label: `Comisión Bocara (${comisionPct}% del producto)`, val: `Q${r.comisionBocara.toFixed(2)}`, color: GOLD },
+                  { label: 'Ventas Tiempo Limitado',               val: q(desglose(r).ventasTL),      color: TEXT },
+                  { label: `Comisión Bocara TL (${pctTL})`,         val: q(desglose(r).comisionTL),    color: GOLD },
+                  { label: 'Ventas Promoción',                     val: q(desglose(r).ventasPromo),   color: TEXT },
+                  { label: `Comisión Bocara Promo (${pctPromo})`,   val: q(desglose(r).comisionPromo), color: GOLD },
+                  { label: 'Comisión Bocara total',                val: q(desglose(r).comision),      color: GOLD, bold: true },
                   { label: 'Cargo al cliente (3.5%)',               val: `Q${r.cargoPlataforma.toFixed(2)}`,             color: GOLD },
                   ...((r.envios || 0) > 0 ? [
                     { label: 'Envíos para el restaurante', val: `Q${r.envios.toFixed(2)}`, color: GREEN },
@@ -272,9 +324,9 @@ export default function AdminFinancieroScreen() {
                   ...(r.descuentoCupon > 0 ? [
                     { label: 'Cupones en estos pedidos (Bocara los absorbe, no afecta este pago)', val: `-Q${r.descuentoCupon.toFixed(2)}`, color: TEXT2 },
                   ] : []),
-                  { label: `Pago al restaurante (${(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + envío)`, val: `Q${(r.neto - r.propinas).toFixed(2)}`, color: GREEN },
+                  { label: 'Pago al restaurante (producto neto + envío)', val: `Q${(r.neto - r.propinas).toFixed(2)}`, color: GREEN },
                   { label: '+ Propinas (100% restaurante)',         val: `Q${r.propinas.toFixed(2)}`,                     color: GREEN },
-                  { label: 'Total a recibir', val: `Q${r.neto.toFixed(2)}`, color: GREEN, bold: true },
+                  { label: 'Neto a pagar al comercio', val: `Q${r.neto.toFixed(2)}`, color: GREEN, bold: true },
                   { label: 'Total cobrado al cliente', val: `Q${(r.totalCobrado || 0).toFixed(2)}`, color: TEXT, bold: true },
                   { label: 'Promedio por pedido',        val: r.pedidos > 0 ? `Q${(r.bruto / r.pedidos).toFixed(2)}` : '—', color: TEXT2 },
                 ].map(({ label, val, color, bold }: any, i, arr) => (
@@ -360,11 +412,7 @@ const s = StyleSheet.create({
   exportBtn:   { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: GOLD, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 9 },
   exportBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
-  periodos:        { flexDirection: 'row', padding: 12, gap: 8, backgroundColor: CARD, borderBottomWidth: 1, borderBottomColor: BORDER },
-  periodoChip:     { flex: 1, paddingVertical: 9, borderRadius: 20, borderWidth: 1, borderColor: BORDER, alignItems: 'center', backgroundColor: BG },
-  periodoActive:   { backgroundColor: GOLD, borderColor: GOLD },
-  periodoText:     { fontSize: 13, fontWeight: '600', color: TEXT2 },
-  periodoTextActive: { color: '#fff', fontWeight: '800' },
+  periodos:        { paddingHorizontal: 12, paddingTop: 12, backgroundColor: CARD, borderBottomWidth: 1, borderBottomColor: BORDER },
 
   scroll:        { padding: 14 },
   sectionTitle:  { fontSize: 11, fontWeight: '700', color: TEXT2, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
@@ -377,8 +425,11 @@ const s = StyleSheet.create({
   restRow:    { flexDirection: 'row', alignItems: 'center', padding: 14 },
   restNombre: { fontSize: 14, fontWeight: '700', color: TEXT },
   restZona:   { fontSize: 11, color: TEXT2, marginTop: 1 },
-  restNeto:   { fontSize: 16, fontWeight: '900' },
-  restSub:    { fontSize: 11, color: TEXT2, marginTop: 2 },
+  restCifras: { flexDirection: 'row', paddingHorizontal: 14, paddingBottom: 12, gap: 8 },
+  restCifra:  { flex: 1, backgroundColor: BG, borderRadius: 10, padding: 8 },
+  restCifraLabel: { fontSize: 10, color: TEXT2, fontWeight: '600' },
+  restCifraVal:   { fontSize: 14, fontWeight: '900', marginTop: 2 },
+  restCifraSub:   { fontSize: 9, color: TEXT2, marginTop: 1 },
 
   detailRow:  { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12 },
   detailLabel: { fontSize: 13, color: TEXT2 },

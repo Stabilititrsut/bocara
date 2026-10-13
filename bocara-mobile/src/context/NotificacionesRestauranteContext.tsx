@@ -13,6 +13,15 @@ const TIPOS_RESTAURANTE = new Set([
   'liquidacion', 'liquidacion_pagada', 'perfil_aprobado', 'perfil_rechazado',
 ]);
 
+// Rotación semanal: el panel solo muestra (y cuenta en el badge) los avisos de
+// los últimos 7 días. Los anteriores siguen en la BD; solo dejan de listarse.
+const VENTANA_AVISOS_MS = 7 * 24 * 60 * 60 * 1000;
+
+function esReciente(n: any, ahora = Date.now()): boolean {
+  const t = new Date(n.created_at || n.creado_en || '').getTime();
+  return Number.isNaN(t) || ahora - t <= VENTANA_AVISOS_MS; // sin fecha: no se oculta
+}
+
 interface NotificacionesRestauranteContextType {
   notifs: any[];
   sinLeer: number;
@@ -39,7 +48,8 @@ export function NotificacionesRestauranteProvider({ children }: { children: Reac
     try {
       const res = await notificacionesAPI.listar();
       const todas: any[] = res.data || [];
-      setNotifs(todas.filter(n => !n.tipo || TIPOS_RESTAURANTE.has(n.tipo)));
+      const ahora = Date.now();
+      setNotifs(todas.filter(n => (!n.tipo || TIPOS_RESTAURANTE.has(n.tipo)) && esReciente(n, ahora)));
     } catch { } finally { setLoading(false); }
   }, []);
 

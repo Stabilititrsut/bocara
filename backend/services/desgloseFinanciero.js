@@ -16,7 +16,7 @@
 
 const { aNumero, redondearMoneda } = require('./finanzas');
 const { esPromocion } = require('./finanzasSnapshot');
-const { hoyGuatemala, sumarDias, rangoDiaGuatemalaUTC, rangoMesGuatemalaUTC } = require('./horarioGuatemala');
+const { ahoraGuatemala, hoyGuatemala, sumarDias, rangoDiaGuatemalaUTC, rangoMesGuatemalaUTC } = require('./horarioGuatemala');
 const { montosPedido } = require('./liquidaciones');
 
 const TIPOS = Object.freeze({ TIEMPO_LIMITADO: 'tiempo_limitado', PROMOCION: 'promocion' });
@@ -187,6 +187,70 @@ function resolverPeriodoFinanciero({ periodo, mes } = {}, { ahora = new Date(), 
   }
 }
 
+// Serie "Cobrado a clientes" del gráfico del dashboard, con los mismos cortes
+// que el periodo (hora de Guatemala) para que la gráfica y su total cuadren con
+// las tarjetas:
+//   hoy        → 8 tramos de 3 horas
+//   7d / 30d   → un punto por día
+//   mes        → un punto por día del mes (hasta hoy si es el mes en curso)
+//   todo       → un punto por mes, desde la primera venta (últimos 24 meses)
+// `pedidos` ya filtrados (ventas válidas del rango). Etiquetas listas para pintar.
+const DIAS_CORTOS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+function serieCobrado(pedidos = [], rango = {}, { ahora = new Date() } = {}) {
+  const hoy = hoyGuatemala(ahora);
+  const fechaGT = (iso) => ahoraGuatemala(new Date(iso));
+  const valores = new Map();
+  let claves = [];
+  let claveDe;
+  let etiqueta;
+
+  const dias = (desde, hasta) => {
+    const r = [];
+    for (let d = desde; d <= hasta; d = sumarDias(d, 1)) r.push(d);
+    return r;
+  };
+
+  if (rango.periodo === 'hoy') {
+    claves = [0, 3, 6, 9, 12, 15, 18, 21].map(String);
+    claveDe = (iso) => String(Math.floor(Number(fechaGT(iso).hora.slice(0, 2)) / 3) * 3);
+    etiqueta = (c) => `${c}h`;
+  } else if (rango.periodo === 'mes' && rango.mes) {
+    const ultimoDelMes = sumarDias(`${mesSiguienteISO(rango.mes)}-01`, -1);
+    claves = dias(`${rango.mes}-01`, ultimoDelMes < hoy ? ultimoDelMes : hoy);
+    claveDe = (iso) => fechaGT(iso).fecha;
+    etiqueta = (c) => String(Number(c.slice(8, 10)));
+  } else if (rango.periodo === 'todo') {
+    const meses = pedidos.map((p) => fechaGT(p.created_at).fecha.slice(0, 7)).sort();
+    const actual = hoy.slice(0, 7);
+    for (let m = meses[0] || actual; m <= actual; m = mesSiguienteISO(m)) claves.push(m);
+    claves = claves.slice(-24);
+    claveDe = (iso) => fechaGT(iso).fecha.slice(0, 7);
+    etiqueta = (c) => `${MESES_CORTOS[Number(c.slice(5, 7)) - 1]} ${c.slice(2, 4)}`;
+  } else {
+    const n = rango.periodo === '30d' ? 30 : 7;
+    claves = dias(sumarDias(hoy, -(n - 1)), hoy);
+    claveDe = (iso) => fechaGT(iso).fecha;
+    etiqueta = n === 7
+      ? (c) => DIAS_CORTOS[new Date(`${c}T12:00:00Z`).getUTCDay()]
+      : (c) => String(Number(c.slice(8, 10)));
+  }
+
+  for (const c of claves) valores.set(c, 0);
+  for (const p of pedidos) {
+    if (!p.created_at) continue;
+    const c = claveDe(p.created_at);
+    if (valores.has(c)) valores.set(c, valores.get(c) + aNumero(p.total));
+  }
+  return claves.map((c) => ({ clave: c, etiqueta: etiqueta(c), valor: redondearMoneda(valores.get(c)) }));
+}
+
+function mesSiguienteISO(mes) {
+  const [a, m] = mes.split('-').map(Number);
+  return new Date(Date.UTC(a, m, 1)).toISOString().slice(0, 7);
+}
+
 // Aplica el rango a una consulta de Supabase sobre created_at.
 function aplicarRango(query, rango) {
   let q = query;
@@ -198,5 +262,5 @@ function aplicarRango(query, rango) {
 module.exports = {
   TIPOS, PERIODOS_FINANCIEROS,
   desglosarPedido, resumirFinanzas, bolsasSinSnapshot, cargarBolsasPorId,
-  resolverPeriodoFinanciero, aplicarRango,
+  resolverPeriodoFinanciero, aplicarRango, serieCobrado,
 };

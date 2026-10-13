@@ -245,7 +245,10 @@ export const uploadsAPI = {
 
 export const adminAPI = {
   // periodo: hoy | semana | mes | todo (por defecto, histórico) — filtra solo las cifras de pedidos.
-  stats: (periodo?: string) => api.get('/admin/stats', { params: { periodo } }),
+  // También acepta 7d | 30d y mes AAAA-MM con periodo=mes (mismo contrato que financiero).
+  stats: (periodo?: string, mes?: string) => api.get('/admin/stats', { params: { periodo, mes } }),
+  // Monitor operativo en vivo: pedidos en curso con minutos en su estado y semáforo.
+  monitorPedidos: () => api.get('/admin/monitor-pedidos'),
   negocioDetalle: (id: string) => api.get(`/negocios/${id}`),
   usuarios: (params?: any) => api.get('/admin/usuarios', { params }),
   gestionarUsuario: (id: string, data: any) => api.put(`/admin/usuarios/${id}`, data),

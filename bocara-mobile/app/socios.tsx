@@ -42,8 +42,8 @@ const PASOS = [
   {
     num: '04',
     icon: 'cash-outline',
-    titulo: 'Cobra cada semana',
-    desc: 'Transferimos el 75% de tus ventas directo a tu cuenta bancaria cada viernes.',
+    titulo: 'Cobra cada mes',
+    desc: 'Transferimos tus ganancias directo a tu cuenta bancaria. Los pagos se liquidan mensualmente durante los primeros 5 días hábiles del mes.',
   },
 ];
 
@@ -63,7 +63,7 @@ const PREGUNTAS = [
   },
   {
     q: '¿Cuándo recibo mi dinero?',
-    a: 'Transferimos el 75% de tus ventas todos los viernes a la cuenta bancaria que registres.',
+    a: 'Los pagos se liquidan mensualmente durante los primeros 5 días hábiles del mes, a la cuenta bancaria que registres.',
   },
   {
     q: '¿Cómo se verifica mi negocio?',

@@ -48,13 +48,14 @@ export default function RestauranteNotificacionesScreen() {
         <View style={s.empty}>
           <Text style={{ fontSize: 48 }}>📭</Text>
           <Text style={s.emptyTitle}>Sin notificaciones</Text>
-          <Text style={s.emptyText}>Aquí verás aprobaciones, pedidos nuevos y avisos del equipo Bocara</Text>
+          <Text style={s.emptyText}>Aquí verás aprobaciones, pedidos nuevos y avisos del equipo Bocara de los últimos 7 días</Text>
         </View>
       ) : (
         <ScrollView
           contentContainerStyle={s.scroll}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.orange} />}
         >
+          <Text style={s.ventana}>Avisos de los últimos 7 días</Text>
           {notifs.map((n) => {
             const cfg = TIPO_CONFIG[n.tipo] || TIPO_CONFIG.default;
             return (
@@ -99,6 +100,7 @@ const s = StyleSheet.create({
   badge: { backgroundColor: Colors.orange, borderRadius: 12, minWidth: 24, height: 24, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   badgeText: { color: Colors.white, fontSize: 12, fontWeight: '900' },
   scroll: { padding: 16 },
+  ventana: { fontSize: 11, color: Colors.textLight, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 10 },
   card: { flexDirection: 'row', backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 10, elevation: 1 },
   cardUnread: { borderLeftWidth: 3, borderLeftColor: Colors.orange },
   iconBox: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
