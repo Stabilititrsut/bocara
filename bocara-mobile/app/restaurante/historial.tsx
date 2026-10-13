@@ -1,10 +1,13 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, RefreshControl, ActivityIndicator,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { pedidosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import CalendarioPicker from '@/components/CalendarioPicker';
+import { hoyGuatemala } from '@/src/utils/horarioRecogida';
 
 // Monto neto del restaurante — se lee tal cual quedó guardado al confirmar el
 // pago, nunca recalculado en el frontend a partir de porcentajes.
@@ -42,27 +45,46 @@ function agruparPorFecha(pedidos: any[]): PedidoGrupo[] {
   }));
 }
 
-type Periodo = '7d' | '30d' | 'todo';
+// 'mes' consulta al backend un mes calendario completo (hora de Guatemala,
+// GET /pedidos/restaurante?mes=AAAA-MM); los demás filtran la lista completa.
+type Periodo = '7d' | '30d' | 'mes' | 'todo';
+
+const ETIQUETA_PERIODO: Record<Periodo, string> = {
+  '7d': 'Últimos 7 días', '30d': 'Últimos 30 días', mes: 'Por mes', todo: 'Todo',
+};
+
+const esEntregado = (p: any) => p.estado === 'completado' || p.estado === 'recogido';
 
 export default function HistorialRestauranteScreen() {
+  const router = useRouter();
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [periodo, setPeriodo] = useState<Periodo>('7d');
   const [expandido, setExpandido] = useState<string | null>(null);
+  const mesActual = hoyGuatemala().slice(0, 7);
+  const [mes, setMes] = useState(mesActual);
+  const [cargandoMes, setCargandoMes] = useState(false);
+  const consulta = useRef(0);
+  const porMes = periodo === 'mes';
 
   const cargar = useCallback(async () => {
+    const id = ++consulta.current;
     try {
-      const res = await pedidosAPI.restaurante();
-      const completados = (res.data || []).filter((p: any) => p.estado === 'completado' || p.estado === 'recogido');
-      setPedidos(completados);
-    } catch { } finally { setLoading(false); setRefreshing(false); }
-  }, []);
+      const res = await pedidosAPI.restaurante(porMes ? { mes } : undefined);
+      if (id !== consulta.current) return; // llegó un cambio de mes/periodo más nuevo
+      // Con ?mes= el backend responde { mes, pedidos }; sin él, la lista directa.
+      const lista = porMes ? (res.data?.pedidos || []) : (res.data || []);
+      setPedidos(lista.filter(esEntregado));
+    } catch { } finally {
+      if (id === consulta.current) { setLoading(false); setRefreshing(false); setCargandoMes(false); }
+    }
+  }, [porMes, mes]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
   function filtrarPorPeriodo(todos: any[]) {
-    if (periodo === 'todo') return todos;
+    if (periodo === 'todo' || periodo === 'mes') return todos;
     const dias = periodo === '7d' ? 7 : 30;
     const corte = Date.now() - dias * 24 * 60 * 60 * 1000;
     return todos.filter((p: any) => {
@@ -89,28 +111,48 @@ export default function HistorialRestauranteScreen() {
   return (
     <SafeAreaView style={s.root}>
       <View style={s.header}>
+        {/* Historial es una pestaña oculta (sin ícono en la barra): este es su camino de vuelta. */}
+        <TouchableOpacity
+          onPress={() => router.push('/restaurante/pedidos' as any)}
+          style={s.volverBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Volver a Pedidos"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={s.volverText}>‹ Volver a Pedidos</Text>
+        </TouchableOpacity>
         <Text style={s.headerTitle}>💰 Historial</Text>
       </View>
 
       {/* Filtros de período */}
       <View style={s.periodos}>
-        {(['7d', '30d', 'todo'] as Periodo[]).map((p) => (
+        {(['7d', '30d', 'mes', 'todo'] as Periodo[]).map((p) => (
           <TouchableOpacity
             key={p}
             style={[s.periodoChip, periodo === p && s.periodoActive]}
-            onPress={() => setPeriodo(p)}
+            onPress={() => { if (p !== periodo) { setCargandoMes(p === 'mes' || periodo === 'mes'); setPeriodo(p); } }}
           >
-            <Text style={[s.periodoText, periodo === p && s.periodoTextActive]}>
-              {p === '7d' ? 'Últimos 7 días' : p === '30d' ? 'Últimos 30 días' : 'Todo'}
-            </Text>
+            <Text style={[s.periodoText, periodo === p && s.periodoTextActive]}>{ETIQUETA_PERIODO[p]}</Text>
           </TouchableOpacity>
         ))}
       </View>
+      {porMes && (
+        <View style={s.selectorMes}>
+          <CalendarioPicker
+            label="Mes a consultar"
+            modo="mes"
+            value={mes}
+            maxDate={mesActual}
+            onChange={(m) => { if (m !== mes) { setCargandoMes(true); setMes(m); } }}
+          />
+        </View>
+      )}
 
       <ScrollView
         contentContainerStyle={s.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
       >
+        {cargandoMes && <ActivityIndicator color={Colors.orange} style={{ marginBottom: 12 }} />}
         {/* Resumen total */}
         <View style={s.resumenCard}>
           <Text style={s.resumenTitle}>Resumen del período</Text>
@@ -207,9 +249,7 @@ export default function HistorialRestauranteScreen() {
           <View style={s.notaCard}>
             <Text style={s.notaTitle}>ℹ️ Sobre la comisión Bocara</Text>
             <Text style={s.notaText}>
-              {pctComision !== null
-                ? `Bocara retuvo el ${pctComision}% de las ventas de este período como comisión por el servicio de plataforma, visibilidad y gestión de pagos. El ${100 - pctComision}% restante es tuyo.`
-                : 'Bocara retiene una comisión de cada venta como pago por el servicio de plataforma, visibilidad y gestión de pagos. El resto es tuyo.'}
+              Bocara retiene la comisión correspondiente por tipo de producto (25% en Tiempo Limitado y 20% en Promoción) por el servicio de plataforma, visibilidad y gestión de pagos. El resto es tuyo.
             </Text>
           </View>
         )}
@@ -225,7 +265,10 @@ const s = StyleSheet.create({
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown },
+  volverBtn: { alignSelf: 'flex-start', marginBottom: 6 },
+  volverText: { fontSize: 14, fontWeight: '700', color: Colors.orange },
   periodos: { flexDirection: 'row', padding: 12, gap: 8, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  selectorMes: { paddingHorizontal: 12, paddingBottom: 12, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   periodoChip: { flex: 1, paddingVertical: 8, borderRadius: 20, borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center', backgroundColor: Colors.background },
   periodoActive: { backgroundColor: Colors.brown, borderColor: Colors.brown },
   periodoText: { fontSize: 12, fontWeight: '600', color: Colors.textSecondary },

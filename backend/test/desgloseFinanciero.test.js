@@ -11,7 +11,7 @@ const { fake, IDS, datosBase, iniciar, detener, pedir } = require('./helpers/app
 const { calcularSnapshotFinanciero } = require('../services/finanzasSnapshot');
 const { hoyGuatemala } = require('../services/horarioGuatemala');
 const {
-  desglosarPedido, resumirFinanzas, resolverPeriodoFinanciero, bolsasSinSnapshot,
+  desglosarPedido, resumirFinanzas, resolverPeriodoFinanciero, bolsasSinSnapshot, serieCobrado,
 } = require('../services/desgloseFinanciero');
 
 const haceDias = (n) => new Date(Date.now() - n * 86400000).toISOString();
@@ -209,4 +209,42 @@ test('ganancias: hoy, mes específico, compatibilidad "mes" = 30 días y errores
   assert.equal(legado.body.periodo, '30d');
   assert.equal((await pedir('GET', '/api/negocios/mi-negocio/ganancias?periodo=mes&mes=2026-13', { como: IDS.restaurante })).status, 400);
   assert.equal((await pedir('GET', '/api/negocios/mi-negocio/ganancias?periodo=mes&mes=2999-01', { como: IDS.restaurante })).status, 400);
+});
+
+// ── Serie "Cobrado a clientes" (gráfico del dashboard) ──────────────────────
+
+test('serieCobrado: tramos por periodo en hora de Guatemala', () => {
+  const ahora = new Date('2026-10-13T18:00:00Z'); // martes 13 oct, 12:00 en Guatemala
+  const p = (created_at, total) => ({ created_at, total });
+
+  const hoy = serieCobrado([p('2026-10-13T07:30:00Z', 10), p('2026-10-13T17:59:00Z', 5)],
+    resolverPeriodoFinanciero({ periodo: 'hoy' }, { ahora }), { ahora });
+  assert.deepEqual(hoy.map((x) => x.etiqueta), ['0h', '3h', '6h', '9h', '12h', '15h', '18h', '21h']);
+  assert.deepEqual(hoy.map((x) => x.valor), [10, 0, 0, 5, 0, 0, 0, 0]); // 01:30 y 11:59 GT
+
+  const semana = serieCobrado([p('2026-10-07T07:00:00Z', 3), p('2026-10-06T07:00:00Z', 99)],
+    resolverPeriodoFinanciero({ periodo: '7d' }, { ahora }), { ahora });
+  assert.equal(semana.length, 7);
+  assert.equal(semana[0].clave, '2026-10-07');
+  assert.equal(semana[0].etiqueta, 'Mié');
+  assert.equal(semana[6].etiqueta, 'Mar');
+  assert.equal(semana.reduce((s, x) => s + x.valor, 0), 3, 'fuera del rango no suma');
+
+  assert.equal(serieCobrado([], resolverPeriodoFinanciero({ periodo: '30d' }, { ahora }), { ahora }).length, 30);
+  assert.equal(serieCobrado([], resolverPeriodoFinanciero({ periodo: 'mes' }, { ahora }), { ahora }).length, 13, 'mes en curso: hasta hoy');
+  const sept = serieCobrado([p('2026-09-30T20:00:00Z', 7)], resolverPeriodoFinanciero({ periodo: 'mes', mes: '2026-09' }, { ahora }), { ahora });
+  assert.equal(sept.length, 30);
+  assert.deepEqual([sept[29].etiqueta, sept[29].valor], ['30', 7]);
+
+  const todo = serieCobrado([p('2026-08-10T18:00:00Z', 4), p('2026-10-01T18:00:00Z', 6)], { periodo: 'todo' }, { ahora });
+  assert.deepEqual(todo.map((x) => [x.etiqueta, x.valor]), [['ago 26', 4], ['sep 26', 0], ['oct 26', 6]]);
+});
+
+test('stats: serie_cobrado sigue el periodo y suma lo cobrado', async () => {
+  for (const periodo of ['hoy', '7d', '30d', 'mes', 'todo']) {
+    const r = await pedir('GET', `/api/admin/stats?periodo=${periodo}`, { como: IDS.admin });
+    assert.equal(r.status, 200);
+    const suma = Math.round(r.body.serie_cobrado.reduce((s, x) => s + x.valor, 0) * 100) / 100;
+    assert.equal(suma, r.body.ingresos_totales, periodo);
+  }
 });

@@ -17,7 +17,6 @@ export default function AdminLiquidacionesScreen() {
   const [modalPago, setModalPago] = useState<any | null>(null);
   const [referencia, setReferencia] = useState('');
   const [tab, setTab] = useState<'pendientes' | 'historial'>('pendientes');
-  const [comisionPct, setComisionPct] = useState(25);
 
   const cargar = useCallback(async () => {
     try {
@@ -30,13 +29,6 @@ export default function AdminLiquidacionesScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
-
-  useEffect(() => {
-    adminAPI.getConfig().then(res => {
-      const pct = parseFloat(res.data?.comision_porcentaje);
-      if (!isNaN(pct)) setComisionPct(pct);
-    }).catch(() => {});
-  }, []);
 
   async function confirmarPago() {
     if (!modalPago) return;
@@ -77,6 +69,15 @@ export default function AdminLiquidacionesScreen() {
   const ventana = data?.ventana_liquidacion;
   const fueraDeVentana = !!ventana && !ventana.dentro;
   const ddmm = (iso?: string | null) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '—');
+  // Acumulado del mes en curso por comercio (aún no liquidable; backend:
+  // services/liquidaciones.js#resumirAcumuladoMes). Sin el campo (backend
+  // anterior) la sección no se muestra.
+  const acumulado = data?.acumulado_mes_en_curso;
+  const nombreMes = (mes?: string) => {
+    if (!mes) return '';
+    const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    return `${MESES[Number(mes.slice(5, 7)) - 1] || mes} ${mes.slice(0, 4)}`;
+  };
   const montoPagable = (r: any): number => fueraDeVentana
     ? (r.liquidaciones_pendientes || []).reduce((s: number, l: any) => s + (l.monto || 0), 0)
     : r.neto;
@@ -126,6 +127,71 @@ export default function AdminLiquidacionesScreen() {
                 </Text>
               </View>
             )}
+            {acumulado && (
+              <View style={s.acumCard}>
+                <Text style={s.acumTitulo}>📈 Acumulado del mes en curso por comercio · {nombreMes(acumulado.mes)}</Text>
+                <Text style={s.acumTexto}>
+                  Ventas pagadas del mes que se liquidarán en el próximo corte
+                  {ventana ? ` (desde el ${ddmm(fueraDeVentana ? ventana.proxima_apertura : ventana.abre)})` : ''}.
+                  Solo entran al corte los pedidos entregados; los que siguen en curso se indican aparte.
+                </Text>
+                {acumulado.negocios.length === 0 ? (
+                  <Text style={[s.acumTexto, { marginTop: 8 }]}>Sin ventas en lo que va del mes.</Text>
+                ) : (
+                  <>
+                    {acumulado.negocios.map((r: any) => (
+                      <View key={r.negocio_id} style={s.acumFila}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Text style={s.acumNombre} numberOfLines={1}>{r.nombre}</Text>
+                          <Text style={s.acumPedidos}>{r.pedidos} pedido{r.pedidos !== 1 ? 's' : ''}</Text>
+                        </View>
+                        <View style={s.acumCifras}>
+                          <View style={s.acumCifra}>
+                            <Text style={s.acumLabel}>Ventas brutas</Text>
+                            <Text style={s.acumVal}>Q{r.bruto.toFixed(2)}</Text>
+                          </View>
+                          <View style={s.acumCifra}>
+                            <Text style={s.acumLabel}>Comisión Bocara</Text>
+                            <Text style={[s.acumVal, { color: Colors.orange }]}>Q{r.comisionBocara.toFixed(2)}</Text>
+                          </View>
+                          <View style={s.acumCifra}>
+                            <Text style={s.acumLabel}>Saldo neto</Text>
+                            <Text style={[s.acumVal, { color: Colors.green }]}>Q{r.neto.toFixed(2)}</Text>
+                          </View>
+                        </View>
+                        {r.pedidos_en_curso > 0 && (
+                          <Text style={s.acumNota}>
+                            Incluye {r.pedidos_en_curso} pedido{r.pedidos_en_curso !== 1 ? 's' : ''} aún sin entregar (Q{r.neto_en_curso.toFixed(2)}).
+                          </Text>
+                        )}
+                        {r.pedidosSinDesglose > 0 && (
+                          <Text style={[s.acumNota, { color: '#F59E0B' }]}>
+                            ⚠️ {r.pedidosSinDesglose} pedido{r.pedidosSinDesglose !== 1 ? 's' : ''} sin monto neto calculado (no sumado).
+                          </Text>
+                        )}
+                      </View>
+                    ))}
+                    <View style={[s.acumFila, { borderBottomWidth: 0 }]}>
+                      <View style={s.acumCifras}>
+                        <View style={s.acumCifra}>
+                          <Text style={s.acumLabel}>Total ventas</Text>
+                          <Text style={s.acumVal}>Q{acumulado.totales.bruto.toFixed(2)}</Text>
+                        </View>
+                        <View style={s.acumCifra}>
+                          <Text style={s.acumLabel}>Total comisión</Text>
+                          <Text style={[s.acumVal, { color: Colors.orange }]}>Q{acumulado.totales.comisionBocara.toFixed(2)}</Text>
+                        </View>
+                        <View style={s.acumCifra}>
+                          <Text style={s.acumLabel}>Total neto</Text>
+                          <Text style={[s.acumVal, { color: Colors.green }]}>Q{acumulado.totales.neto.toFixed(2)}</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+            {acumulado && <Text style={s.seccionTitulo}>Pagable ahora (meses cerrados)</Text>}
             {pendientes.length === 0 ? (
               <View style={s.emptyState}>
                 <Text style={{ fontSize: 48 }}>💸</Text>
@@ -142,7 +208,7 @@ export default function AdminLiquidacionesScreen() {
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={s.cardNeto}>Q{r.neto.toFixed(2)}</Text>
-                      <Text style={s.cardNetoLabel}>{(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}% + propina</Text>
+                      <Text style={s.cardNetoLabel}>neto + propinas + envío</Text>
                     </View>
                   </View>
 
@@ -152,7 +218,7 @@ export default function AdminLiquidacionesScreen() {
                     <Text style={s.cardFinVal}>Q{r.bruto.toFixed(2)}</Text>
                   </View>
                   <View style={s.cardFinRow}>
-                    <Text style={s.cardFinLabel}>− Comisión Bocara ({comisionPct}%)</Text>
+                    <Text style={s.cardFinLabel}>− Comisión Bocara (TL 25% / Promo 20%)</Text>
                     <Text style={[s.cardFinVal, { color: Colors.orange }]}>Q{r.comisionBocara.toFixed(2)}</Text>
                   </View>
                   <View style={s.cardFinRow}>
@@ -276,7 +342,7 @@ export default function AdminLiquidacionesScreen() {
 
             <View style={s.modalResumen}>
               <View style={s.modalResumenRow}>
-                <Text style={s.modalResumenLabel}>Monto a pagar ({(100 - comisionPct).toFixed(comisionPct % 1 === 0 ? 0 : 1)}%)</Text>
+                <Text style={s.modalResumenLabel}>Monto neto a pagar</Text>
                 <Text style={s.modalResumenVal}>Q{modalPago?.neto?.toFixed(2)}</Text>
               </View>
               {modalPago?.datos_bancarios && (
@@ -363,6 +429,18 @@ const s = StyleSheet.create({
   ventanaTitulo: { fontSize: 13, fontWeight: '800', marginBottom: 4 },
   ventanaTexto: { fontSize: 12, color: '#CBD5E1', lineHeight: 17 },
   ventanaNota: { fontSize: 11, color: '#FBBF24', marginBottom: 8 },
+  acumCard: { backgroundColor: DARK, borderRadius: 16, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#1D4ED8' },
+  acumTitulo: { fontSize: 14, fontWeight: '900', color: Colors.white, marginBottom: 4 },
+  acumTexto: { fontSize: 12, color: '#94A3B8', lineHeight: 17 },
+  acumFila: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#334155' },
+  acumNombre: { fontSize: 14, fontWeight: '800', color: Colors.white, flex: 1, marginRight: 8 },
+  acumPedidos: { fontSize: 11, color: '#94A3B8' },
+  acumCifras: { flexDirection: 'row', gap: 8, marginTop: 6 },
+  acumCifra: { flex: 1, backgroundColor: '#1A2744', borderRadius: 10, padding: 8 },
+  acumLabel: { fontSize: 10, color: '#94A3B8', fontWeight: '600' },
+  acumVal: { fontSize: 14, fontWeight: '900', color: '#E2E8F0', marginTop: 2 },
+  acumNota: { fontSize: 11, color: '#94A3B8', marginTop: 6 },
+  seccionTitulo: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
   histCard: { backgroundColor: DARK, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#334155' },
   histHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   histNombre: { fontSize: 15, fontWeight: '800', color: Colors.white },

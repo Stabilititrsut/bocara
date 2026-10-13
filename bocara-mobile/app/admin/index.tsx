@@ -8,6 +8,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
 import { useAuth } from '@/src/context/AuthContext';
+import MonitorPedidos from '@/components/MonitorPedidos';
+import SelectorPeriodo, {
+  mesEnCurso, tituloPeriodo, mesParam, clavePeriodo, type SeleccionPeriodo,
+} from '@/components/SelectorPeriodo';
 
 const BG     = '#F8FAFC';
 const CARD   = '#FFFFFF';
@@ -19,35 +23,20 @@ const GREEN  = '#22C55E';
 const BLUE   = '#3B82F6';
 const SCREEN = Dimensions.get('window').width;
 
-// v4: la respuesta trae el desglose Tiempo Limitado / Promoción y se cachea por periodo.
-const CACHE_STATS = 'bocara_admin_stats_v4';
-const CACHE_FIN   = 'bocara_admin_fin_v4';
+// v5: stats trae serie_cobrado (gráfico) y ambos se cachean por periodo + mes.
+const CACHE_STATS = 'bocara_admin_stats_v5';
+const CACHE_FIN   = 'bocara_admin_fin_v5';
 
-// "Resumen general" y "Resumen financiero" (GET /admin/stats?periodo=…).
-type PeriodoGeneral = 'hoy' | 'semana' | 'mes' | 'todo';
-const PERIODOS_GENERAL: { key: PeriodoGeneral; label: string; titulo: string }[] = [
-  { key: 'hoy',    label: 'Hoy',    titulo: 'hoy' },
-  { key: 'semana', label: 'Semana', titulo: 'últimos 7 días' },
-  { key: 'mes',    label: 'Mes',    titulo: 'mes en curso' },
-  { key: 'todo',   label: 'Todo',   titulo: 'histórico total' },
-];
-
-// "Top restaurantes" (GET /admin/financiero?periodo=…).
-type PeriodoTop = 'hoy' | '7d' | '30d' | 'mes' | 'todo';
-const PERIODOS_TOP: { key: PeriodoTop; label: string; titulo: string }[] = [
-  { key: 'hoy',  label: 'Hoy',     titulo: 'hoy' },
-  { key: '7d',   label: '7 días',  titulo: '7 días' },
-  { key: '30d',  label: '30 días', titulo: '30 días' },
-  { key: 'mes',  label: 'Mes',     titulo: 'mes en curso' },
-  { key: 'todo', label: 'Todo',    titulo: 'histórico' },
-];
+// "Resumen general", gráfico "Cobrado a clientes" y "Resumen financiero" comparten
+// periodo (GET /admin/stats); "Top restaurantes" tiene el suyo (GET /admin/financiero).
+// Ambos: Hoy · 7 días · 30 días · Mes (con meses históricos) · Todo.
 
 const q = (v: number | null | undefined) => `Q${(v || 0).toFixed(2)}`;
 
 // Columnas de "Top restaurantes": ancho FIJO por columna (mismo valor en
 // encabezado y filas, así nunca se desalinean) y sin `flex` — en
 // react-native-web, `flex: 1` deja flexBasis 0% y las columnas colapsaban a
-// ancho 0, encimando todos los textos. Suman 850; la tabla mide al menos
+// ancho 0, encimando todos los textos. Suman 950; la tabla mide al menos
 // ANCHO_MIN_TABLA y lo que sobra se lo lleva la columna Restaurante.
 type AlineacionCol = 'left' | 'center' | 'right';
 const COL_TOP = {
@@ -56,9 +45,10 @@ const COL_TOP = {
   ventas:   { ancho: 85,  align: 'right' as AlineacionCol },
   comision: { ancho: 90,  align: 'right' as AlineacionCol },
   neto:     { ancho: 90,  align: 'right' as AlineacionCol },
+  comTotal: { ancho: 100, align: 'right' as AlineacionCol },
   total:    { ancho: 90,  align: 'right' as AlineacionCol },
 };
-const ANCHO_MIN_TABLA = 900;
+const ANCHO_MIN_TABLA = 1000;
 
 function Celda({ col, children, encabezado, crecer, estilo }: {
   col: { ancho: number; align: AlineacionCol };
@@ -77,20 +67,6 @@ function Celda({ col, children, encabezado, crecer, estilo }: {
           {children}
         </Text>
       ) : children}
-    </View>
-  );
-}
-
-function Chips<K extends string>({ opciones, valor, onChange }: {
-  opciones: { key: K; label: string }[]; valor: K; onChange: (k: K) => void;
-}) {
-  return (
-    <View style={s.chips}>
-      {opciones.map(({ key, label }) => (
-        <TouchableOpacity key={key} style={[s.chip, valor === key && s.chipActivo]} onPress={() => onChange(key)}>
-          <Text style={[s.chipTexto, valor === key && s.chipTextoActivo]}>{label}</Text>
-        </TouchableOpacity>
-      ))}
     </View>
   );
 }
@@ -114,14 +90,16 @@ function Sk({ w, h, r = 8 }: { w?: number | string; h: number; r?: number }) {
   return <View style={{ width: w as any ?? '100%', height: h, borderRadius: r, backgroundColor: '#F3F4F6' }} />;
 }
 
-function BarChart({ data }: { data: { label: string; value: number }[] }) {
+function BarChart({ data }: { data: { key: string; label: string; value: number }[] }) {
   const max = Math.max(...data.map(d => d.value), 1);
+  const denso = data.length > 12;
+  const cadaN = denso ? Math.ceil(data.length / 8) : 1;
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 120, gap: 6 }}>
-      {data.map((d) => (
-        <View key={d.label} style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={{ fontSize: 8, color: TEXT2, marginBottom: 2, textAlign: 'center' }}>
-            {d.value > 0 ? (d.value > 999 ? `Q${(d.value/1000).toFixed(1)}k` : `Q${d.value.toFixed(2)}`) : ''}
+    <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: 120, gap: denso ? 2 : 6 }}>
+      {data.map((d, i) => (
+        <View key={d.key} style={{ flex: 1, alignItems: 'center' }}>
+          <Text style={{ fontSize: 8, color: TEXT2, marginBottom: 2, textAlign: 'center' }} numberOfLines={1}>
+            {!denso && d.value > 0 ? (d.value > 999 ? `Q${(d.value/1000).toFixed(1)}k` : `Q${d.value.toFixed(2)}`) : ''}
           </Text>
           <View style={{ width: '100%', height: 80, justifyContent: 'flex-end' }}>
             <View style={{
@@ -131,47 +109,32 @@ function BarChart({ data }: { data: { label: string; value: number }[] }) {
               borderRadius: 4,
             }} />
           </View>
-          <Text style={{ fontSize: 9, color: TEXT2, marginTop: 4, textAlign: 'center' }}>{d.label}</Text>
+          <Text style={{ fontSize: 9, color: TEXT2, marginTop: 4, textAlign: 'center' }} numberOfLines={1}>
+            {i % cadaN === 0 || i === data.length - 1 ? d.label : ''}
+          </Text>
         </View>
       ))}
     </View>
   );
 }
 
-function buildChartData(pedidos: any[]) {
-  const now   = new Date();
-  const labels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-  const days: Record<string, number> = {};
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(now);
-    d.setDate(d.getDate() - i);
-    days[d.toDateString()] = 0;
-  }
-  pedidos.forEach((p) => {
-    const key = new Date(p.created_at || p.creado_en || 0).toDateString();
-    if (key in days) days[key] = (days[key] || 0) + (p.total || 0);
-  });
-  return Object.entries(days).map(([ds, v]) => ({
-    label: labels[new Date(ds).getDay()],
-    value: v,
-  }));
-}
-
 export default function AdminDashboard() {
   const [stats,      setStats]      = useState<any>(null);
   const [financiero, setFinanciero] = useState<any>(null);
-  const [pedidos,    setPedidos]    = useState<any[]>([]);
   const [comisionPct, setComisionPct] = useState(25);
   const [comisionPromoPct, setComisionPromoPct] = useState(20);
-  const [periodoGeneral, setPeriodoGeneral] = useState<PeriodoGeneral>('todo');
-  const [periodoTop, setPeriodoTop] = useState<PeriodoTop>('30d');
+  const [periodoGeneral, setPeriodoGeneral] = useState<SeleccionPeriodo>(() => ({ periodo: 'todo', mes: mesEnCurso() }));
+  const [periodoTop, setPeriodoTop] = useState<SeleccionPeriodo>(() => ({ periodo: '30d', mes: mesEnCurso() }));
   const [skelStats,  setSkelStats]  = useState(true);
   const [skelFin,    setSkelFin]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const pollingRef = useRef<any>(null);
   // El polling corre fuera del ciclo de render: lee el periodo vigente de aquí.
-  const periodoGeneralRef = useRef<PeriodoGeneral>('todo');
+  const periodoGeneralRef = useRef<SeleccionPeriodo>(periodoGeneral);
+  const periodoTopRef = useRef<SeleccionPeriodo>(periodoTop);
+  const claveGeneral = clavePeriodo(periodoGeneral);
+  const claveTop = clavePeriodo(periodoTop);
   const { logout } = useAuth();
   const router = useRouter();
 
@@ -190,44 +153,44 @@ export default function AdminDashboard() {
   // instante), luego la respuesta fresca del servidor.
   useEffect(() => {
     periodoGeneralRef.current = periodoGeneral;
-    AsyncStorage.getItem(`${CACHE_STATS}_${periodoGeneral}`).catch(() => null).then((sc) => {
+    AsyncStorage.getItem(`${CACHE_STATS}_${claveGeneral}`).catch(() => null).then((sc) => {
       if (sc) { try { setStats(JSON.parse(sc)); setSkelStats(false); } catch {} }
       else setSkelStats(true);
     });
     loadStats(periodoGeneral);
-  }, [periodoGeneral]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claveGeneral]);
 
   useEffect(() => {
-    AsyncStorage.getItem(`${CACHE_FIN}_${periodoTop}`).catch(() => null).then((fc) => {
+    periodoTopRef.current = periodoTop;
+    AsyncStorage.getItem(`${CACHE_FIN}_${claveTop}`).catch(() => null).then((fc) => {
       if (fc) { try { setFinanciero(JSON.parse(fc)); setSkelFin(false); } catch {} }
       else setSkelFin(true);
     });
     const t = setTimeout(() => loadFinanciero(periodoTop), 400);
     return () => clearTimeout(t);
-  }, [periodoTop]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claveTop]);
 
-  async function loadStats(periodo: PeriodoGeneral) {
+  async function loadStats(sel: SeleccionPeriodo) {
     try {
-      const res = await adminAPI.stats(periodo);
+      const res = await adminAPI.stats(sel.periodo, mesParam(sel));
       // Descarta respuestas de un periodo que el admin ya cambió.
-      if (periodo !== periodoGeneralRef.current) return;
+      if (clavePeriodo(sel) !== clavePeriodo(periodoGeneralRef.current)) return;
       setStats(res.data);
       setSkelStats(false);
       setLastUpdated(new Date());
-      AsyncStorage.setItem(`${CACHE_STATS}_${periodo}`, JSON.stringify(res.data)).catch(() => {});
+      AsyncStorage.setItem(`${CACHE_STATS}_${clavePeriodo(sel)}`, JSON.stringify(res.data)).catch(() => {});
     } catch {}
   }
 
-  async function loadFinanciero(periodo: PeriodoTop) {
+  async function loadFinanciero(sel: SeleccionPeriodo) {
     try {
-      const [finRes, pedRes] = await Promise.all([
-        adminAPI.financiero(periodo),
-        adminAPI.pedidosTodos({ limite: 100 }),
-      ]);
+      const finRes = await adminAPI.financiero(sel.periodo, mesParam(sel));
+      if (clavePeriodo(sel) !== clavePeriodo(periodoTopRef.current)) return;
       setFinanciero(finRes.data);
-      setPedidos(pedRes.data || []);
       setSkelFin(false);
-      AsyncStorage.setItem(`${CACHE_FIN}_${periodo}`, JSON.stringify(finRes.data)).catch(() => {});
+      AsyncStorage.setItem(`${CACHE_FIN}_${clavePeriodo(sel)}`, JSON.stringify(finRes.data)).catch(() => {});
     } catch {}
   }
 
@@ -235,7 +198,8 @@ export default function AdminDashboard() {
     setRefreshing(true);
     await Promise.all([loadStats(periodoGeneral), loadFinanciero(periodoTop)]);
     setRefreshing(false);
-  }, [periodoGeneral, periodoTop]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claveGeneral, claveTop]);
 
   const comision         = stats?.comision_generada || 0; // total Bocara NETO: comisión 25% + cargo plataforma 3.5% − descuentos de cupón
   const totalCobrado     = stats?.ingresos_totales  || 0;
@@ -261,10 +225,17 @@ export default function AdminDashboard() {
   // del 20% se cobraron al 25% y hacían decir "Promo (25%)" a la etiqueta.
   const pctTL    = `${comisionPct}%`;
   const pctPromo = `${comisionPromoPct}%`;
-  const tituloGeneral = PERIODOS_GENERAL.find(p => p.key === periodoGeneral)?.titulo;
-  const tituloTop     = PERIODOS_TOP.find(p => p.key === periodoTop)?.titulo;
+  const tituloGeneral = tituloPeriodo(periodoGeneral);
+  const tituloTop     = tituloPeriodo(periodoTop);
   const resumen   = financiero?.resumen || [];
-  const chartData = buildChartData(pedidos);
+  const totalesTop = financiero?.totales;
+  // Serie del mismo periodo que las tarjetas (GET /admin/stats → serie_cobrado).
+  const chartData = ((stats?.serie_cobrado || []) as { clave: string; etiqueta: string; valor: number }[])
+    .map((d) => ({ key: d.clave, label: d.etiqueta, value: d.valor }));
+  // Comisión Bocara de una fila (o de los totales) de Top: TL (25%) + Promo (20%).
+  const comisionTotalTop = (r: any) => r?.comision_bocara_tiempo_limitado != null
+    ? (r.comision_bocara_tiempo_limitado || 0) + (r.comision_bocara_promocion || 0)
+    : (r?.comisionBocara || 0);
 
   return (
     <SafeAreaView style={s.root}>
@@ -305,10 +276,13 @@ export default function AdminDashboard() {
           </TouchableOpacity>
         )}
 
+        {/* Monitor operativo en vivo: pedidos en curso con semáforo de tiempo. */}
+        <MonitorPedidos />
+
         {/* Métricas principales — el periodo filtra cobrado y comisiones (y el
             resumen financiero de abajo); restaurantes y pedidos siguen la misma regla. */}
         <Text style={s.sectionTitle}>Resumen general — {tituloGeneral}</Text>
-        <Chips opciones={PERIODOS_GENERAL} valor={periodoGeneral} onChange={setPeriodoGeneral} />
+        <SelectorPeriodo valor={periodoGeneral} onChange={setPeriodoGeneral} />
         <View style={s.metricsGrid}>
           {skelStats ? (
             [1,2,3,4].map(k => (
@@ -334,15 +308,15 @@ export default function AdminDashboard() {
         </View>
 
         {/* Gráfico */}
-        <Text style={s.sectionTitle}>Cobrado a clientes — últimos 7 días</Text>
+        <Text style={s.sectionTitle}>Cobrado a clientes — {tituloGeneral}</Text>
         <View style={[card(), s.chartCard]}>
-          {skelFin
+          {skelStats
             ? <Sk h={120} r={8} />
             : <>
-                <BarChart data={chartData} />
-                <Text style={s.chartCaption}>
-                  Total 7d: Q{chartData.reduce((a, d) => a + d.value, 0).toFixed(2)}
-                </Text>
+                {chartData.length > 0
+                  ? <BarChart data={chartData} />
+                  : <Text style={{ color: TEXT2, fontSize: 12 }}>Sin datos de gráfico para este periodo.</Text>}
+                <Text style={s.chartCaption}>Total {tituloGeneral}: {q(totalCobrado)}</Text>
               </>
           }
         </View>
@@ -350,7 +324,7 @@ export default function AdminDashboard() {
         {/* Resumen financiero */}
         <Text style={s.sectionTitle}>Resumen financiero — {tituloGeneral}</Text>
         <Text style={s.sectionCaption}>
-          Mismo periodo que el resumen general. La tabla de abajo tiene su propio selector.
+          Mismo periodo que el resumen general y el gráfico. La tabla de abajo tiene su propio selector.
           Desglose separado: nunca mezclar lo que se queda Bocara con lo que recibe el restaurante.
         </Text>
         <View style={[card(), { marginBottom: 20 }]}>
@@ -380,11 +354,11 @@ export default function AdminDashboard() {
           ))}
         </View>
 
-        {/* Tabla restaurantes */}
+        {/* Tabla restaurantes (top 10 + totales de todos los del periodo) */}
         <Text style={s.sectionTitle}>Top restaurantes — {tituloTop}</Text>
-        <Chips opciones={PERIODOS_TOP} valor={periodoTop} onChange={setPeriodoTop} />
+        <SelectorPeriodo valor={periodoTop} onChange={setPeriodoTop} />
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
-          {/* 9 columnas: scroll horizontal para que quepan en el teléfono. */}
+          {/* 10 columnas: scroll horizontal para que quepan en el teléfono. */}
           <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ minWidth: ANCHO_MIN_TABLA }}>
             <View style={{ minWidth: ANCHO_MIN_TABLA, flexGrow: 1 }}>
               <View style={s.tablaFilaHead}>
@@ -395,6 +369,7 @@ export default function AdminDashboard() {
                 <Celda col={COL_TOP.ventas} encabezado>Ventas Promo</Celda>
                 <Celda col={COL_TOP.comision} encabezado>{`Com. TL (${pctTL})`}</Celda>
                 <Celda col={COL_TOP.comision} encabezado>{`Com. Promo (${pctPromo})`}</Celda>
+                <Celda col={COL_TOP.comTotal} encabezado>Comisión Total Bocara</Celda>
                 <Celda col={COL_TOP.neto} encabezado>Neto Rest.</Celda>
                 <Celda col={COL_TOP.total} encabezado>Total</Celda>
               </View>
@@ -425,10 +400,27 @@ export default function AdminDashboard() {
                     <Celda col={COL_TOP.ventas} estilo={{ color: TEXT }}>{q(r.ventas_promocion)}</Celda>
                     <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_tiempo_limitado ?? r.comisionBocara)}</Celda>
                     <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_promocion)}</Celda>
+                    <Celda col={COL_TOP.comTotal} estilo={{ color: GOLD, fontWeight: '900' }}>{q(comisionTotalTop(r))}</Celda>
                     <Celda col={COL_TOP.neto} estilo={{ color: GREEN, fontWeight: '700' }}>{q(r.neto_restaurante ?? r.neto)}</Celda>
                     <Celda col={COL_TOP.total} estilo={{ color: TEXT, fontWeight: '700' }}>{q(r.total ?? r.totalCobrado)}</Celda>
                   </TouchableOpacity>
                 ))
+              )}
+              {!skelFin && resumen.length > 0 && totalesTop && (
+                <View style={[s.tablaFila, { backgroundColor: '#FFF7ED', borderBottomWidth: 0 }]}>
+                  <Celda col={COL_TOP.nombre} crecer>
+                    <Text style={s.tdName}>Total ({resumen.length} restaurante{resumen.length !== 1 ? 's' : ''})</Text>
+                  </Celda>
+                  <Celda col={COL_TOP.unidades} estilo={{ fontWeight: '700' }}>{String(totalesTop.unidades_tiempo_limitado ?? '—')}</Celda>
+                  <Celda col={COL_TOP.unidades} estilo={{ fontWeight: '700' }}>{String(totalesTop.unidades_promocion ?? '—')}</Celda>
+                  <Celda col={COL_TOP.ventas} estilo={{ color: TEXT, fontWeight: '700' }}>{q(totalesTop.ventas_tiempo_limitado ?? totalesTop.bruto)}</Celda>
+                  <Celda col={COL_TOP.ventas} estilo={{ color: TEXT, fontWeight: '700' }}>{q(totalesTop.ventas_promocion)}</Celda>
+                  <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '800' }}>{q(totalesTop.comision_bocara_tiempo_limitado ?? totalesTop.comisionBocara)}</Celda>
+                  <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '800' }}>{q(totalesTop.comision_bocara_promocion)}</Celda>
+                  <Celda col={COL_TOP.comTotal} estilo={{ color: GOLD, fontWeight: '900' }}>{q(comisionTotalTop(totalesTop))}</Celda>
+                  <Celda col={COL_TOP.neto} estilo={{ color: GREEN, fontWeight: '800' }}>{q(totalesTop.neto_restaurante ?? totalesTop.neto)}</Celda>
+                  <Celda col={COL_TOP.total} estilo={{ color: TEXT, fontWeight: '800' }}>{q(totalesTop.total ?? totalesTop.totalCobrado)}</Celda>
+                </View>
               )}
             </View>
           </ScrollView>
@@ -505,12 +497,6 @@ const s = StyleSheet.create({
   celda:         { flexShrink: 0, flexGrow: 0, paddingHorizontal: 8, paddingVertical: 10, justifyContent: 'center' },
   thTexto:       { fontSize: 10, color: TEXT2, fontWeight: '700', textTransform: 'uppercase' },
   tdTexto:       { fontSize: 12, color: TEXT2, fontVariant: ['tabular-nums'] },
-
-  chips:          { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 10 },
-  chip:           { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
-  chipActivo:     { backgroundColor: GOLD, borderColor: GOLD },
-  chipTexto:      { fontSize: 12, fontWeight: '600', color: TEXT2 },
-  chipTextoActivo: { color: '#fff', fontWeight: '800' },
 
   statsRow:   { flexDirection: 'row', gap: 10, marginBottom: 16 },
   statMini:   { flex: 1, padding: 12, alignItems: 'center', gap: 4 },

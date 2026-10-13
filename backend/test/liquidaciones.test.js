@@ -559,3 +559,57 @@ test('GET /admin/liquidaciones expone el estado de la ventana para la app', conR
   assert.equal(r.body.ventana_liquidacion.dentro, false);
   assert.equal(r.body.ventana_liquidacion.cierra, '2026-10-07');
 }));
+
+// ── Liquidaciones: acumulado del mes en curso ────────────────────────────────
+
+test('resumirAcumuladoMes suma solo el mes pedido y aparta lo que sigue en curso', () => {
+  const sf = (bruto, comision, neto) => ({ subtotal_productos: bruto, comision_bocara: comision, monto_neto_restaurante: neto, propina: 0, costo_envio: 0, comision_pasarela: 0 });
+  const r = L.resumirAcumuladoMes({
+    mes: '2026-10',
+    pedidos: [
+      // 2026-10-05 12:00 Guatemala
+      { negocio_id: 'n1', negocios: { nombre: 'Ola Azul' }, estado: 'completado', pagado_en: '2026-10-05T18:00:00Z', snapshot_financiero: sf(100, 25, 75) },
+      { negocio_id: 'n1', negocios: { nombre: 'Ola Azul' }, estado: 'listo', pagado_en: '2026-10-12T18:00:00Z', snapshot_financiero: sf(40, 8, 32) },
+      // 30/09 23:30 Guatemala = 01/10 05:30 UTC → septiembre, fuera del acumulado
+      { negocio_id: 'n1', estado: 'completado', pagado_en: '2026-10-01T05:30:00Z', snapshot_financiero: sf(999, 1, 998) },
+      // Sin monto neto: no se aproxima, se cuenta aparte
+      { negocio_id: 'n2', negocios: { nombre: 'Café' }, estado: 'completado', created_at: '2026-10-02T18:00:00Z' },
+    ],
+  });
+
+  const n1 = r.negocios.find((n) => n.negocio_id === 'n1');
+  assert.equal(n1.pedidos, 2);
+  assert.equal(n1.bruto, 140);
+  assert.equal(n1.comisionBocara, 33);
+  assert.equal(n1.neto, 107);
+  assert.equal(n1.pedidos_en_curso, 1);
+  assert.equal(n1.neto_en_curso, 32);
+  const n2 = r.negocios.find((n) => n.negocio_id === 'n2');
+  assert.equal(n2.pedidosSinDesglose, 1);
+  assert.equal(n2.neto, 0);
+  assert.deepEqual(r.totales, { pedidos: 2, bruto: 140, comisionBocara: 33, neto: 107 });
+});
+
+test('GET /admin/liquidaciones: acumulado del mes en curso por comercio, aparte de lo pagable', async () => {
+  sembrar(
+    pedidoPagado({ mes: M1 }),                                   // liquidable: va a pendientes, no al acumulado
+    pedidoPagado({ mes: M0, pagadoEn: new Date().toISOString() }),
+    pedidoPagado({ mes: M0, pagadoEn: new Date().toISOString(), estado: 'listo', neto: 4 }),
+    pedidoPagado({ mes: M0, pagadoEn: new Date().toISOString(), estado: 'cancelado' }),
+    pedidoPagado({ negocioId: IDS.otroNegocio, mes: M0, pagadoEn: new Date().toISOString(), neto: 3 }),
+  );
+  const r = await pedir('GET', '/api/admin/liquidaciones', { como: IDS.admin });
+  assert.equal(r.status, 200);
+  const acum = r.body.acumulado_mes_en_curso;
+  assert.equal(acum.mes, M0);
+  const ola = acum.negocios.find((n) => n.negocio_id === IDS.olaAzul);
+  assert.equal(ola.nombre, 'Ola Azul');
+  assert.equal(ola.pedidos, 2, 'sin el cancelado ni el del mes cerrado');
+  assert.equal(ola.bruto, 20);
+  assert.equal(ola.comisionBocara, 5);
+  assert.equal(ola.neto, 11.5);
+  assert.equal(ola.pedidos_en_curso, 1);
+  assert.equal(acum.totales.neto, 14.5);
+  // Lo pagable hoy no cambia
+  assert.equal(r.body.pendientes.find((p) => p.negocio_id === IDS.olaAzul).neto, 7.5);
+});
