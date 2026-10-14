@@ -6,7 +6,7 @@
 // Nada se guarda en BD: la ruta devuelve la propuesta y el restaurante decide.
 //
 // TEXT_AI_PROVIDER:
-//   gemini  (principal) — Gemini 2.5 Flash-Lite por defecto (providers/gemini.js)
+//   gemini  (principal) — Gemini 3.5 Flash-Lite por defecto (providers/gemini.js)
 //   openai  — reservado: aún no implementado para texto, se trata como none
 //   none    — función apagada (la ruta responde 503 y la app lo informa)
 //   (sin definir) — gemini si hay GEMINI_API_KEY; si no, none.
@@ -46,7 +46,7 @@ function numeroEnv(nombre, porDefecto, min, max) {
 
 function configuracion() {
   return {
-    timeoutMs: numeroEnv('TEXT_AI_TIMEOUT_MS', 10000, 2000, 30000),
+    timeoutMs: numeroEnv('TEXT_AI_TIMEOUT_MS', 20000, 2000, 30000),
     maxTokens: numeroEnv('TEXT_AI_MAX_OUTPUT_TOKENS', 160, 32, 400),
     temperatura: numeroEnv('TEXT_AI_TEMPERATURE', 0.4, 0, 1),
   };
@@ -207,7 +207,17 @@ function limpiarSalida(texto, { finCorte = false } = {}) {
     .trim();
   if (finCorte || t.length > MAX_CARACTERES_SALIDA) t = cortarEnFrase(t, MAX_CARACTERES_SALIDA) || '';
   else if (t && !/[.!?]$/.test(t)) t = `${t}.`;
-  return t;
+  return capitalizar(t);
+}
+
+// Algunos modelos devuelven todo en minúsculas ("q35.00", "precio bocara"):
+// mayúscula al inicio de cada frase, en la marca y en la Q de los precios.
+// Un punto tras una abreviatura de 1–2 letras ("p. m.") no cierra frase.
+function capitalizar(t) {
+  return t
+    .replace(/(^[¡¿]?|(?:[!?]|(?<!\b\p{L}{1,2})\.)\s+[¡¿]?)(\p{Ll})/gu, (_, antes, letra) => antes + letra.toUpperCase())
+    .replace(/\bbocara\b/g, 'Bocara')
+    .replace(/\bq(?=\d)/g, 'Q');
 }
 
 // Toda cifra de la propuesta debe existir en los hechos (precio, %, hora,
@@ -242,6 +252,7 @@ async function generarDescripcion(datos, { proveedor = obtenerProveedorTexto(), 
   if (!proveedor) throw new ErrorTextoIA('IA de texto no configurada', { codigo: 'no_configurado' });
   const hechos = construirHechos(datos, { categoriaNegocio });
   const inicio = Date.now();
+  console.log('[TEXTO_IA] llamando a %s (modelo %s) tipo=%s', proveedor.nombre, proveedor.modelo, datos.tipo);
   const r = await proveedor.generar({
     sistema: INSTRUCCION_SISTEMA,
     usuario: mensajeUsuario(hechos),
@@ -253,7 +264,7 @@ async function generarDescripcion(datos, { proveedor = obtenerProveedorTexto(), 
   if (descripcion.length < 20) throw new ErrorTextoIA('salida vacía o incompleta', { codigo: 'salida_invalida' });
   const ajenas = verificarCifras(descripcion, hechos);
   if (ajenas.length) throw new ErrorTextoIA(`salida con ${ajenas.length} cifra(s) no presentes en los datos`, { codigo: 'salida_invalida' });
-  return { descripcion, meta: { proveedor: proveedor.nombre, modelo: proveedor.modelo, ms: Date.now() - inicio, uso: r.uso || null } };
+  return { descripcion, meta: { proveedor: proveedor.nombre, modelo: r.modelo || proveedor.modelo, ms: Date.now() - inicio, uso: r.uso || null } };
 }
 
 module.exports = {

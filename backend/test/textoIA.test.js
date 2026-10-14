@@ -179,7 +179,13 @@ test('TXT-2: los parámetros de generación son acotados (temperatura baja, toke
   const f = montar();
   await pedir(BASICO);
   const g = f.llamadas[0].body.generationConfig;
-  assert.deepEqual(g, { temperature: 0.4, maxOutputTokens: 160, candidateCount: 1 });
+  // Modelo por defecto (familia 3.x): razonamiento mínimo para responder rápido.
+  assert.deepEqual(g, { temperature: 0.4, maxOutputTokens: 160, candidateCount: 1, thinkingConfig: { thinkingLevel: 'minimal' } });
+  // Un modelo 2.x no acepta thinkingLevel: no se manda.
+  const f2 = fetchSimulado();
+  await crearProveedorGemini({ apiKey: CLAVE_GEMINI, modelo: 'gemini-2.5-flash', fetchImpl: f2 })
+    .generar({ sistema: 's', usuario: 'u', temperatura: 0.4, maxTokens: 160, timeoutMs: 1000 });
+  assert.equal(f2.llamadas[0].body.generationConfig.thinkingConfig, undefined);
   const sistema = f.llamadas[0].body.systemInstruction.parts[0].text;
   assert.match(sistema, /Use exclusively the supplied facts\. Never invent ingredients, quantities, brands, flavors, preparation methods or promotional conditions\. If a fact is not supplied, omit it\./);
   assert.match(sistema, /Guatemala/);
@@ -221,16 +227,37 @@ test('TXT-3: respuesta cortada por MAX_TOKENS se recorta a la última frase comp
 
 // ── TXT-5 / TXT-6 ───────────────────────────────────────────────────────────
 
-test('TXT-5: Gemini responde error (HTTP 500 / 429) → 502 con mensaje claro, nada se guarda', async () => {
-  for (const status of [500, 429, 400]) {
-    montar({ fetchImpl: fetchSimulado({ status, cuerpo: { error: { code: status, status: 'X', message: 'detalle' } } }) });
+test('TXT-5: Gemini responde error → mensaje que dice POR QUÉ (modelo retirado, clave, cuota, error), código estable, nada se guarda', async () => {
+  const casos = [
+    [404, { status: 'NOT_FOUND', message: 'This model models/gemini-2.5-flash-lite is no longer available to new users.' }, 502, 'IA_TEXTO_MODELO_NO_DISPONIBLE', /ya no está disponible/],
+    [400, { status: 'INVALID_ARGUMENT', message: 'API key not valid.', details: [{ reason: 'API_KEY_INVALID' }] }, 502, 'IA_TEXTO_CLAVE_INVALIDA', /clave de Gemini/],
+    [403, { status: 'PERMISSION_DENIED', message: 'denied' }, 502, 'IA_TEXTO_CLAVE_INVALIDA', /clave de Gemini/],
+    [429, { status: 'RESOURCE_EXHAUSTED', message: 'quota' }, 429, 'IA_TEXTO_CUOTA', /cuota de Gemini/],
+    [500, { status: 'INTERNAL', message: 'detalle' }, 502, 'IA_TEXTO_PROVEEDOR', /Gemini devolvió un error/],
+    [400, { status: 'INVALID_ARGUMENT', message: 'texto del prompt' }, 502, 'IA_TEXTO_PROVEEDOR', /Gemini devolvió un error/],
+  ];
+  for (const [status, error, http, codigo, re] of casos) {
+    montar({ fetchImpl: fetchSimulado({ status, cuerpo: { error: { code: status, ...error } } }) });
     const antes = JSON.stringify(fake.tabla('bolsas'));
     const r = await pedir(BASICO);
-    assert.equal(r.status, 502, String(status));
-    assert.deepEqual(r.body, { error: MENSAJE_FALLO });
-    assert.equal(MENSAJE_FALLO, 'No pudimos mejorar la descripción. Intenta nuevamente.');
+    assert.equal(r.status, http, `${status} ${error.status}`);
+    assert.equal(r.body.codigo, codigo);
+    assert.match(r.body.error, re);
     assert.equal(JSON.stringify(fake.tabla('bolsas')), antes);
   }
+  // En desarrollo, el detalle incluye el mensaje de Google (qué modelo y por qué)...
+  montar({ fetchImpl: fetchSimulado({ status: 404, cuerpo: { error: { code: 404, status: 'NOT_FOUND', message: 'no longer available to new users' } } }) });
+  assert.match((await pedir(BASICO)).body.detalle, /HTTP 404 NOT_FOUND — no longer available/);
+  // ...pero un 400 genérico no lo copia (podría repetir el prompt).
+  montar({ fetchImpl: fetchSimulado({ status: 400, cuerpo: { error: { code: 400, status: 'INVALID_ARGUMENT', message: 'texto del prompt' } } }) });
+  assert.doesNotMatch((await pedir(BASICO)).body.detalle, /texto del prompt/);
+  // ...y en producción no se expone el detalle técnico.
+  const entornoPrevio = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    montar({ fetchImpl: fetchSimulado({ status: 500, cuerpo: { error: { code: 500, status: 'INTERNAL' } } }) });
+    assert.equal((await pedir(BASICO)).body.detalle, undefined);
+  } finally { if (entornoPrevio === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = entornoPrevio; }
 });
 
 test('TXT-5: bloqueo de seguridad, respuesta vacía o red caída → 502', async () => {
@@ -282,19 +309,20 @@ test('TXT-6: timeout del proveedor → aborta la petición y lanza ErrorTextoIA(
   assert.equal(f.llamadas[0].opciones.signal.aborted, true);
 });
 
-test('TXT-6: timeout por HTTP → 504 con el mismo mensaje y nada se guarda', async () => {
+test('TXT-6: timeout por HTTP → 504 que dice que Gemini tardó, y nada se guarda', async () => {
   const f = fetchSimulado({ colgar: true });
   const proveedor = crearProveedorGemini({ apiKey: CLAVE_GEMINI, fetchImpl: f });
   montar({ generar: (d, o) => textoIA.generarDescripcion(d, { ...o, proveedor, config: { timeoutMs: 60, maxTokens: 160, temperatura: 0.4 } }) });
   const r = await pedir(BASICO);
   assert.equal(r.status, 504);
-  assert.deepEqual(r.body, { error: MENSAJE_FALLO });
+  assert.equal(r.body.codigo, 'IA_TEXTO_TIMEOUT');
+  assert.match(r.body.error, /tardó demasiado/);
 });
 
-test('TXT-6: el timeout configurado está acotado (2–30 s, 10 s por defecto)', () => {
+test('TXT-6: el timeout configurado está acotado (2–30 s, 20 s por defecto)', () => {
   const previo = process.env.TEXT_AI_TIMEOUT_MS;
   try {
-    delete process.env.TEXT_AI_TIMEOUT_MS; assert.equal(textoIA.configuracion().timeoutMs, 10000);
+    delete process.env.TEXT_AI_TIMEOUT_MS; assert.equal(textoIA.configuracion().timeoutMs, 20000);
     process.env.TEXT_AI_TIMEOUT_MS = '999999'; assert.equal(textoIA.configuracion().timeoutMs, 30000);
     process.env.TEXT_AI_TIMEOUT_MS = '1'; assert.equal(textoIA.configuracion().timeoutMs, 2000);
   } finally {
@@ -424,3 +452,42 @@ test('TXT-11: cifras que sí vienen en los datos (precio, %, horario, fecha) se 
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.descripcion, texto);
 });
+
+// ── TXT-12 ──────────────────────────────────────────────────────────────────
+
+test('TXT-12: modelo principal saturado (503 / 404 / timeout) → reintenta UNA vez con el modelo de respaldo y responde', async () => {
+  const ok = respuestaGemini('Disfruta una hamburguesa acompañada de papas, disponible por tiempo limitado a precio Bocara.');
+  for (const fallo of [{ status: 503, cuerpo: { error: { code: 503, status: 'UNAVAILABLE' } } }, { status: 404, cuerpo: { error: { code: 404, status: 'NOT_FOUND' } } }, { colgar: true }]) {
+    const llamadas = [];
+    const fetchImpl = async (url, opciones) => {
+      llamadas.push(url);
+      if (url.includes('/models/principal:')) {
+        if (fallo.colgar) return new Promise((_, rej) => opciones.signal.addEventListener('abort', () => rej(Object.assign(new Error('a'), { name: 'AbortError' }))));
+        return { ok: false, status: fallo.status, json: async () => fallo.cuerpo };
+      }
+      return { ok: true, status: 200, json: async () => ok };
+    };
+    const proveedor = crearProveedorGemini({ apiKey: CLAVE_GEMINI, modelo: 'principal', respaldo: 'respaldo', fetchImpl });
+    const r = await silenciarConsola(() => proveedor.generar({ sistema: 's', usuario: 'u', temperatura: 0.4, maxTokens: 160, timeoutMs: 6000 }));
+    assert.equal(r.modelo, 'respaldo', JSON.stringify(fallo));
+    assert.equal(llamadas.length, 2);
+  }
+});
+
+test('TXT-12: clave inválida o salida bloqueada NO usan el respaldo; GEMINI_TEXT_MODEL_FALLBACK=none lo apaga', async () => {
+  const f = fetchSimulado({ status: 400, cuerpo: { error: { code: 400, status: 'INVALID_ARGUMENT', details: [{ reason: 'API_KEY_INVALID' }] } } });
+  const p = crearProveedorGemini({ apiKey: CLAVE_GEMINI, modelo: 'principal', respaldo: 'respaldo', fetchImpl: f });
+  await assert.rejects(p.generar({ sistema: 's', usuario: 'u', temperatura: 0.4, maxTokens: 160, timeoutMs: 5000 }), (e) => e.motivo === 'clave_invalida');
+  assert.equal(f.llamadas.length, 1);
+  const f2 = fetchSimulado({ status: 503, cuerpo: { error: { code: 503, status: 'UNAVAILABLE' } } });
+  const sin = crearProveedorGemini({ apiKey: CLAVE_GEMINI, modelo: 'principal', respaldo: 'none', fetchImpl: f2 });
+  assert.equal(sin.respaldo, null);
+  await assert.rejects(sin.generar({ sistema: 's', usuario: 'u', temperatura: 0.4, maxTokens: 160, timeoutMs: 5000 }));
+  assert.equal(f2.llamadas.length, 1);
+});
+
+function silenciarConsola(fn) {
+  const { warn } = console;
+  console.warn = () => {};
+  return Promise.resolve().then(fn).finally(() => { console.warn = warn; });
+}

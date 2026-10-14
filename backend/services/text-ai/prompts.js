@@ -19,6 +19,7 @@ const INSTRUCCION_SISTEMA = [
   `- Entre ${LARGO_OBJETIVO.min} y ${LARGO_OBJETIVO.max} caracteres, una o dos frases.`,
   '- Natural, comercial, atractiva y fácil de leer; tono de restaurante, sin exagerar.',
   '- Sin emojis, sin hashtags, sin comillas, sin mayúsculas sostenidas, sin signos de exclamación repetidos.',
+  '- Ortografía normal del español: mayúscula al inicio de cada frase y en nombres propios (Bocara); los precios con Q mayúscula, igual que en HECHOS (Q35.00).',
   '- No uses superlativos que no se puedan comprobar ("el mejor", "el más delicioso", "único").',
   '',
   'Reglas de veracidad (obligatorias):',

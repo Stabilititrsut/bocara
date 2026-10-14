@@ -2,7 +2,7 @@
 // Una sola fuente para el log de arranque, GET /api/ia/estado y los errores
 // de configuración (texto 503, trabajo de imagen "ia_no_configurada").
 // Nunca devuelve valores de claves: solo nombres de variables y migraciones.
-const { MODELO_POR_DEFECTO: MODELO_GEMINI } = require('./text-ai/providers/gemini');
+const { MODELO_POR_DEFECTO: MODELO_GEMINI, RESPALDO_POR_DEFECTO: RESPALDO_GEMINI } = require('./text-ai/providers/gemini');
 const { MODELO_POR_DEFECTO: MODELO_OPENAI_IMAGEN } = require('./imagenes/proveedorOpenAI');
 const { MODELO_VISION_POR_DEFECTO } = require('./imagenes/revisionIA');
 
@@ -25,7 +25,10 @@ function estadoIATexto() {
       return { operativa: false, proveedor, modelo, faltan: ['GEMINI_API_KEY'],
         mensaje: 'IA de texto no configurada: falta GEMINI_API_KEY en backend/.env (TEXT_AI_PROVIDER=gemini).' };
     }
-    return { operativa: true, proveedor, modelo, faltan: [], mensaje: `IA de texto operativa: Gemini (${modelo}).` };
+    const r = process.env.GEMINI_TEXT_MODEL_FALLBACK ?? RESPALDO_GEMINI;
+    const respaldo = r && !['none', 'off', modelo].includes(String(r).toLowerCase()) ? r : null;
+    return { operativa: true, proveedor, modelo, modelo_respaldo: respaldo, faltan: [],
+      mensaje: `IA de texto operativa: Gemini (${modelo}${respaldo ? `, respaldo ${respaldo}` : ''}).` };
   }
   return { operativa: false, proveedor, modelo: null, faltan: [],
     mensaje: `TEXT_AI_PROVIDER=${proveedor} no está implementado para texto. Usa gemini.` };
@@ -94,6 +97,71 @@ async function diagnosticoIA({ cliente } = {}) {
   return { texto: estadoIATexto(), imagen: estadoIAImagen(), migraciones };
 }
 
+// ── Prueba en vivo ─────────────────────────────────────────────────────────
+// La configuración puede estar completa y aun así fallar (modelo retirado,
+// clave revocada, cuenta sin créditos). Esto hace UNA llamada mínima real a
+// cada proveedor (costo prácticamente nulo; nunca genera una imagen):
+//   Gemini  generateContent con un prompt de una palabra.
+//   OpenAI  models.retrieve del modelo de imagen (gratis: clave y modelo) +
+//           una respuesta mínima del modelo de revisión (detecta falta de créditos).
+// → { estado: 'OK' | 'ERROR', motivo, ms }
+async function probarTexto({ crear = () => require('./text-ai').obtenerProveedorTexto() } = {}) {
+  const inicio = Date.now();
+  try {
+    const proveedor = crear();
+    if (!proveedor) return { estado: 'ERROR', motivo: estadoIATexto().mensaje, ms: 0 };
+    const r = await proveedor.generar({ sistema: 'Responde solo con la palabra: ok', usuario: 'ok', temperatura: 0, maxTokens: 16, timeoutMs: 20000 });
+    const usado = r?.modelo || proveedor.modelo;
+    return {
+      estado: 'OK',
+      motivo: usado === proveedor.modelo ? `Gemini respondió (${usado}).` : `Gemini respondió con el modelo de respaldo ${usado} (el principal ${proveedor.modelo} no respondió).`,
+      ms: Date.now() - inicio,
+    };
+  } catch (err) {
+    return { estado: 'ERROR', motivo: err.message, ms: Date.now() - inicio };
+  }
+}
+
+async function probarImagen({ cliente } = {}) {
+  const inicio = Date.now();
+  const e = estadoIAImagen();
+  if (!e.operativa) return { estado: 'ERROR', motivo: e.mensaje, ms: 0 };
+  const { clasificarError } = require('./imagenes/proveedorOpenAI');
+  try {
+    const sdk = cliente || new (require('openai').OpenAI)({ apiKey: process.env.OPENAI_API_KEY, timeout: 20000, maxRetries: 0 });
+    if (e.proveedor === 'openai') await sdk.models.retrieve(e.modelo);
+    await sdk.responses.create({ model: e.modelo_revision, input: 'Responde: ok', max_output_tokens: 16, reasoning: { effort: 'low' } });
+    return { estado: 'OK', motivo: `OpenAI respondió (imagen ${e.modelo}, revisión ${e.modelo_revision}).`, ms: Date.now() - inicio };
+  } catch (err) {
+    const c = clasificarError(err);
+    const explicacion = {
+      sin_credito: 'la cuenta de OpenAI no tiene créditos: recárgala en platform.openai.com/settings/organization/billing.',
+      clave_invalida: 'OPENAI_API_KEY no es válida o no tiene permisos.',
+      modelo: `el modelo no existe o tu cuenta no tiene acceso (OPENAI_IMAGE_MODEL=${e.modelo}, OPENAI_VISION_MODEL=${e.modelo_revision}).`,
+    }[c.motivo];
+    return { estado: 'ERROR', motivo: explicacion ? `${explicacion} (${c.message})` : c.message, ms: Date.now() - inicio };
+  }
+}
+
+// Resumen para GET /api/ia/status y scripts/verificar-ia.js.
+async function estadoCompleto({ probar = false, cliente, probadores = {} } = {}) {
+  const d = await diagnosticoIA({ cliente });
+  const texto = { ...d.texto, prueba: probar ? await (probadores.texto || probarTexto)() : null };
+  const imagen = { ...d.imagen, prueba: probar ? await (probadores.imagen || probarImagen)() : null };
+  const ok = (x) => x.operativa && (!x.prueba || x.prueba.estado === 'OK');
+  return {
+    resumen: {
+      gemini_texto: ok(texto) ? 'OK' : 'ERROR',
+      openai_imagen: ok(imagen) ? 'OK' : 'ERROR',
+      migraciones: d.migraciones.ok ? 'OK' : 'PENDIENTES',
+    },
+    modelos: { texto: texto.modelo, texto_respaldo: texto.modelo_respaldo || null, imagen: imagen.modelo, revision_imagen: imagen.modelo_revision },
+    faltan_claves: [...new Set([...texto.faltan, ...imagen.faltan])],
+    texto, imagen, migraciones: d.migraciones,
+    probado_en_vivo: probar,
+  };
+}
+
 // Una línea por pieza al arrancar el servidor: imposible no verla.
 async function registrarDiagnosticoAlArrancar(log = console) {
   try {
@@ -109,4 +177,7 @@ async function registrarDiagnosticoAlArrancar(log = console) {
   }
 }
 
-module.exports = { estadoIATexto, estadoIAImagen, estadoMigraciones, diagnosticoIA, registrarDiagnosticoAlArrancar, MIGRACIONES };
+module.exports = {
+  estadoIATexto, estadoIAImagen, estadoMigraciones, diagnosticoIA, registrarDiagnosticoAlArrancar, MIGRACIONES,
+  probarTexto, probarImagen, estadoCompleto,
+};
