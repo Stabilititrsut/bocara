@@ -256,10 +256,13 @@ test('TXT-5: proveedor apagado (none / openai sin implementar / sin key) → 503
     delete process.env.GEMINI_API_KEY;
     assert.equal(textoIA.obtenerProveedorTexto('gemini'), null);
     assert.equal(textoIA.obtenerProveedorTexto(undefined), null);
+    process.env.TEXT_AI_PROVIDER = 'gemini';
     routerActual = crearRouterIA({ generar: (d, o) => textoIA.generarDescripcion(d, { ...o, proveedor: null }), limites: crearLimites() });
     const r = await pedir(BASICO);
     assert.equal(r.status, 503);
-    assert.match(r.body.error, /no está disponible/);
+    assert.equal(r.body.codigo, 'IA_TEXTO_NO_CONFIGURADA');
+    assert.match(r.body.detalle, /GEMINI_API_KEY/, 'dice exactamente qué falta');
+    assert.deepEqual(r.body.faltan, ['GEMINI_API_KEY']);
   } finally {
     process.env.GEMINI_API_KEY = previo.k;
     if (previo.p === undefined) delete process.env.TEXT_AI_PROVIDER; else process.env.TEXT_AI_PROVIDER = previo.p;

@@ -431,7 +431,8 @@ function sembrar(extra) {
     id: `seed-${Math.random().toString(16).slice(2)}`, negocio_id: IDS.olaAzul, nombre: 'Semilla',
     tipo: 'cupon', precio_original: 100, precio_descuento: 50, cantidad_disponible: 4,
     activo: true, estado_aprobacion: 'aprobado', motivo_rechazo: null,
-    imagen_url: FOTO, created_at: new Date().toISOString(), ...HORARIO_VIGENTE, ...extra,
+    imagen_url: FOTO, estado_procesamiento_imagen: 'completada', imagen_original_url: FOTO, imagen_mejorada_url: FOTO,
+    created_at: new Date().toISOString(), ...HORARIO_VIGENTE, ...extra,
   };
   fake._db.tablas.bolsas.push(b);
   return b.id;

@@ -8,7 +8,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const sharp = require('sharp');
 const {
-  fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala,
+  fake, IDS, datosBase, iniciar, detener, pedir, fechaGuatemala, trabajoListo,
 } = require('./helpers/appPublicaciones');
 const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba');
 const { crearFakeSupabase } = require('./helpers/fakeSupabase');
@@ -405,20 +405,26 @@ test('IMG-9: usar original / volver a la mejorada — ninguna de las dos se pier
   assert.equal(env.fila().imagen_original_url, ORIGINAL);
 });
 
-test('IMG-10: job — recupera "procesando" abandonada y respeta la espera entre reintentos', async () => {
+test('IMG-10: job — solo procesa fotos de NEGOCIOS (recupera abandonada, respeta la espera); nunca toca publicaciones', async () => {
   const hace = (ms) => new Date(Date.now() - ms).toISOString();
-  const env = entorno({ fila: {
+  const abandonada = {
     estado_procesamiento_imagen: ESTADOS.PROCESANDO, imagen_original_url: ORIGINAL, imagen_intentos: 1,
     imagen_procesamiento_iniciado_at: hace(pipeline.ABANDONO_MS + 1000), imagen_solicitada_at: hace(1e6),
-  } });
+  };
+  const env = entorno({ fila: abandonada });
+  env.cliente._db.tablas.negocios = [{ id: 'n1', imagen_url: ORIGINAL, imagen_intentos: 0, ...abandonada }];
   const r = await silenciar(() => pipeline.procesarPendientes({ ...env.opts }));
   assert.equal(r.completadas, 1);
-  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.COMPLETADA);
+  assert.equal(env.cliente.tabla('negocios')[0].estado_procesamiento_imagen, ESTADOS.COMPLETADA);
+  // Las publicaciones se validan antes de guardar (trabajos.js): la cola no las procesa.
+  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.PROCESANDO);
+  assert.equal(env.fila().imagen_url, ORIGINAL);
 
-  const env2 = entorno({ fila: {
-    estado_procesamiento_imagen: ESTADOS.PENDIENTE, imagen_original_url: ORIGINAL, imagen_intentos: 1,
+  const env2 = entorno();
+  env2.cliente._db.tablas.negocios = [{
+    id: 'n1', imagen_url: ORIGINAL, estado_procesamiento_imagen: ESTADOS.PENDIENTE, imagen_original_url: ORIGINAL, imagen_intentos: 1,
     imagen_procesamiento_iniciado_at: hace(10 * 1000), imagen_solicitada_at: hace(20 * 1000),
-  } });
+  }];
   const r2 = await silenciar(() => pipeline.procesarPendientes({ ...env2.opts }));
   assert.equal(r2.procesadas, 0, 'un reintento reciente espera ESPERA_REINTENTO_MS');
 });
@@ -479,16 +485,29 @@ const accion = async (tipo, id, nombre, como) => {
 };
 const filaBolsa = (id) => fake.tabla('bolsas').find(b => b.id === id);
 
-test('HTTP-1: crear publicación responde 201 sin esperar al pipeline; la original queda guardada y visible', async () => {
-  const r = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: promo() }));
-  assert.equal(r.status, 201);
-  assert.equal(r.body.imagen_url, FOTO);
-  await silenciar(pipeline.esperarMejorasEnCurso);
+const ORIGINAL_SUBIDA = 'https://cdn.bocara.test/publicaciones/original.jpg';
+const MEJORADA = 'https://cdn.bocara.test/mejoradas/trabajos/t1/1.webp';
+
+test('HTTP-1: crear exige foto validada por IA; con trabajo "lista" se guarda la mejorada y se conserva la original', async () => {
+  const sin = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: promo(), sinTrabajo: true }));
+  assert.equal(sin.status, 400);
+  assert.equal(sin.body.codigo, 'IMAGEN_NO_PROCESADA');
+  assert.equal(fake.tabla('bolsas').length, 0);
+
+  const trabajoId = trabajoListo({ negocioId: IDS.olaAzul, usuarioId: IDS.restaurante, url: MEJORADA, original: ORIGINAL_SUBIDA });
+  const r = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: { ...promo(), imagen_url: ORIGINAL_SUBIDA, imagen_trabajo_id: trabajoId } }));
+  assert.equal(r.status, 201, JSON.stringify(r.body));
   const f = filaBolsa(r.body.id);
-  assert.equal(f.imagen_original_url, FOTO);
-  assert.equal(f.imagen_url, FOTO);
-  // En pruebas el host de FOTO no es Storage propio → fallida, y la app sigue con la original.
-  assert.equal(f.estado_procesamiento_imagen, ESTADOS.FALLIDA);
+  assert.equal(f.imagen_url, MEJORADA, 'se muestra la mejorada');
+  assert.equal(f.imagen_original_url, ORIGINAL_SUBIDA, 'la original se conserva');
+  assert.equal(f.imagen_mejorada_url, MEJORADA);
+  assert.equal(f.estado_procesamiento_imagen, ESTADOS.COMPLETADA);
+  assert.equal(f.imagen_procesamiento_meta.trabajo_id, trabajoId);
+  assert.equal(fake.tabla('trabajos_imagen').find((t) => t.id === trabajoId).bolsa_id, r.body.id, 'trabajo marcado como usado');
+  // El mismo trabajo no autoriza una segunda publicación.
+  const otra = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.restaurante, body: { ...promo(), imagen_trabajo_id: trabajoId } }));
+  assert.equal(otra.status, 409);
+  assert.equal(otra.body.codigo, 'IMAGEN_YA_USADA');
 });
 
 test('HTTP-2: PUT que reenvía la mejorada o la original de la misma foto no reinicia la mejora ni manda a revisión', async () => {
@@ -505,37 +524,44 @@ test('HTTP-2: PUT que reenvía la mejorada o la original de la misma foto no rei
   }
 });
 
-test('HTTP-3: PUT con foto NUEVA reinicia el ciclo y conserva la nueva como original', async () => {
+test('HTTP-3: PUT con foto NUEVA exige su trabajo "lista"; con él guarda la mejorada nueva y vuelve a revisión', async () => {
   const r = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.admin, body: { ...promo(), negocio_id: IDS.olaAzul } }));
-  await silenciar(pipeline.esperarMejorasEnCurso);
-  Object.assign(filaBolsa(r.body.id), { estado_procesamiento_imagen: ESTADOS.COMPLETADA, imagen_mejorada_url: 'https://m/1.webp', imagen_url: 'https://m/1.webp' });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
   const NUEVA = 'https://cdn.bocara.test/publicaciones/nueva.jpg';
-  const ed = await silenciar(() => pedir('PUT', `/api/bolsas/${r.body.id}`, { como: IDS.restaurante, body: { imagen_url: NUEVA } }));
+  const sin = await silenciar(() => pedir('PUT', `/api/bolsas/${r.body.id}`, { como: IDS.restaurante, body: { imagen_url: NUEVA }, sinTrabajo: true }));
+  assert.equal(sin.status, 400);
+  assert.equal(sin.body.codigo, 'IMAGEN_NO_PROCESADA');
+  assert.equal(filaBolsa(r.body.id).imagen_url, FOTO, 'sin cambios');
+
+  const NUEVA_MEJORADA = 'https://cdn.bocara.test/mejoradas/trabajos/t2/1.webp';
+  const trabajoId = trabajoListo({ negocioId: IDS.olaAzul, usuarioId: IDS.restaurante, url: NUEVA_MEJORADA, original: NUEVA });
+  const ed = await silenciar(() => pedir('PUT', `/api/bolsas/${r.body.id}`, { como: IDS.restaurante, body: { imagen_url: NUEVA, imagen_trabajo_id: trabajoId } }));
   assert.equal(ed.status, 200, JSON.stringify(ed.body));
   assert.equal(ed.body.estado_aprobacion, 'pendiente', 'foto nueva vuelve a revisión (regla existente)');
-  await silenciar(pipeline.esperarMejorasEnCurso);
   const f = filaBolsa(r.body.id);
-  assert.equal(f.imagen_url, NUEVA);
+  assert.equal(f.imagen_url, NUEVA_MEJORADA);
   assert.equal(f.imagen_original_url, NUEVA);
-  assert.equal(f.imagen_mejorada_url, null, 'la mejorada vieja no se mezcla con la foto nueva');
+  assert.equal(f.imagen_mejorada_url, NUEVA_MEJORADA);
+  assert.equal(f.estado_procesamiento_imagen, ESTADOS.COMPLETADA);
 });
 
-test('HTTP-4: acciones — solo el dueño o admin; reintentar/usar-original/usar-mejorada responden el estado', async () => {
-  const r = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.admin, body: { ...promo(), negocio_id: IDS.olaAzul } }));
-  await silenciar(pipeline.esperarMejorasEnCurso);
+test('HTTP-4: acciones — solo el dueño o admin; en publicaciones "reintentar" no aplica; usar-original/usar-mejorada responden el estado', async () => {
+  const trabajoId = trabajoListo({ negocioId: IDS.olaAzul, usuarioId: IDS.admin, url: 'https://m/2.webp', original: FOTO });
+  const r = await silenciar(() => pedir('POST', '/api/bolsas', { como: IDS.admin, body: { ...promo(), negocio_id: IDS.olaAzul, imagen_trabajo_id: trabajoId } }));
+  assert.equal(r.status, 201, JSON.stringify(r.body));
   const id = r.body.id;
   assert.equal((await accion('publicacion', id, 'reintentar', IDS.otroRestaurante)).status, 403);
   assert.equal((await accion('publicacion', id, 'reintentar', IDS.cliente)).status, 403);
   assert.equal((await accion('publicacion', id, 'borrar-todo', IDS.restaurante)).status, 404);
 
+  // Reprocesar aquí saltaría el análisis de calidad: se cambia la foto en el formulario.
   const re = await silenciar(() => accion('publicacion', id, 'reintentar', IDS.restaurante));
-  assert.equal(re.status, 200, JSON.stringify(re.body));
-  assert.equal(re.body.imagen.estado_procesamiento_imagen, ESTADOS.PENDIENTE);
-  await new Promise((res) => setTimeout(res, 30));
+  assert.equal(re.status, 409);
+  assert.equal(re.body.codigo, 'IMAGEN_SIN_VALIDAR');
 
-  Object.assign(filaBolsa(id), { estado_procesamiento_imagen: ESTADOS.COMPLETADA, imagen_mejorada_url: 'https://m/2.webp', imagen_url: 'https://m/2.webp' });
   const uo = await accion('publicacion', id, 'usar-original', IDS.restaurante);
   assert.equal(uo.body.imagen.imagen_url, FOTO);
+  assert.equal(uo.body.imagen.estado_procesamiento_imagen, ESTADOS.DESCARTADA);
   const um = await accion('publicacion', id, 'usar-mejorada', IDS.admin);
   assert.equal(um.body.imagen.imagen_url, 'https://m/2.webp');
 });

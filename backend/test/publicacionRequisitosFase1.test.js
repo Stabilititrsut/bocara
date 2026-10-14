@@ -40,6 +40,8 @@ function sembrarAprobada(extra = {}) {
   const b = {
     id: `pub-${Math.random().toString(16).slice(2)}`, negocio_id: IDS.olaAzul, ...tiempoLimitado(),
     activo: true, estado_aprobacion: 'aprobado', motivo_rechazo: null,
+    // Publicada con foto validada por IA (services/imagenes/trabajos.js).
+    estado_procesamiento_imagen: 'completada',
     created_at: new Date().toISOString(), ...extra,
   };
   fake.tabla('bolsas').push(b);
