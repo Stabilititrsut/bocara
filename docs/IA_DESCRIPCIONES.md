@@ -56,6 +56,13 @@ El endpoint:
 | 503 | IA de texto no configurada: `{ error, codigo: 'IA_TEXTO_NO_CONFIGURADA', detalle, faltan }`. `detalle` dice qué variable falta (en la app se muestra en desarrollo). No consume cupo. |
 | 504 | timeout |
 
+### Tono por tipo (services/text-ai/prompts.js, `instruccionSistema(tipo)`)
+
+- **Promoción** (`cupon`): oferta comercial — beneficio, precio especial en Bocara, descuento e invitación a aprovecharla.
+- **Tiempo limitado** (`bolsa`): oportunidad especial por poco tiempo, producto apetitoso, conviene aprovecharlo hoy, disponibilidad limitada. Siempre en positivo.
+- Ambos: 2–3 frases cortas (160–320 caracteres), cifras con números, solo datos del formulario (sin ingredientes, tamaños, calidades como "premium", marcas, porciones ni sabores inventados).
+- Garantía: `lenguajeNegativo()` descarta (502 `IA_TEXTO_SALIDA_INVALIDA`) toda propuesta que diga o insinúe sobró, sobrante, sobras, no se vendió, nadie lo compró, desperdicio, merma, excedente, por vencer/caducar, restos o deshacerse.
+
 ### Proveedores intercambiables
 
 `TEXT_AI_PROVIDER=gemini | openai | none`. Para agregar uno (p. ej. OpenAI para texto) basta un archivo en `services/text-ai/providers/` con:

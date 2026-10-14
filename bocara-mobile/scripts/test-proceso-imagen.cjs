@@ -40,11 +40,11 @@ const trabajo = (estado, extra = {}) => ({
 // ── Textos y pasos ──────────────────────────────────────────────────────────
 
 test('IMG-FE-1: textos visibles exactos de cada estado', () => {
-  assert.equal(P.resumenProceso(trabajo('mejorando')).titulo, '✨ Mejorando imagen con IA…');
-  assert.equal(P.resumenProceso(trabajo('validando')).titulo, '🔍 Validando calidad de imagen…');
-  assert.equal(P.resumenProceso(trabajo('analizando')).titulo, '🔍 Analizando calidad…');
+  assert.equal(P.resumenProceso(trabajo('mejorando')).titulo, '✨ Mejorando tamaño, calidad y presentación con IA…');
+  assert.equal(P.resumenProceso(trabajo('validando')).titulo, '🔍 Validando resultado…');
+  assert.equal(P.resumenProceso(trabajo('analizando')).titulo, '🔍 Analizando imagen…');
   assert.equal(P.resumenProceso(trabajo('subida')).titulo, 'Imagen subida');
-  assert.equal(P.resumenProceso(trabajo('lista')).titulo, '✅ Imagen lista para publicar');
+  assert.equal(P.resumenProceso(trabajo('lista')).titulo, '✅ Imagen optimizada y lista para publicar');
   assert.equal(P.resumenProceso(trabajo('fallida', { error: 'x' })).titulo, '⚠️ No se pudo mejorar la imagen');
   // Rechazo tras mejorar y validar vs. rechazo de algo irreparable al analizar.
   assert.equal(P.resumenProceso(trabajo('rechazada', { paso_error: 'validando' })).titulo, '❌ Esta imagen no cumple la calidad mínima para Bocara');
@@ -72,7 +72,7 @@ test('IMG-FE-2: pasos — avance, rechazo en "Analizando calidad" y fallo en el 
   assert.deepEqual(e(trabajo('fallida', { error_codigo: 'proveedor_sin_credito', paso_error: 'mejorando' })), ['hecho', 'hecho', 'error', 'pendiente']);
   assert.deepEqual(e(trabajo('fallida', { error_codigo: 'proveedor_sin_credito' })), ['hecho', 'hecho', 'error', 'pendiente']);
   assert.deepEqual(plano(P.pasosProceso(trabajo('mejorando'))).map((p) => p.texto),
-    ['Imagen subida', 'Analizando calidad', 'Mejorando con IA', 'Validando resultado']);
+    ['Imagen subida', 'Analizando imagen', 'Mejorando tamaño, calidad y presentación con IA', 'Validando resultado']);
 });
 
 test('IMG-FE-3: fallida ofrece Reintentar y Cambiar foto; rechazada solo Cambiar foto con los motivos; detalle técnico solo en desarrollo', () => {
@@ -202,8 +202,8 @@ const botones = (a) => nodos(a).filter((n) => n.type === 'Button');
 
 test('IMG-FE-10: componente — procesando: spinner + pasos, sin Reintentar', () => {
   const a = Estado({ trabajo: trabajo('mejorando'), onReintentar() {}, onCambiarFoto() {} });
-  assert.match(texto(a), /✨ Mejorando imagen con IA…/);
-  assert.match(texto(a), /Mejorando con IA…/);
+  assert.match(texto(a), /✨ Mejorando tamaño, calidad y presentación con IA…/);
+  assert.match(texto(a), /•Mejorando tamaño, calidad y presentación con IA…/);
   assert.match(texto(a), /Guardar se habilita cuando la imagen esté lista/);
   assert.ok(nodos(a).some((n) => n.type === 'Spinner'));
   assert.equal(botones(a).find((b) => texto(b) === 'Reintentar'), undefined);
@@ -220,12 +220,12 @@ test('IMG-FE-11: componente — fallida: Reintentar y Cambiar foto llaman a sus 
   assert.match(texto(r), /❌ Esta imagen no cumple la calidad mínima para Bocara/);
   assert.match(texto(r), /La mejoramos con IA, pero el resultado final no se puede publicar/);
   assert.match(texto(r), /El producto está cortado/);
-  assert.match(texto(r), /✓Mejorando con IA✗Validando resultado/);
+  assert.match(texto(r), /✓Mejorando tamaño, calidad y presentación con IA✗Validando resultado/);
   assert.deepEqual(botones(r).map(texto), ['Cambiar foto']);
   const ok = Estado({ trabajo: trabajo('lista'), onReintentar() {}, onCambiarFoto() {} });
-  assert.match(texto(ok), /✅ Imagen lista para publicar/);
+  assert.match(texto(ok), /✅ Imagen optimizada y lista para publicar/);
   const corregida = Estado({ trabajo: trabajo('lista', { problemas_corregidos: ['oscura', 'borrosa'] }), onReintentar() {}, onCambiarFoto() {} });
-  assert.match(texto(corregida), /La IA mejoró tu foto: iluminación, nitidez./);
+  assert.match(texto(corregida), /La IA mejoró iluminación y nitidez./);
   const original = Estado({ trabajo: trabajo('lista', { usa_original: true }), onReintentar() {}, onCambiarFoto() {} });
   assert.match(texto(original), /Usaremos tu foto original/);
 });
@@ -356,4 +356,15 @@ test('IMG-FE-15: cableado — subir foto inicia el procesamiento (web y nativo) 
   const api = read('src/services/api.ts');
   assert.match(api, /'\/imagenes\/trabajos'/);
   assert.doesNotMatch(api + src, /OPENAI_API_KEY|sk-[A-Za-z0-9]{20,}/, 'ninguna clave en la app');
+});
+
+test('IMG-FE-14: lista — mensaje breve de lo que corrigió la IA, sin detalles técnicos', () => {
+  assert.equal(P.mensajeCorregido(['oscura', 'borrosa', 'recortada']), 'La IA mejoró iluminación, nitidez y encuadre.');
+  assert.equal(P.mensajeCorregido(['resolucion', 'proporcion', 'muy_oscura', 'oscura']), 'La IA mejoró tamaño, encuadre e iluminación.');
+  assert.equal(P.mensajeCorregido(['desordenada']), 'La IA mejoró presentación.');
+  assert.equal(P.mensajeCorregido([]), null);
+  assert.equal(P.mensajeCorregido(['codigo_desconocido']), null);
+  const r = P.resumenProceso(trabajo('lista', { problemas_corregidos: ['oscura', 'borrosa', 'recortada'] }));
+  assert.equal(r.titulo, '✅ Imagen optimizada y lista para publicar');
+  assert.deepEqual(plano(r.mensajes), ['La IA mejoró iluminación, nitidez y encuadre.']);
 });

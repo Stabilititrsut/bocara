@@ -4,10 +4,10 @@
 //
 //   subida → analizando → mejorando → validando → lista | rechazada | fallida
 //
-// Una foto oscura, borrosa o pequeña NO se rechaza al analizarla: pasa por la
-// mejora con IA y recién al validar el resultado se decide. Solo lo
-// irreparable (no es imagen, resolución absurda, no es comida) se rechaza en
-// "Analizando calidad".
+// Una foto oscura, borrosa, pequeña, cortada o mal proporcionada NO se
+// rechaza al analizarla: la IA la lleva a un formato comercial y recién al
+// validar el resultado se decide. Solo lo irreparable (no es imagen, producto
+// irreconocible, no es comida, captura) se rechaza en "Analizando imagen".
 //
 // Regla de la app (el backend la aplica igual): una foto NUEVA solo se puede
 // guardar con su trabajo en 'lista'.
@@ -37,10 +37,10 @@ export interface TrabajoImagen {
 export const TEXTOS_IMAGEN = Object.freeze({
   subiendo: 'Subiendo imagen…',
   subida: 'Imagen subida',
-  analizando: '🔍 Analizando calidad…',
-  mejorando: '✨ Mejorando imagen con IA…',
-  validando: '🔍 Validando calidad de imagen…',
-  lista: '✅ Imagen lista para publicar',
+  analizando: '🔍 Analizando imagen…',
+  mejorando: '✨ Mejorando tamaño, calidad y presentación con IA…',
+  validando: '🔍 Validando resultado…',
+  lista: '✅ Imagen optimizada y lista para publicar',
   procesando: 'Procesando imagen con IA, espera un momento…',
   fallida: '⚠️ No se pudo mejorar la imagen',
   rechazada: '❌ Esta imagen no cumple la calidad mínima para Bocara',
@@ -52,8 +52,8 @@ export const TEXTOS_IMAGEN = Object.freeze({
 
 const PASOS: { clave: EstadoTrabajo; texto: string }[] = [
   { clave: 'subida', texto: 'Imagen subida' },
-  { clave: 'analizando', texto: 'Analizando calidad' },
-  { clave: 'mejorando', texto: 'Mejorando con IA' },
+  { clave: 'analizando', texto: 'Analizando imagen' },
+  { clave: 'mejorando', texto: 'Mejorando tamaño, calidad y presentación con IA' },
   { clave: 'validando', texto: 'Validando resultado' },
 ];
 const ORDEN: Record<string, number> = { subida: 0, analizando: 1, mejorando: 2, validando: 3, lista: 4 };
@@ -91,11 +91,26 @@ export function pasosProceso(t: Pick<TrabajoImagen, 'estado' | 'error_codigo'> &
   });
 }
 
-// Problemas de la original → lo que se le dice al restaurante que se corrigió.
+// Problemas de la original → lo que se le dice al restaurante que se corrigió
+// (breve, sin detalles técnicos).
 const CORREGIDO: Record<string, string> = {
-  oscura: 'iluminación', muy_oscura: 'iluminación', quemada: 'exposición', sin_contraste: 'contraste y color',
-  borrosa: 'nitidez', resolucion: 'resolución', baja_calidad: 'calidad general', desordenada: 'presentación',
+  oscura: 'iluminación', muy_oscura: 'iluminación', quemada: 'iluminación', sin_contraste: 'color y contraste',
+  borrosa: 'nitidez', resolucion: 'tamaño', proporcion: 'encuadre', recortada: 'encuadre',
+  baja_calidad: 'calidad', desordenada: 'presentación', manos_o_personas: 'presentación',
 };
+
+// "a", "a y b", "a, b y c" ("e" ante i-/hi-: "encuadre e iluminación").
+function enumerar(xs: string[]): string {
+  if (xs.length <= 1) return xs.join('');
+  const ultimo = xs[xs.length - 1];
+  const conj = /^h?i(?!e)/i.test(ultimo) ? 'e' : 'y';
+  return `${xs.slice(0, -1).join(', ')} ${conj} ${ultimo}`;
+}
+
+export function mensajeCorregido(problemas: string[] | null | undefined): string | null {
+  const hechos = [...new Set((problemas || []).map((c) => CORREGIDO[c]).filter(Boolean))];
+  return hechos.length ? `La IA mejoró ${enumerar(hechos)}.` : null;
+}
 
 export interface ResumenProceso {
   titulo: string;
@@ -117,9 +132,8 @@ export function resumenProceso(t: TrabajoImagen | null, { dev = false }: { dev?:
     };
   }
   if (t.estado === 'lista') {
-    const corregidos = (t.problemas_corregidos || []).map((c) => CORREGIDO[c]).filter(Boolean);
-    const mensajes = t.usa_original ? [TEXTOS_IMAGEN.usaOriginal]
-      : corregidos.length ? [`La IA mejoró tu foto: ${[...new Set(corregidos)].join(', ')}.`] : [];
+    const corregido = mensajeCorregido(t.problemas_corregidos);
+    const mensajes = t.usa_original ? [TEXTOS_IMAGEN.usaOriginal] : corregido ? [corregido] : [];
     return { titulo: TEXTOS_IMAGEN.lista, tono: 'ok', mensajes, puedeReintentar: false, puedeCambiar: true };
   }
   if (t.estado === 'rechazada') {

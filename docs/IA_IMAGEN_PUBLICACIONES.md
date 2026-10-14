@@ -11,20 +11,28 @@ Restaurante elige foto ──► /api/uploads/base64 (Storage)  →  "Subiendo i
                        └─► POST /api/imagenes/trabajos     →  trabajo en "subida"
                                  │  (procesa en el acto; la app consulta cada 1.5 s)
                                  ▼
-  analizando   🔍 Analizando calidad…        diagnóstico técnico (sharp) + revisión con visión (OpenAI)
-     │  ✗ SOLO irreparable ──► rechazada  ❌ Imagen rechazada: no se puede usar esta foto  → Cambiar foto
-     │     (no es imagen / archivo dañado, < 256 px, proporción > 2:1, no es comida, captura o collage)
-     │  oscura, borrosa, lavada, pequeña, desordenada… ──► NO se rechaza: pasa a la mejora con esos problemas
+  analizando   🔍 Analizando imagen…   ¿hay información visual suficiente para una foto comercial FIEL?
+     │  ✗ SOLO extremos ──► rechazada  ❌ Imagen rechazada: no se puede usar esta foto  → Cambiar foto
+     │     (archivo dañado / no es imagen, < 200 px o producto irreconocible, no es comida, captura o collage)
+     │  oscura, borrosa, pequeña (400–599 px), mal proporcionada, cortada, close-up, desordenada, ruido…
+     │     ──► NO se rechaza: pasa a la IA con la lista de qué corregir
      ▼
-  mejorando    ✨ Mejorando imagen con IA…   OpenAI GPT Image (images.edit) con indicaciones de qué corregir
+  mejorando    ✨ Mejorando tamaño, calidad y presentación con IA…
+     │     OpenAI GPT Image en encuadre COMERCIAL: lienzo estándar 1024×1024 / 1536×1024 / 1024×1536,
+     │     foto ampliada si es pequeña, fondo extendido para recomponer (con margen si venía cortada),
+     │     sin mover ni inventar comida
      │  ✗ ──► fallida    ⚠️ motivo exacto (sin créditos, clave inválida, modelo, caída)  → Reintentar / Cambiar foto
      ▼
-  validando    🔍 Validando calidad de imagen…   similitud con la original + calidad publicable + revisión IA del resultado
-     │  no se parece / no llega a la calidad ──► fallida (reintentable)
+  validando    🔍 Validando resultado…
+     │     1. la comida (región de la foto original) sigue siendo la misma (similitud)
+     │     2. calidad y resolución publicables (lado menor ≥ 1024 px)
+     │     3. revisión IA con ORIGINAL + RESULTADO: mismo producto, sin ingredientes/cantidades
+     │        inventados, presentable. Un close-up o comida que sale del cuadro NO es defecto.
+     │  no se parece / no llega / cambió el producto ──► fallida (reintentable: genera otra versión)
      │     …salvo que la ORIGINAL ya cumpliera todo: lista con la original (usa_original, fallback seguro)
-     │  la revisión final la ve no apta ──► rechazada  ❌ Esta imagen no cumple la calidad mínima para Bocara (+ motivos)
+     │  fiel pero no presentable ──► rechazada  ❌ Esta imagen no cumple la calidad mínima para Bocara (+ motivos)
      ▼
-  lista        ✅ Imagen lista para publicar    → Guardar se habilita; la vista previa muestra la mejorada
+  lista        ✅ Imagen optimizada y lista para publicar   "La IA mejoró iluminación, nitidez y encuadre."
 ```
 
 Mientras procesa, la app muestra los pasos y "Procesando imagen con IA, espera un momento…". Mientras el trabajo no esté en `lista`, el botón **Guardar** del formulario se ve bloqueado (🔒) con el motivo en una franja visible; tocarlo explica el motivo y lleva a la foto. El backend aplica la misma regla, así que no se puede saltar desde otra app o con la API.
@@ -50,8 +58,8 @@ Mientras procesa, la app muestra los pasos y "Procesando imagen con IA, espera u
 
 | Métrica | En la original: problema a corregir con IA si | Exige en la mejorada |
 |---|---|---|
-| Resolución (lado menor) | < 600 px (< 256 px = irreparable, se rechaza) | ≥ 600 px |
-| Proporción (lado mayor / menor) | > 2.0 = irreparable (la mejora conserva el encuadre), se rechaza | ≤ 2.0 |
+| Resolución (lado menor) | < 600 px (< 200 px = irreconocible, se rechaza) | ≥ 1024 px (`IMAGE_QUALITY_PUBLICABLE_MIN_LADO`) |
+| Proporción (lado mayor / menor) | > 2.0 (se corrige: lienzo estándar con fondo extendido) | ≤ 2.0 |
 | Brillo medio (0–255) | < 35 (muy oscura) o > 235 (quemada) | 70–225 |
 | Contraste (desv. estándar) | < 15 (lavada) | ≥ 28 |
 | Nitidez (varianza del laplaciano) | < 25 (borrosa/movida) | ≥ 45 |
