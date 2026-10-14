@@ -10,7 +10,7 @@ const { impactoDePedidos, FACTOR_CO2_DEFECTO, FUENTE_FACTORES } = require('../se
 const { negocioDisponiblePublico, filtrarVisiblesParaCliente } = require('../services/publicaciones');
 const { MENSAJE_FOTO_NEGOCIO, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
-const { esMesValido, urlFirmadaComprobante } = require('../services/liquidaciones');
+const { esMesValido, urlFirmadaComprobante, consolidarPagosPorMes } = require('../services/liquidaciones');
 const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
@@ -395,13 +395,15 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
   }
   const totalARecibir = ventas.reduce((s, p) => s + (p.monto_neto_restaurante || 0), 0);
 
-  // Liquidaciones históricas
+  // Liquidaciones históricas. Límite holgado: el historial de pagos se
+  // consolida por mes (pagos_mensuales) y debe cubrir meses antiguos para el
+  // buscador por mes, aunque haya liquidaciones heredadas no mensuales.
   const { data: liquidaciones } = await supabase
     .from('liquidaciones')
     .select('*')
     .eq('negocio_id', negocio.id)
     .order('created_at', { ascending: false })
-    .limit(20);
+    .limit(500);
 
   // Separación por tipo: Tiempo Limitado (comisión 25% → 75% para el
   // restaurante) y Promoción (20% → 80%), desde el snapshot de cada pedido.
@@ -441,7 +443,9 @@ router.get('/mi-negocio/ganancias', authMiddleware, async (req, res) => {
       total_a_recibir: parseFloat(totalARecibir.toFixed(2)), // 75% + propina — lo que realmente se le paga
       pedidos_sin_desglose: ventasSinDesglose.length, // pedidos excluidos de total_a_recibir por falta de dato — debería ser 0
     },
-    liquidaciones: liquidaciones || [],
+    liquidaciones: (liquidaciones || []).slice(0, 20),
+    // Historial de pagos: un registro por mes con estado y referencia(s).
+    pagos_mensuales: consolidarPagosPorMes(liquidaciones || []),
   });
 });
 

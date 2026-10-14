@@ -333,16 +333,77 @@ function resumirAcumuladoMes({ pedidos = [], mes }) {
       r.neto_en_curso += m.neto;
     }
   }
+  // comisionTotalBocara = comisión de productos (25% / 20%) + tarifa de
+  // servicio cobrada al cliente (3.5%): todo lo que Bocara genera con el
+  // comercio. La tarifa de servicio no se descuenta del saldo neto.
   const negocios = [...porNegocio.values()].map((r) => {
     for (const k of ['bruto', 'comisionBocara', 'cargoPlataforma', 'propinas', 'envios', 'neto', 'neto_en_curso']) {
       r[k] = redondearMoneda(r[k]);
     }
+    r.comisionTotalBocara = redondearMoneda(r.comisionBocara + r.cargoPlataforma);
     return r;
   }).sort((a, b) => b.bruto - a.bruto);
-  const totales = { pedidos: 0, bruto: 0, comisionBocara: 0, neto: 0 };
+  const totales = { pedidos: 0, bruto: 0, comisionBocara: 0, cargoPlataforma: 0, comisionTotalBocara: 0, neto: 0 };
   for (const r of negocios) for (const k of Object.keys(totales)) totales[k] += r[k];
-  for (const k of ['bruto', 'comisionBocara', 'neto']) totales[k] = redondearMoneda(totales[k]);
+  for (const k of ['bruto', 'comisionBocara', 'cargoPlataforma', 'comisionTotalBocara', 'neto']) totales[k] = redondearMoneda(totales[k]);
   return { mes, negocios, totales };
+}
+
+// ── Historial de pagos del restaurante: un pago por mes ─────────────────────
+
+const ESTADOS_PAGADOS = new Set(['pagado', 'liquidado']);
+
+// Mes al que corresponde una liquidación: la columna `mes` (liquidaciones
+// mensuales) o, en las heredadas sin ella, el inicio de su periodo o la fecha
+// en que se generó — siempre en hora de Guatemala.
+function mesDeLiquidacion(liq = {}) {
+  if (esMesValido(liq.mes)) return liq.mes;
+  return mesDeInstante(liq.periodo_inicio || liq.created_at);
+}
+
+// Consolida las liquidaciones de un negocio en UN registro por mes, para la
+// pantalla /restaurante/ganancias ("¿me pagaron tal mes? ¿con qué referencia?").
+// Las anuladas no cuentan. Estado del mes: 'pagado' si todas sus liquidaciones
+// están pagadas, 'pendiente' si ninguna, 'parcial' si hay de ambas.
+// Ordenado del mes más reciente al más antiguo.
+function consolidarPagosPorMes(liquidaciones = []) {
+  const porMes = new Map();
+  for (const liq of liquidaciones) {
+    if (!liq || liq.estado === 'anulado') continue;
+    const mes = mesDeLiquidacion(liq);
+    if (!mes) continue;
+    if (!porMes.has(mes)) {
+      porMes.set(mes, {
+        mes, monto: 0, monto_pagado: 0, monto_pendiente: 0, total_pedidos: 0,
+        liquidaciones: 0, pagadas: 0, pagado_en: null, referencias: [], folios: [],
+      });
+    }
+    const r = porMes.get(mes);
+    const monto = aNumero(liq.monto);
+    const pagada = ESTADOS_PAGADOS.has(liq.estado);
+    r.monto += monto;
+    r.liquidaciones += 1;
+    r.total_pedidos += aNumero(liq.total_pedidos);
+    if (pagada) {
+      r.pagadas += 1;
+      r.monto_pagado += monto;
+      if (liq.pagado_en && (!r.pagado_en || liq.pagado_en > r.pagado_en)) r.pagado_en = liq.pagado_en;
+    } else {
+      r.monto_pendiente += monto;
+    }
+    const referencia = String(liq.datos_transferencia?.referencia || '').trim();
+    if (referencia && !r.referencias.includes(referencia)) r.referencias.push(referencia);
+    if (liq.folio && !r.folios.includes(liq.folio)) r.folios.push(liq.folio);
+  }
+  return [...porMes.values()]
+    .map((r) => ({
+      ...r,
+      monto: redondearMoneda(r.monto),
+      monto_pagado: redondearMoneda(r.monto_pagado),
+      monto_pendiente: redondearMoneda(r.monto_pendiente),
+      estado: r.pagadas === r.liquidaciones ? 'pagado' : r.pagadas === 0 ? 'pendiente' : 'parcial',
+    }))
+    .sort((a, b) => (a.mes < b.mes ? 1 : a.mes > b.mes ? -1 : 0));
 }
 
 // ── Acceso a datos ───────────────────────────────────────────────────────────
@@ -620,6 +681,8 @@ module.exports = {
   montosPedido,
   resumirPendientes,
   resumirAcumuladoMes,
+  mesDeLiquidacion,
+  consolidarPagosPorMes,
   cargarPedidosPendientes,
   cargarPedidosMesEnCurso,
   cargarLiquidacionesVivas,
