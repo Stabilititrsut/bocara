@@ -226,3 +226,47 @@ test('PATCH /admin/resenas/:id/moderar: oculta con motivo y deja rastro de audit
   assert.equal(visible.body.visible, true);
   assert.equal((await pedir('GET', `/api/resenas/${IDS.olaAzul}`)).body.length, 1);
 });
+
+// ── Promedio de reseñas por negocio y mes (/admin/negocios) ──────────────────
+
+test('resumirCalificacionesPorNegocio: promedio a 1 decimal, solo visibles y calificaciones válidas', () => {
+  const r = R.resumirCalificacionesPorNegocio([
+    { negocio_id: 'a', calificacion: 5, visible: true },
+    { negocio_id: 'a', calificacion: 4, visible: true },
+    { negocio_id: 'a', calificacion: 4 },
+    { negocio_id: 'a', calificacion: 1, visible: false },
+    { negocio_id: 'b', calificacion: 3, visible: true },
+    { negocio_id: 'b', calificacion: 9, visible: true },
+    { negocio_id: null, calificacion: 5 },
+  ]);
+  assert.deepEqual(r, { a: { promedio: 4.3, total: 3 }, b: { promedio: 3, total: 1 } });
+  assert.deepEqual(R.resumirCalificacionesPorNegocio([]), {});
+});
+
+test('GET /admin/resenas/resumen: filtra por mes (hora de Guatemala) y excluye ocultas', async () => {
+  // 30/09 23:30 Guatemala = 01/10 05:30 UTC → septiembre
+  sembrarResena({ calificacion: 2, created_at: '2026-10-01T05:30:00Z' });
+  sembrarResena({ calificacion: 5, created_at: '2026-10-03T18:00:00Z' });
+  sembrarResena({ calificacion: 4, created_at: '2026-10-04T18:00:00Z' });
+  sembrarResena({ calificacion: 1, created_at: '2026-10-05T18:00:00Z', visible: false });
+  sembrarResena({ negocio_id: IDS.otroNegocio, calificacion: 3, created_at: '2026-09-10T18:00:00Z' });
+
+  const oct = await pedir('GET', '/api/admin/resenas/resumen?mes=2026-10', { como: IDS.admin });
+  assert.equal(oct.status, 200);
+  assert.equal(oct.body.mes, '2026-10');
+  assert.deepEqual(oct.body.negocios, { [IDS.olaAzul]: { promedio: 4.5, total: 2 } });
+
+  const sep = await pedir('GET', '/api/admin/resenas/resumen?mes=2026-09', { como: IDS.admin });
+  assert.deepEqual(sep.body.negocios, {
+    [IDS.olaAzul]: { promedio: 2, total: 1 },
+    [IDS.otroNegocio]: { promedio: 3, total: 1 },
+  });
+
+  const todo = await pedir('GET', '/api/admin/resenas/resumen', { como: IDS.admin });
+  assert.equal(todo.body.mes, null);
+  assert.deepEqual(todo.body.negocios[IDS.olaAzul], { promedio: 3.7, total: 3 });
+
+  assert.equal((await pedir('GET', '/api/admin/resenas/resumen?mes=2026-13', { como: IDS.admin })).status, 400);
+  assert.equal((await pedir('GET', '/api/admin/resenas/resumen?mes=2999-01', { como: IDS.admin })).status, 400);
+  assert.equal((await pedir('GET', '/api/admin/resenas/resumen', { como: IDS.restaurante })).status, 403);
+});

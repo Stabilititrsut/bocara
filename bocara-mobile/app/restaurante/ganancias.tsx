@@ -23,6 +23,25 @@ const PERIODOS: { key: Periodo; label: string }[] = [
 const COMISION_TL_DEFECTO = 25;
 const COMISION_PROMO_DEFECTO = 20;
 
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function nombreMes(mes: string): string {
+  const [a, m] = mes.split('-').map(Number);
+  return MESES[m - 1] ? `${MESES[m - 1].charAt(0).toUpperCase()}${MESES[m - 1].slice(1)} ${a}` : mes;
+}
+
+// Un pago por mes (backend: services/liquidaciones.js#consolidarPagosPorMes).
+type PagoMensual = {
+  mes: string; estado: 'pagado' | 'pendiente' | 'parcial';
+  monto: number; monto_pagado: number; monto_pendiente: number;
+  total_pedidos: number; pagado_en: string | null; referencias: string[];
+};
+
+const ESTADO_PAGO: Record<PagoMensual['estado'], { texto: string; fondo: string; borde: string; color: string }> = {
+  pagado:    { texto: '✅ Pagado',           fondo: '#D1FAE5', borde: '#34D39940', color: '#065F46' },
+  pendiente: { texto: '⏳ Pendiente',        fondo: '#FEF3C7', borde: '#F59E0B40', color: '#92400E' },
+  parcial:   { texto: '◐ Pagado en parte',  fondo: '#E0F2FE', borde: '#38BDF840', color: '#075985' },
+};
+
 export default function GananciasScreen() {
   const mesActual = hoyGuatemala().slice(0, 7);
   const [periodo, setPeriodo] = useState<Periodo>('mes');
@@ -30,6 +49,8 @@ export default function GananciasScreen() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Buscador del historial de pagos: '' = todos los meses.
+  const [mesBuscado, setMesBuscado] = useState('');
 
   const cargar = useCallback(async () => {
     try {
@@ -50,7 +71,8 @@ export default function GananciasScreen() {
   );
 
   const resumen = data?.resumen || {};
-  const liquidaciones = data?.liquidaciones || [];
+  const pagosMensuales: PagoMensual[] = data?.pagos_mensuales || [];
+  const pagosVisibles = mesBuscado ? pagosMensuales.filter((p) => p.mes === mesBuscado) : pagosMensuales;
   const banco = data?.negocio?.datos_bancarios;
   // Desglose por tipo (Tiempo Limitado / Promoción) del backend. Con un backend
   // anterior sin `desglose_tipos`, todo cae en Tiempo Limitado.
@@ -190,38 +212,71 @@ export default function GananciasScreen() {
           </View>
         )}
 
-        {/* Historial de liquidaciones */}
+        {/* Historial de pagos: un pago por mes, con buscador por mes */}
         <Text style={s.sectionTitle}>Historial de pagos</Text>
-        {liquidaciones.length === 0 ? (
+        <View style={s.buscadorPagos}>
+          <View style={{ flex: 1 }}>
+            <CalendarioPicker
+              label="Buscar mes"
+              modo="mes"
+              value={mesBuscado}
+              onChange={setMesBuscado}
+              maxDate={mesActual}
+              placeholder="Todos los meses"
+            />
+          </View>
+          {!!mesBuscado && (
+            <TouchableOpacity onPress={() => setMesBuscado('')} style={s.verTodosBtn} accessibilityRole="button">
+              <Text style={s.verTodosText}>Ver todos</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        {pagosVisibles.length === 0 ? (
           <View style={s.emptyLiq}>
-            <Text style={s.emptyLiqText}>Aún no tienes pagos registrados.</Text>
+            <Text style={s.emptyLiqText}>
+              {mesBuscado
+                ? `${nombreMes(mesBuscado)} aún no tiene un pago registrado.`
+                : 'Aún no tienes pagos registrados.'}
+            </Text>
+            {!!mesBuscado && (
+              <Text style={s.emptyLiqHint}>
+                Cada mes se liquida durante los primeros 5 días hábiles del mes siguiente.
+              </Text>
+            )}
           </View>
         ) : (
-          liquidaciones.map((liq: any) => (
-            <View key={liq.id} style={s.liqCard}>
-              <View style={s.liqHeader}>
-                <View style={[s.liqEstado, liq.estado === 'pagado' && s.liqEstadoPagado]}>
-                  <Text style={[s.liqEstadoText, liq.estado === 'pagado' && s.liqEstadoTextPagado]}>
-                    {liq.estado === 'pagado' ? '✅ Pagado' : '⏳ Pendiente'}
+          pagosVisibles.map((pago) => {
+            const est = ESTADO_PAGO[pago.estado] || ESTADO_PAGO.pendiente;
+            return (
+              <View key={pago.mes} style={s.liqCard}>
+                <View style={s.liqHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.liqMes}>{nombreMes(pago.mes)}</Text>
+                    <View style={[s.liqEstado, { backgroundColor: est.fondo, borderColor: est.borde }]}>
+                      <Text style={[s.liqEstadoText, { color: est.color }]}>{est.texto}</Text>
+                    </View>
+                  </View>
+                  <Text style={s.liqMonto}>Q{(pago.monto || 0).toFixed(2)}</Text>
+                </View>
+                <View style={s.liqDetails}>
+                  <Text style={s.liqDetail}>{pago.total_pedidos || 0} pedidos</Text>
+                  <Text style={s.liqDetail}>
+                    {pago.pagado_en ? `Pagado: ${new Date(pago.pagado_en).toLocaleDateString('es-GT')}` : 'Sin pagar aún'}
                   </Text>
                 </View>
-                <Text style={s.liqMonto}>Q{(liq.monto || 0).toFixed(2)}</Text>
+                {pago.estado === 'parcial' && (
+                  <Text style={s.liqDetail}>
+                    Pagado Q{pago.monto_pagado.toFixed(2)} · pendiente Q{pago.monto_pendiente.toFixed(2)}
+                  </Text>
+                )}
+                {pago.referencias.length > 0 && (
+                  <Text style={s.liqRef} selectable>
+                    Referencia{pago.referencias.length > 1 ? 's' : ''}: {pago.referencias.join(', ')}
+                  </Text>
+                )}
               </View>
-              <View style={s.liqDetails}>
-                <Text style={s.liqDetail}>{liq.total_pedidos || '—'} pedidos</Text>
-                <Text style={s.liqDetail}>
-                  {liq.pagado_en
-                    ? `Pagado: ${new Date(liq.pagado_en).toLocaleDateString('es-GT')}`
-                    : liq.created_at
-                      ? new Date(liq.created_at).toLocaleDateString('es-GT')
-                      : '—'}
-                </Text>
-              </View>
-              {liq.datos_transferencia?.referencia && (
-                <Text style={s.liqRef}>Ref: {liq.datos_transferencia.referencia}</Text>
-              )}
-            </View>
-          ))
+            );
+          })
         )}
 
         <View style={{ height: 24 }} />
@@ -273,11 +328,14 @@ const s = StyleSheet.create({
   emptyLiqText: { fontSize: 13, color: Colors.textSecondary },
   liqCard: { backgroundColor: Colors.white, borderRadius: 14, padding: 14, marginBottom: 10, borderWidth: 1.5, borderColor: Colors.border },
   liqHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  liqEstado: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#FEF3C7', borderWidth: 1, borderColor: '#F59E0B40' },
-  liqEstadoPagado: { backgroundColor: '#D1FAE5', borderColor: '#34D39940' },
-  liqEstadoText: { fontSize: 12, fontWeight: '800', color: '#92400E' },
-  liqEstadoTextPagado: { color: '#065F46' },
+  liqEstado: { alignSelf: 'flex-start', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1 },
+  liqEstadoText: { fontSize: 12, fontWeight: '800' },
   liqMonto: { fontSize: 18, fontWeight: '900', color: Colors.brown },
+  liqMes: { fontSize: 15, fontWeight: '800', color: Colors.brown, marginBottom: 6 },
+  buscadorPagos: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginBottom: 12 },
+  verTodosBtn: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.white },
+  verTodosText: { fontSize: 12, fontWeight: '700', color: Colors.orange },
+  emptyLiqHint: { fontSize: 11, color: Colors.textLight, marginTop: 6, textAlign: 'center' },
   liqDetails: { flexDirection: 'row', justifyContent: 'space-between' },
   liqDetail: { fontSize: 12, color: Colors.textSecondary },
   liqRef: { fontSize: 11, color: Colors.textLight, marginTop: 4 },

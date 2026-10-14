@@ -9,40 +9,65 @@ import { Colors } from '@/constants/Colors';
 import CalendarioPicker from '@/components/CalendarioPicker';
 import { hoyGuatemala } from '@/src/utils/horarioRecogida';
 
-// Monto neto del restaurante — se lee tal cual quedó guardado al confirmar el
-// pago, nunca recalculado en el frontend a partir de porcentajes.
-function netoDe(p: any): number {
-  return p.monto_neto_restaurante || 0;
+// Historial OPERATIVO de pedidos: código, producto, fecha/hora y estado.
+// Sin montos — ingresos, comisiones y pagos viven solo en /restaurante/ganancias,
+// así las dos pantallas no pueden mostrar cifras que no cuadren entre sí.
+
+// Guatemala no usa horario de verano: UTC−6 todo el año.
+const OFFSET_GUATEMALA_MS = 6 * 60 * 60 * 1000;
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+// { dia: 'YYYY-MM-DD', hora: 'HH:MM' } en hora de Guatemala, o null.
+function instanteGuatemala(iso?: string | null): { dia: string; hora: string } | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const local = new Date(t - OFFSET_GUATEMALA_MS).toISOString();
+  return { dia: local.slice(0, 10), hora: local.slice(11, 16) };
 }
 
-type PedidoGrupo = {
-  fecha: string;
-  pedidos: any[];
-  bruto: number;
-  comision: number;
-  propinas: number;
-  neto: number;
+function etiquetaDia(dia: string): string {
+  const [a, m, d] = dia.split('-').map(Number);
+  return `${d} de ${MESES[m - 1] || ''} de ${a}`;
+}
+
+const ESTADO_LABELS: Record<string, string> = {
+  pendiente: 'Pendiente', pagado: 'Pagado', confirmado: 'Confirmado', en_preparacion: 'En preparación',
+  listo: 'Listo para recoger', completado: 'Recogido', recogido: 'Recogido', cancelado: 'Cancelado',
+};
+const ESTADO_COLORS: Record<string, string> = {
+  pendiente: '#9CA3AF', pagado: '#E8820C', confirmado: '#E8820C', en_preparacion: '#7C3AED',
+  listo: '#16A34A', completado: '#4B5563', recogido: '#4B5563', cancelado: '#DC2626',
 };
 
-// Todo se suma desde el snapshot financiero guardado en cada pedido (precio_bolsa,
-// comision_bocara, monto_neto_restaurante, propina) — nunca recalculado sobre
-// `total` (que incluye el cargo de plataforma y la propina, no solo el producto).
-function agruparPorFecha(pedidos: any[]): PedidoGrupo[] {
-  const map: Record<string, any[]> = {};
+// Nombre del producto: la bolsa principal, más cuántos productos adicionales
+// trae el pedido (pedidos con varios items en snapshot_financiero.lineas).
+function productoDe(p: any): string {
+  const nombre = p.bolsas?.nombre || 'Producto';
+  const lineas = Array.isArray(p.snapshot_financiero?.lineas) ? p.snapshot_financiero.lineas : [];
+  const unidades = lineas.length > 0
+    ? lineas.reduce((s: number, l: any) => s + (Number(l.cantidad) || 0), 0)
+    : Math.max(1, Number(p.cantidad) || 1);
+  const extra = lineas.length > 1 ? ` + ${lineas.length - 1} producto${lineas.length - 1 !== 1 ? 's' : ''} más` : '';
+  return `${nombre}${extra}${unidades > 1 ? ` · ${unidades} unid.` : ''}`;
+}
+
+type Grupo = { dia: string; pedidos: any[] };
+
+// Agrupa por día (hora de Guatemala), del más reciente al más antiguo.
+function agruparPorDia(pedidos: any[]): Grupo[] {
+  const map = new Map<string, any[]>();
   for (const p of pedidos) {
-    const raw = p.created_at || p.creado_en || '';
-    const fecha = raw ? new Date(raw).toLocaleDateString('es-GT', { year: 'numeric', month: 'long', day: 'numeric' }) : 'Sin fecha';
-    if (!map[fecha]) map[fecha] = [];
-    map[fecha].push(p);
+    const dia = instanteGuatemala(p.created_at || p.creado_en)?.dia || 'sin-fecha';
+    if (!map.has(dia)) map.set(dia, []);
+    map.get(dia)!.push(p);
   }
-  return Object.entries(map).map(([fecha, items]) => ({
-    fecha,
-    pedidos: items,
-    bruto:    items.reduce((s, p) => s + (p.precio_bolsa   || 0), 0),
-    comision: items.reduce((s, p) => s + (p.comision_bocara || 0), 0),
-    propinas: items.reduce((s, p) => s + (p.propina || 0), 0),
-    neto:     items.reduce((s, p) => s + netoDe(p), 0),
-  }));
+  return Array.from(map.entries())
+    .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
+    .map(([dia, items]) => ({
+      dia,
+      pedidos: items.sort((x, y) => String(y.created_at || '').localeCompare(String(x.created_at || ''))),
+    }));
 }
 
 // 'mes' consulta al backend un mes calendario completo (hora de Guatemala,
@@ -53,15 +78,12 @@ const ETIQUETA_PERIODO: Record<Periodo, string> = {
   '7d': 'Últimos 7 días', '30d': 'Últimos 30 días', mes: 'Por mes', todo: 'Todo',
 };
 
-const esEntregado = (p: any) => p.estado === 'completado' || p.estado === 'recogido';
-
 export default function HistorialRestauranteScreen() {
   const router = useRouter();
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [periodo, setPeriodo] = useState<Periodo>('7d');
-  const [expandido, setExpandido] = useState<string | null>(null);
   const mesActual = hoyGuatemala().slice(0, 7);
   const [mes, setMes] = useState(mesActual);
   const [cargandoMes, setCargandoMes] = useState(false);
@@ -74,8 +96,7 @@ export default function HistorialRestauranteScreen() {
       const res = await pedidosAPI.restaurante(porMes ? { mes } : undefined);
       if (id !== consulta.current) return; // llegó un cambio de mes/periodo más nuevo
       // Con ?mes= el backend responde { mes, pedidos }; sin él, la lista directa.
-      const lista = porMes ? (res.data?.pedidos || []) : (res.data || []);
-      setPedidos(lista.filter(esEntregado));
+      setPedidos(porMes ? (res.data?.pedidos || []) : (res.data || []));
     } catch { } finally {
       if (id === consulta.current) { setLoading(false); setRefreshing(false); setCargandoMes(false); }
     }
@@ -87,24 +108,11 @@ export default function HistorialRestauranteScreen() {
     if (periodo === 'todo' || periodo === 'mes') return todos;
     const dias = periodo === '7d' ? 7 : 30;
     const corte = Date.now() - dias * 24 * 60 * 60 * 1000;
-    return todos.filter((p: any) => {
-      const t = new Date(p.created_at || p.creado_en || 0).getTime();
-      return t >= corte;
-    });
+    return todos.filter((p: any) => new Date(p.created_at || p.creado_en || 0).getTime() >= corte);
   }
 
   const filtrados = filtrarPorPeriodo(pedidos);
-  const grupos = agruparPorFecha(filtrados);
-
-  const totalBruto    = filtrados.reduce((s, p) => s + (p.precio_bolsa   || 0), 0);
-  const totalComision = filtrados.reduce((s, p) => s + (p.comision_bocara || 0), 0);
-  const totalPropinas = filtrados.reduce((s, p) => s + (p.propina || 0), 0);
-  const totalNeto     = filtrados.reduce((s, p) => s + netoDe(p), 0);
-  // % real de comisión del período filtrado, derivado de los montos que ya
-  // trae cada pedido (snapshot financiero de backend, nunca recalculado con el
-  // % configurado actual). No asumir 25%: un período puede mezclar pedidos de
-  // antes/después de un cambio de configuración del admin.
-  const pctComision = totalBruto > 0 ? Math.round((totalComision / totalBruto) * 100) : null;
+  const grupos = agruparPorDia(filtrados);
 
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} size="large" /></View>;
 
@@ -121,7 +129,8 @@ export default function HistorialRestauranteScreen() {
         >
           <Text style={s.volverText}>‹ Volver a Pedidos</Text>
         </TouchableOpacity>
-        <Text style={s.headerTitle}>💰 Historial</Text>
+        <Text style={s.headerTitle}>📋 Historial de pedidos</Text>
+        <Text style={s.headerSub}>Tus ingresos y pagos están en Ganancias.</Text>
       </View>
 
       {/* Filtros de período */}
@@ -153,106 +162,43 @@ export default function HistorialRestauranteScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
       >
         {cargandoMes && <ActivityIndicator color={Colors.orange} style={{ marginBottom: 12 }} />}
-        {/* Resumen total */}
-        <View style={s.resumenCard}>
-          <Text style={s.resumenTitle}>Resumen del período</Text>
-          <View style={s.resumenGrid}>
-            <View style={s.resumenItem}>
-              <Text style={s.resumenEmoji}>📦</Text>
-              <Text style={s.resumenVal}>{filtrados.length}</Text>
-              <Text style={s.resumenLabel}>Pedidos entregados</Text>
-            </View>
-            <View style={s.resumenItem}>
-              <Text style={s.resumenEmoji}>💵</Text>
-              <Text style={[s.resumenVal, { color: Colors.textSecondary }]}>Q{totalBruto.toFixed(2)}</Text>
-              <Text style={s.resumenLabel}>Ventas brutas</Text>
-            </View>
-            <View style={s.resumenItem}>
-              <Text style={s.resumenEmoji}>🤝</Text>
-              <Text style={[s.resumenVal, { color: Colors.error }]}>-Q{totalComision.toFixed(2)}</Text>
-              <Text style={s.resumenLabel}>Comisión Bocara{pctComision !== null ? ` (${pctComision}%)` : ''}</Text>
-            </View>
-            {totalPropinas > 0 && (
-              <View style={s.resumenItem}>
-                <Text style={s.resumenEmoji}>💸</Text>
-                <Text style={[s.resumenVal, { color: Colors.green }]}>+Q{totalPropinas.toFixed(2)}</Text>
-                <Text style={s.resumenLabel}>Propinas (100%)</Text>
-              </View>
-            )}
-            <View style={[s.resumenItem, s.resumenItemNeto]}>
-              <Text style={s.resumenEmoji}>✅</Text>
-              <Text style={[s.resumenVal, { color: Colors.green, fontSize: 22 }]}>Q{totalNeto.toFixed(2)}</Text>
-              <Text style={s.resumenLabel}>{`Tu ganancia (${pctComision !== null ? `${100 - pctComision}% + ` : ''}propina)`}</Text>
-            </View>
-          </View>
-        </View>
+
+        {filtrados.length > 0 && (
+          <Text style={s.conteo}>{filtrados.length} pedido{filtrados.length !== 1 ? 's' : ''} en el período</Text>
+        )}
 
         {filtrados.length === 0 && (
           <View style={s.empty}>
-            <Text style={{ fontSize: 48 }}>📊</Text>
-            <Text style={s.emptyText}>No hay ventas completadas en este período</Text>
+            <Text style={{ fontSize: 48 }}>📋</Text>
+            <Text style={s.emptyText}>No hay pedidos en este período</Text>
           </View>
         )}
 
-        {/* Grupos por día */}
         {grupos.map((g) => (
-          <View key={g.fecha} style={s.grupoCard}>
-            <TouchableOpacity style={s.grupoHeader} onPress={() => setExpandido(expandido === g.fecha ? null : g.fecha)}>
-              <View style={{ flex: 1 }}>
-                <Text style={s.grupoFecha}>{g.fecha}</Text>
-                <Text style={s.grupoCount}>{g.pedidos.length} pedido{g.pedidos.length !== 1 ? 's' : ''}</Text>
-              </View>
-              <View style={s.grupoTotales}>
-                <Text style={s.grupoNeto}>Q{g.neto.toFixed(2)}</Text>
-                <Text style={s.grupoComision}>-Q{g.comision.toFixed(2)} comisión</Text>
-              </View>
-              <Text style={s.chevron}>{expandido === g.fecha ? '▲' : '▼'}</Text>
-            </TouchableOpacity>
-
-            {expandido === g.fecha && (
-              <View style={s.pedidosLista}>
-                {g.pedidos.map((p: any, i: number) => (
-                  <View key={p.id} style={[s.pedidoRow, i < g.pedidos.length - 1 && s.pedidoRowBorder]}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.pedidoCodigo}>{p.codigo_recogida}</Text>
-                      <Text style={s.pedidoBolsa}>{p.bolsas?.nombre || '—'}</Text>
+          <View key={g.dia} style={s.grupoCard}>
+            <View style={s.grupoHeader}>
+              <Text style={s.grupoFecha}>{g.dia === 'sin-fecha' ? 'Sin fecha' : etiquetaDia(g.dia)}</Text>
+              <Text style={s.grupoCount}>{g.pedidos.length} pedido{g.pedidos.length !== 1 ? 's' : ''}</Text>
+            </View>
+            {g.pedidos.map((p: any, i: number) => {
+              const color = ESTADO_COLORS[p.estado] || '#6B7280';
+              return (
+                <View key={p.id} style={[s.pedidoRow, i < g.pedidos.length - 1 && s.pedidoRowBorder]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={s.pedidoCodigo}>{p.codigo_recogida || '—'}</Text>
+                    <Text style={s.pedidoProducto} numberOfLines={2}>{productoDe(p)}</Text>
+                  </View>
+                  <View style={s.pedidoDerecha}>
+                    <Text style={s.pedidoHora}>{instanteGuatemala(p.created_at || p.creado_en)?.hora || '—'}</Text>
+                    <View style={[s.estadoBadge, { backgroundColor: `${color}1A`, borderColor: `${color}55` }]}>
+                      <Text style={[s.estadoText, { color }]}>{ESTADO_LABELS[p.estado] || p.estado || '—'}</Text>
                     </View>
-                    <View style={s.pedidoMontos}>
-                      <Text style={s.pedidoBruto}>Q{(p.total || 0).toFixed(2)}</Text>
-                      <Text style={s.pedidoNeto}>→ Q{netoDe(p).toFixed(2)}</Text>
-                    </View>
-                  </View>
-                ))}
-
-                {/* Subtotal del día */}
-                <View style={s.subtotalRow}>
-                  <View style={s.subtotalItem}>
-                    <Text style={s.subtotalLabel}>Bruto</Text>
-                    <Text style={s.subtotalVal}>Q{g.bruto.toFixed(2)}</Text>
-                  </View>
-                  <View style={s.subtotalItem}>
-                    <Text style={s.subtotalLabel}>Comisión</Text>
-                    <Text style={[s.subtotalVal, { color: Colors.error }]}>-Q{g.comision.toFixed(2)}</Text>
-                  </View>
-                  <View style={s.subtotalItem}>
-                    <Text style={s.subtotalLabel}>Tu ganancia</Text>
-                    <Text style={[s.subtotalVal, { color: Colors.green }]}>Q{g.neto.toFixed(2)}</Text>
                   </View>
                 </View>
-              </View>
-            )}
+              );
+            })}
           </View>
         ))}
-
-        {/* Nota comisión */}
-        {filtrados.length > 0 && (
-          <View style={s.notaCard}>
-            <Text style={s.notaTitle}>ℹ️ Sobre la comisión Bocara</Text>
-            <Text style={s.notaText}>
-              Bocara retiene la comisión correspondiente por tipo de producto (25% en Tiempo Limitado y 20% en Promoción) por el servicio de plataforma, visibilidad y gestión de pagos. El resto es tuyo.
-            </Text>
-          </View>
-        )}
 
         <View style={{ height: 32 }} />
       </ScrollView>
@@ -265,6 +211,7 @@ const s = StyleSheet.create({
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   headerTitle: { fontSize: 22, fontWeight: '900', color: Colors.brown },
+  headerSub: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
   volverBtn: { alignSelf: 'flex-start', marginBottom: 6 },
   volverText: { fontSize: 14, fontWeight: '700', color: Colors.orange },
   periodos: { flexDirection: 'row', padding: 12, gap: 8, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
@@ -274,37 +221,19 @@ const s = StyleSheet.create({
   periodoText: { fontSize: 12, fontWeight: '600', color: Colors.textSecondary },
   periodoTextActive: { color: Colors.white, fontWeight: '800' },
   scroll: { padding: 14 },
-  resumenCard: { backgroundColor: Colors.brown, borderRadius: 20, padding: 20, marginBottom: 16 },
-  resumenTitle: { fontSize: 16, fontWeight: '800', color: Colors.white, marginBottom: 16 },
-  resumenGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  resumenItem: { flex: 1, minWidth: '45%', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, padding: 12, alignItems: 'center', gap: 4 },
-  resumenItemNeto: { backgroundColor: 'rgba(91,165,32,0.25)', borderWidth: 1.5, borderColor: Colors.green },
-  resumenEmoji: { fontSize: 24 },
-  resumenVal: { fontSize: 18, fontWeight: '900', color: Colors.white },
-  resumenLabel: { fontSize: 11, color: 'rgba(255,255,255,0.7)', textAlign: 'center' },
+  conteo: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600', marginBottom: 10 },
   empty: { alignItems: 'center', paddingVertical: 60, gap: 12 },
   emptyText: { fontSize: 15, color: Colors.textSecondary, textAlign: 'center' },
   grupoCard: { backgroundColor: Colors.white, borderRadius: 16, marginBottom: 10, elevation: 2, overflow: 'hidden' },
-  grupoHeader: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 8 },
-  grupoFecha: { fontSize: 15, fontWeight: '800', color: Colors.brown },
-  grupoCount: { fontSize: 12, color: Colors.textSecondary, marginTop: 2 },
-  grupoTotales: { alignItems: 'flex-end' },
-  grupoNeto: { fontSize: 18, fontWeight: '900', color: Colors.green },
-  grupoComision: { fontSize: 11, color: Colors.error, marginTop: 2 },
-  chevron: { fontSize: 12, color: Colors.textLight, marginLeft: 4 },
-  pedidosLista: { borderTopWidth: 1, borderTopColor: Colors.border },
-  pedidoRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10 },
+  grupoHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 12, backgroundColor: Colors.brownLight },
+  grupoFecha: { fontSize: 14, fontWeight: '800', color: Colors.brown },
+  grupoCount: { fontSize: 12, color: Colors.textSecondary },
+  pedidoRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, gap: 10 },
   pedidoRowBorder: { borderBottomWidth: 1, borderBottomColor: Colors.border },
   pedidoCodigo: { fontSize: 14, fontWeight: '800', color: Colors.brown, letterSpacing: 1 },
-  pedidoBolsa: { fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
-  pedidoMontos: { alignItems: 'flex-end' },
-  pedidoBruto: { fontSize: 13, color: Colors.textSecondary, textDecorationLine: 'line-through' },
-  pedidoNeto: { fontSize: 14, fontWeight: '700', color: Colors.green },
-  subtotalRow: { flexDirection: 'row', backgroundColor: Colors.brownLight, padding: 12, gap: 4 },
-  subtotalItem: { flex: 1, alignItems: 'center' },
-  subtotalLabel: { fontSize: 10, color: Colors.textSecondary, fontWeight: '600', marginBottom: 2 },
-  subtotalVal: { fontSize: 14, fontWeight: '800', color: Colors.brown },
-  notaCard: { backgroundColor: Colors.orangeLight, borderRadius: 14, padding: 14, marginTop: 8 },
-  notaTitle: { fontSize: 13, fontWeight: '800', color: Colors.brown, marginBottom: 6 },
-  notaText: { fontSize: 12, color: Colors.brown, lineHeight: 18 },
+  pedidoProducto: { fontSize: 12, color: Colors.textSecondary, marginTop: 1 },
+  pedidoDerecha: { alignItems: 'flex-end', gap: 4 },
+  pedidoHora: { fontSize: 13, fontWeight: '700', color: Colors.brown, fontVariant: ['tabular-nums'] },
+  estadoBadge: { borderRadius: 10, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2 },
+  estadoText: { fontSize: 11, fontWeight: '700' },
 });

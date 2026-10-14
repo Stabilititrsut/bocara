@@ -392,60 +392,112 @@ test('Etiquetas cliente: detalle de producto usa "Promoción" (no "Cupón") y ag
   assert.ok(textOf(Component2()).includes('Tiempo limitado'), 'antes no había ninguna etiqueta de tipo para bolsas');
 });
 
-// ── Comisión no hardcodeada: derivada de datos, con fallback seguro ─────────
+// ── Ganancias: % de comisión desde datos + historial de pagos mensual ───────
 
-function renderGanancias(resumenOverrides = {}) {
+const nativeSimple = { View: 'View', Text: 'Text', ScrollView: 'ScrollView', TouchableOpacity: 'Button', SafeAreaView: 'Safe',
+  ActivityIndicator: 'Spinner', RefreshControl: 'RefreshControl', StyleSheet: { create: x => x } };
+
+// Estado forzado por posición: periodo, mes, data, loading, refreshing, mesBuscado.
+function montarGanancias(data, { mesBuscado = '' } = {}) {
   const h = hooks();
-  const data = { resumen: { total_pedidos: 4, ventas_brutas: 100, comision_bocara: 25, neto_restaurante: 75, total_a_recibir: 75, ...resumenOverrides } };
-  h.forcedStates.push('mes', data, false, false); // periodo, data, loading, refreshing
-  const native = { View: 'View', Text: 'Text', ScrollView: 'ScrollView', TouchableOpacity: 'Button', SafeAreaView: 'Safe',
-    ActivityIndicator: 'Spinner', RefreshControl: 'RefreshControl', StyleSheet: { create: x => x } };
+  h.forcedStates.push('mes', '2026-10', data, false, false, mesBuscado);
   const Component = load('app/restaurante/ganancias.tsx', {
-    react: h.react, 'react-native': native, '@/src/services/api': { negociosAPI: { ganancias: async () => ({ data }) } },
+    react: h.react, 'react-native': nativeSimple,
+    '@/src/services/api': { negociosAPI: { ganancias: async () => ({ data }) } },
     '@/constants/Colors': { Colors: {} },
+    '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
+    '@/src/utils/horarioRecogida': horarioReal,
   }).default;
-  return textOf(Component());
+  const render = () => { h.reset(); return Component(); };
+  return { render, texto: () => textOf(render()) };
 }
 
-test('ganancias.tsx: el % de comisión mostrado se deriva de comision_bocara/ventas_brutas, no de un 25% fijo', () => {
-  // 40% real (p.ej. un período con configuración de comisión distinta a la actual)
-  const texto = renderGanancias({ ventas_brutas: 100, comision_bocara: 40, neto_restaurante: 60 });
-  assert.ok(texto.includes('(40%)'), 'debe mostrar el % real derivado de los montos, no 25%');
+const dataGanancias = (overrides = {}) => ({
+  resumen: { total_pedidos: 4, ventas_brutas: 100, comision_bocara: 40, neto_restaurante: 60, total_a_recibir: 60 },
+  desglose_tipos: {
+    tiempo_limitado: { ventas: 100, comision_bocara: 40, ganancia: 60, unidades: 4, porcentaje_comision: 40 },
+    promocion: { ventas: 0, comision_bocara: 0, ganancia: 0, unidades: 0, porcentaje_comision: null },
+    propinas: 0, envios: 0, total_a_recibir: 60,
+  },
+  ...overrides,
+});
+
+test('ganancias.tsx: el % de comisión mostrado sale del backend (snapshot), no de un 25% fijo', () => {
+  const texto = montarGanancias(dataGanancias()).texto();
+  assert.ok(texto.includes('(40%)'), 'debe mostrar el % real cobrado, no 25%');
   assert.ok(texto.includes('(60%)'));
   assert.equal(texto.includes('(25%)'), false);
 });
 
-test('ganancias.tsx: sin ventas (ventas_brutas=0) no muestra un porcentaje inventado (nada de NaN%/Infinity%)', () => {
-  const texto = renderGanancias({ total_pedidos: 0, ventas_brutas: 0, comision_bocara: 0, neto_restaurante: 0, total_a_recibir: 0 });
+test('ganancias.tsx: sin ventas no muestra un porcentaje inventado (nada de NaN%/Infinity%)', () => {
+  const texto = montarGanancias({ resumen: { total_pedidos: 0, ventas_brutas: 0, comision_bocara: 0, neto_restaurante: 0, total_a_recibir: 0 } }).texto();
   assert.equal(texto.includes('NaN'), false);
   assert.equal(texto.includes('Infinity'), false);
 });
 
+const pagosMensuales = [
+  { mes: '2026-09', estado: 'pagado', monto: 120.5, monto_pagado: 120.5, monto_pendiente: 0, total_pedidos: 6, pagado_en: '2026-10-03T15:00:00Z', referencias: ['TRF-9'] },
+  { mes: '2026-08', estado: 'parcial', monto: 80, monto_pagado: 50, monto_pendiente: 30, total_pedidos: 3, pagado_en: '2026-09-04T15:00:00Z', referencias: ['TRF-8'] },
+];
+
+test('ganancias.tsx: el historial de pagos muestra UN pago por mes con estado y referencia', () => {
+  const texto = montarGanancias(dataGanancias({ pagos_mensuales: pagosMensuales })).texto();
+  assert.match(texto, /Septiembre 2026/);
+  assert.match(texto, /Agosto 2026/);
+  assert.match(texto, /Pagado/);
+  assert.match(texto, /Pagado en parte/);
+  assert.match(texto, /TRF-9/);
+  assert.match(texto, /Q\s*120\.50/);
+});
+
+test('ganancias.tsx: el buscador por mes filtra el historial y avisa si ese mes no tiene pago', () => {
+  const sep = montarGanancias(dataGanancias({ pagos_mensuales: pagosMensuales }), { mesBuscado: '2026-09' }).texto();
+  assert.match(sep, /TRF-9/);
+  assert.equal(sep.includes('TRF-8'), false, 'solo el mes buscado');
+  const jul = montarGanancias(dataGanancias({ pagos_mensuales: pagosMensuales }), { mesBuscado: '2026-07' }).texto();
+  assert.match(jul, /Julio 2026 aún no tiene un pago registrado/);
+});
+
+// ── Historial de pedidos: estrictamente operativo, sin montos ───────────────
+
 function renderHistorial(pedidos) {
   const h = hooks();
-  h.forcedStates.push(pedidos, false, false, '7d', null); // pedidos, loading, refreshing, periodo, expandido
-  const native = { View: 'View', Text: 'Text', ScrollView: 'ScrollView', TouchableOpacity: 'Button', SafeAreaView: 'Safe',
-    ActivityIndicator: 'Spinner', RefreshControl: 'RefreshControl', StyleSheet: { create: x => x } };
+  h.forcedStates.push(pedidos, false, false, 'todo'); // pedidos, loading, refreshing, periodo
   const Component = load('app/restaurante/historial.tsx', {
-    react: h.react, 'react-native': native, '@/src/services/api': { pedidosAPI: { restaurante: async () => ({ data: pedidos }) } },
+    react: h.react, 'react-native': nativeSimple,
+    'expo-router': { useRouter: () => ({ push() {}, replace() {}, back() {} }) },
+    '@/src/services/api': { pedidosAPI: { restaurante: async () => ({ data: pedidos }) } },
     '@/constants/Colors': { Colors: {} },
+    '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
+    '@/src/utils/horarioRecogida': horarioReal,
   }).default;
   return textOf(Component());
 }
 
-test('historial.tsx: el % de comisión del resumen y de la nota se derivan de los pedidos reales del período', () => {
-  const ahora = new Date().toISOString();
-  const pedidos = [
-    { id: '1', estado: 'completado', created_at: ahora, precio_bolsa: 100, comision_bocara: 30, monto_neto_restaurante: 70, propina: 0 },
-  ];
-  const texto = renderHistorial(pedidos);
-  assert.ok(texto.includes('(30%)'), 'resumen debe reflejar el 30% real de este pedido, no 25%');
-  assert.ok(texto.includes('70% + propina'), 'la ganancia del restaurante es el 70% restante, no el 75% fijo');
-  assert.ok(texto.includes('retuvo el 30%'));
+test('historial.tsx: lista código, producto, fecha/hora (Guatemala) y estado de cada pedido', () => {
+  const texto = renderHistorial([
+    // 13/10 18:05 UTC = 12:05 Guatemala
+    { id: '1', codigo_recogida: 'AB12', estado: 'completado', created_at: '2026-10-13T18:05:00Z', bolsas: { nombre: 'Bolsa sorpresa' }, cantidad: 2, total: 50, monto_neto_restaurante: 37.5, comision_bocara: 12.5 },
+    { id: '2', codigo_recogida: 'CD34', estado: 'en_preparacion', created_at: '2026-10-12T15:00:00Z', bolsas: { nombre: 'Pan dulce' }, total: 20 },
+    { id: '3', codigo_recogida: 'EF56', estado: 'cancelado', created_at: '2026-10-12T14:00:00Z', bolsas: { nombre: 'Café' } },
+  ]);
+  for (const esperado of ['AB12', 'Bolsa sorpresa', '2 unid.', '12:05', '13 de octubre de 2026', 'Recogido',
+    'CD34', 'Pan dulce', 'En preparación', 'EF56', 'Cancelado', '12 de octubre de 2026']) {
+    assert.ok(texto.includes(esperado), `falta "${esperado}"`);
+  }
 });
 
-test('historial.tsx: sin pedidos en el período, la nota de comisión no afirma un 25% que no ocurrió', () => {
+test('historial.tsx: sin resumen financiero — ni montos, ni comisión, ni ganancias', () => {
+  const texto = renderHistorial([
+    { id: '1', codigo_recogida: 'AB12', estado: 'completado', created_at: '2026-10-13T18:05:00Z', bolsas: { nombre: 'Bolsa' }, total: 50, monto_neto_restaurante: 37.5, comision_bocara: 12.5, propina: 3 },
+  ]);
+  assert.equal(/Q\s*\d/.test(texto), false, 'no debe mostrar montos en quetzales');
+  assert.equal(/comisi[oó]n/i.test(texto), false);
+  assert.equal(/Ventas brutas|Tu ganancia|Resumen del período/.test(texto), false);
+});
+
+test('historial.tsx: sin pedidos muestra el estado vacío sin NaN', () => {
   const texto = renderHistorial([]);
-  assert.equal(texto.includes('25%'), false);
+  assert.match(texto, /No hay pedidos en este período/);
   assert.equal(texto.includes('NaN'), false);
 });

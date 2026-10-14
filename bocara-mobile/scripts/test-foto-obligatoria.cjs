@@ -73,6 +73,8 @@ function montar(file, { forzados = {}, mocks = {} } = {}) {
     '@/constants/zonas': { ZONAS_GT: [] },
     '@/src/utils/backNavigation': { volver() {} },
     '@/src/utils/pickImage': { pickImage: async () => null },
+    '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
+    '@/components/SelectorPeriodo': { mesEnCurso: () => '2026-10', nombreMes: (m) => `mes ${m}` },
     ...mocks,
   }).default;
   const app = {
@@ -275,4 +277,37 @@ test('PHOTO-BIZ-2: si el backend bloquea la aprobación por falta de foto, el ad
   const aprobar = walk(app.tree).filter(n => n.type === 'Button' && /Aprobar/.test(textOf(n))).at(-1);
   await aprobar.props.onPress(); await tick();
   assert.match(textOf(app.render()), /No se puede aprobar el negocio porque no tiene foto\./);
+});
+
+// ── /admin/negocios: promedio de reseñas por mes ─────────────────────────────
+
+test('Admin negocios: cada tarjeta muestra el promedio de reseñas del mes elegido', () => {
+  const negocios = [
+    { id: 'n1', nombre: 'Ola Azul', verificado: true, activo: true, calificacion_promedio: 4.9, total_resenas: 30 },
+    { id: 'n2', nombre: 'Café', verificado: true, activo: true, calificacion_promedio: 4.1, total_resenas: 3 },
+  ];
+  const app = montar('app/admin/negocios.tsx', {
+    // negocios(0), loading(1), refreshing(2), busqueda(3), filtro(4), procesando(5), errores(6),
+    // rechazarModal(7), motivoRechazo(8), periodoResenas(9), mesResenas(10), resenas(11)
+    forzados: { 0: negocios, 1: false, 4: 'todos', 9: 'mes', 10: '2026-09', 11: { n1: { promedio: 4.5, total: 2 } } },
+    mocks: { '@/src/services/api': { adminAPI: { negocios: async () => ({ data: negocios }), resenasResumen: async () => ({ data: { negocios: {} } }) } } },
+  });
+  const texto = textOf(app.render());
+  assert.match(texto, /★ 4\.5/, 'promedio del mes, no el histórico (4.9)');
+  assert.match(texto, /2 reseñas/);
+  assert.match(texto, /mes 2026-09/);
+  assert.match(texto, /Sin reseñas/, 'el negocio sin reseñas ese mes no hereda su promedio histórico');
+  assert.equal(/★ 4\.9|★ 4\.1/.test(texto), false);
+});
+
+test('Admin negocios: en "Histórico" sin respuesta del resumen, cae al promedio guardado del negocio', () => {
+  const negocios = [{ id: 'n1', nombre: 'Ola Azul', verificado: true, activo: true, calificacion_promedio: 4.9, total_resenas: 30 }];
+  const app = montar('app/admin/negocios.tsx', {
+    forzados: { 0: negocios, 1: false, 4: 'todos', 9: 'todo', 11: null },
+    mocks: { '@/src/services/api': { adminAPI: { negocios: async () => ({ data: negocios }) } } },
+  });
+  const texto = textOf(app.render());
+  assert.match(texto, /★ 4\.9/);
+  assert.match(texto, /30 reseñas/);
+  assert.match(texto, /histórico/);
 });

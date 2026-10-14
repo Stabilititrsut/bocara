@@ -587,7 +587,25 @@ test('resumirAcumuladoMes suma solo el mes pedido y aparta lo que sigue en curso
   const n2 = r.negocios.find((n) => n.negocio_id === 'n2');
   assert.equal(n2.pedidosSinDesglose, 1);
   assert.equal(n2.neto, 0);
-  assert.deepEqual(r.totales, { pedidos: 2, bruto: 140, comisionBocara: 33, neto: 107 });
+  assert.deepEqual(r.totales, { pedidos: 2, bruto: 140, comisionBocara: 33, cargoPlataforma: 0, comisionTotalBocara: 33, neto: 107 });
+});
+
+test('resumirAcumuladoMes: la comisión total de Bocara incluye la tarifa de servicio (3.5%) sin tocar el neto', () => {
+  const sf = { subtotal_productos: 100, comision_bocara: 25, monto_neto_restaurante: 75, propina: 0, costo_envio: 0, comision_pasarela: 3.5 };
+  const r = L.resumirAcumuladoMes({
+    mes: '2026-10',
+    pedidos: [
+      { negocio_id: 'n1', negocios: { nombre: 'Ola Azul' }, estado: 'completado', pagado_en: '2026-10-05T18:00:00Z', snapshot_financiero: sf },
+      { negocio_id: 'n1', negocios: { nombre: 'Ola Azul' }, estado: 'completado', pagado_en: '2026-10-06T18:00:00Z', snapshot_financiero: sf },
+    ],
+  });
+  const n1 = r.negocios[0];
+  assert.equal(n1.comisionBocara, 50);
+  assert.equal(n1.cargoPlataforma, 7);
+  assert.equal(n1.comisionTotalBocara, 57);
+  assert.equal(n1.neto, 150, 'la tarifa de servicio la paga el cliente: no sale del saldo del restaurante');
+  assert.equal(r.totales.cargoPlataforma, 7);
+  assert.equal(r.totales.comisionTotalBocara, 57);
 });
 
 test('GET /admin/liquidaciones: acumulado del mes en curso por comercio, aparte de lo pagable', async () => {
@@ -612,4 +630,35 @@ test('GET /admin/liquidaciones: acumulado del mes en curso por comercio, aparte 
   assert.equal(acum.totales.neto, 14.5);
   // Lo pagable hoy no cambia
   assert.equal(r.body.pendientes.find((p) => p.negocio_id === IDS.olaAzul).neto, 7.5);
+});
+
+// ── Historial de pagos del restaurante: un pago por mes ─────────────────────
+
+test('consolidarPagosPorMes: un registro por mes, con estado, referencias y sin anuladas', () => {
+  const r = L.consolidarPagosPorMes([
+    { id: 'a', mes: '2026-09', estado: 'pagado', monto: 100, total_pedidos: 4, pagado_en: '2026-10-03T15:00:00Z', datos_transferencia: { referencia: 'TRF-1' }, folio: 'LIQ-1' },
+    // Heredada sin mes: cae en septiembre por su periodo_inicio (hora de Guatemala)
+    { id: 'b', estado: 'liquidado', monto: 20.105, total_pedidos: 1, periodo_inicio: '2026-09-01T06:00:00Z', pagado_en: '2026-10-05T15:00:00Z', datos_transferencia: { referencia: 'TRF-2' } },
+    // Heredada sin mes ni periodo: 30/09 23:30 Guatemala = 01/10 05:30 UTC → septiembre
+    { id: 'c', estado: 'pendiente', monto: 5, total_pedidos: 1, created_at: '2026-10-01T05:30:00Z' },
+    { id: 'd', mes: '2026-08', estado: 'pagado', monto: 50, total_pedidos: 2, pagado_en: '2026-09-04T15:00:00Z', datos_transferencia: { referencia: 'TRF-0' } },
+    { id: 'e', mes: '2026-08', estado: 'anulado', monto: 999 },
+    { id: 'f', mes: '2026-07', estado: 'pendiente', monto: 30 },
+  ]);
+  assert.deepEqual(r.map((m) => m.mes), ['2026-09', '2026-08', '2026-07']);
+  const sep = r[0];
+  assert.equal(sep.estado, 'parcial');
+  assert.equal(sep.monto, 125.11);
+  assert.equal(sep.monto_pagado, 120.11);
+  assert.equal(sep.monto_pendiente, 5);
+  assert.equal(sep.total_pedidos, 6);
+  assert.equal(sep.liquidaciones, 3);
+  assert.equal(sep.pagado_en, '2026-10-05T15:00:00Z');
+  assert.deepEqual(sep.referencias, ['TRF-1', 'TRF-2']);
+  assert.deepEqual(sep.folios, ['LIQ-1']);
+  assert.equal(r[1].estado, 'pagado');
+  assert.equal(r[1].monto, 50, 'la anulada no suma');
+  assert.equal(r[2].estado, 'pendiente');
+  assert.deepEqual(r[2].referencias, []);
+  assert.deepEqual(L.consolidarPagosPorMes([]), []);
 });

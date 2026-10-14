@@ -256,6 +256,8 @@ export const adminAPI = {
   rehabilitarUsuario: (id: string, rol_restaurar?: string) =>
     api.put(`/admin/usuarios/${id}/rehabilitar`, { rol_restaurar }),
   negocios: (params?: any) => api.get('/admin/negocios', { params }),
+  // Promedio de reseñas visibles por negocio; con `mes` (AAAA-MM) solo ese mes.
+  resenasResumen: (mes?: string) => api.get('/admin/resenas/resumen', { params: mes ? { mes } : {} }),
   negociosPendientes: () => api.get('/admin/negocios/pendientes'),
   verificarNegocio: (id: string) => api.put(`/admin/negocios/${id}/verificar`),
   aprobarNegocio: (id: string) => api.put(`/admin/negocios/${id}/aprobar`),
