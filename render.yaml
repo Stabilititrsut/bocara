@@ -72,6 +72,9 @@ services:
         value: gpt-image-1-mini
       - key: OPENAI_IMAGE_QUALITY
         value: medium
+      # Revisión de calidad con visión (docs/IA_IMAGEN_PUBLICACIONES.md)
+      - key: OPENAI_VISION_MODEL
+        value: gpt-6-luna
       - key: REPLICATE_API_TOKEN
         sync: false
 

@@ -14,8 +14,8 @@ Ayuda al restaurante a redactar la descripción de una **Promoción** o de un pr
 En el formulario de crear/editar publicación (`bocara-mobile/app/restaurante/bolsas.tsx`), bajo el campo **Descripción**, está el botón **✨ Mejorar descripción con IA**. Es el mismo componente (`components/BotonDescripcionIA.tsx`) para Promoción y Tiempo limitado.
 
 1. El restaurante llena al menos el **nombre** (sin nombre, el botón explica que hace falta y no llama a nadie).
-2. Toca el botón → se deshabilita y muestra **Generando descripción…**. El campo Descripción se bloquea mientras tanto para que la propuesta no pise lo que esté escribiendo. Los toques repetidos se ignoran (una sola petición).
-3. La propuesta **reemplaza** el texto del campo y queda **editable**. Aparece "Propuesta lista. Revísala y edítala antes de guardar." y un enlace **Deshacer** que devuelve el texto anterior.
+2. Toca el botón → se deshabilita y muestra **✨ Mejorando descripción con IA…**. El campo Descripción se bloquea mientras tanto para que la propuesta no pise lo que esté escribiendo. Los toques repetidos se ignoran (una sola petición).
+3. La propuesta **reemplaza** el texto del campo y queda **editable**. Aparece **✅ Descripción sugerida** con **Editar sugerencia** (lleva el cursor al campo) y, si había una descripción antes, **Deshacer** (la recupera).
 4. Nada se guarda hasta que el restaurante toca **Guardar** (el flujo normal de `/api/bolsas`, con la revisión del admin de siempre).
 
 Si algo falla (Gemini caído, timeout, respuesta bloqueada o con datos no verificables), **la descripción existente no se toca** y se muestra: *No pudimos mejorar la descripción. Intenta nuevamente.* Los límites (429) y la validación (400) muestran su propio mensaje. Si el formulario se cierra mientras genera, la respuesta tardía se descarta.
@@ -53,7 +53,7 @@ El endpoint:
 | 413 | body > 8 KB |
 | 429 | rate limit por minuto (con `Retry-After`) o cupo diario |
 | 502 | Gemini falló, bloqueó la respuesta o la propuesta traía cifras inventadas |
-| 503 | `TEXT_AI_PROVIDER=none`, `openai` (no implementado) o falta `GEMINI_API_KEY` |
+| 503 | IA de texto no configurada: `{ error, codigo: 'IA_TEXTO_NO_CONFIGURADA', detalle, faltan }`. `detalle` dice qué variable falta (en la app se muestra en desarrollo). No consume cupo. |
 | 504 | timeout |
 
 ### Proveedores intercambiables
@@ -159,7 +159,9 @@ node scripts/probar-descripcion-ia.js '{"tipo":"bolsa","nombre":"Hamburguesa con
 npm start                                                    # luego, en la app: Mis publicaciones → Nueva → escribir nombre → ✨
 ```
 
-Sin clave (o con `TEXT_AI_PROVIDER=none`) el botón responde "no disponible por ahora" y no se llama a nadie.
+Sin clave (o con `TEXT_AI_PROVIDER=none`) no se llama a nadie y nada queda ambiguo: el log de arranque dice `[IA] Texto: NO OPERATIVA — falta GEMINI_API_KEY…`, `GET /api/ia/estado` lo reporta, el botón muestra el aviso bajo él y, al tocarlo, "La mejora de descripción con IA no está configurada en el servidor." (en desarrollo, con el detalle de qué falta).
+
+Verificación con la API real: `cd backend && node scripts/verificar-ia.js` (ver [IA_IMAGEN_PUBLICACIONES.md](IA_IMAGEN_PUBLICACIONES.md#7-probar-localmente-paso-a-paso)).
 
 ## 7. Free tier, privacidad y costos
 

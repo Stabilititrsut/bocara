@@ -1,5 +1,7 @@
 # Pipeline de imágenes — mejora con IA
 
+> **Publicaciones (Promoción / Tiempo limitado):** desde 2026-10-14 su foto se procesa y valida ANTES de publicar, con calidad mínima obligatoria: ver [IA_IMAGEN_PUBLICACIONES.md](IA_IMAGEN_PUBLICACIONES.md). El pipeline en segundo plano de este documento queda para las fotos de **negocio**; proveedor, prompt, proporción, validación y costos de la mejora siguen igual.
+
 Mejora automática de las fotos que suben los restaurantes (Promoción, Tiempo limitado y foto del negocio) para que se vean más comerciales y apetitosas, **sin perder nunca la original** y sin cambiar el producto.
 
 ## 1. Proveedores
