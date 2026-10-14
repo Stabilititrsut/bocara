@@ -11,19 +11,23 @@ Restaurante elige foto ──► /api/uploads/base64 (Storage)  →  "Subiendo i
                        └─► POST /api/imagenes/trabajos     →  trabajo en "subida"
                                  │  (procesa en el acto; la app consulta cada 1.5 s)
                                  ▼
-  analizando   🔍 Analizando calidad…        calidad técnica (sharp) + revisión con visión (OpenAI)
-     │  ✗ ──► rechazada  ❌ Esta imagen no cumple la calidad mínima para Bocara   → Cambiar foto
+  analizando   🔍 Analizando calidad…        diagnóstico técnico (sharp) + revisión con visión (OpenAI)
+     │  ✗ SOLO irreparable ──► rechazada  ❌ Imagen rechazada: no se puede usar esta foto  → Cambiar foto
+     │     (no es imagen / archivo dañado, < 256 px, proporción > 2:1, no es comida, captura o collage)
+     │  oscura, borrosa, lavada, pequeña, desordenada… ──► NO se rechaza: pasa a la mejora con esos problemas
      ▼
-  mejorando    ✨ Mejorando imagen con IA…   OpenAI GPT Image (images.edit) sobre la original
-     │  ✗ ──► fallida    ⚠️ No se pudo mejorar la imagen   → Reintentar / Cambiar foto
+  mejorando    ✨ Mejorando imagen con IA…   OpenAI GPT Image (images.edit) con indicaciones de qué corregir
+     │  ✗ ──► fallida    ⚠️ motivo exacto (sin créditos, clave inválida, modelo, caída)  → Reintentar / Cambiar foto
      ▼
-  validando    🔍 Validando calidad de imagen…   la mejorada debe parecerse a la original y ser publicable
-     │  ✗ ──► fallida
+  validando    🔍 Validando calidad de imagen…   similitud con la original + calidad publicable + revisión IA del resultado
+     │  no se parece / no llega a la calidad ──► fallida (reintentable)
+     │     …salvo que la ORIGINAL ya cumpliera todo: lista con la original (usa_original, fallback seguro)
+     │  la revisión final la ve no apta ──► rechazada  ❌ Esta imagen no cumple la calidad mínima para Bocara (+ motivos)
      ▼
   lista        ✅ Imagen lista para publicar    → Guardar se habilita; la vista previa muestra la mejorada
 ```
 
-Mientras el trabajo no esté en `lista`, el botón **Guardar** del formulario se ve bloqueado (🔒) con el motivo en una franja visible; tocarlo explica el motivo y lleva a la foto. El backend aplica la misma regla, así que no se puede saltar desde otra app o con la API.
+Mientras procesa, la app muestra los pasos y "Procesando imagen con IA, espera un momento…". Mientras el trabajo no esté en `lista`, el botón **Guardar** del formulario se ve bloqueado (🔒) con el motivo en una franja visible; tocarlo explica el motivo y lleva a la foto. El backend aplica la misma regla, así que no se puede saltar desde otra app o con la API.
 
 | Archivo | Rol |
 |---|---|
@@ -44,24 +48,24 @@ Mientras el trabajo no esté en `lista`, el botón **Guardar** del formulario se
 
 **Técnica** (`calidad.js`, sharp, sobre la foto reducida a ≤ 512 px):
 
-| Métrica | Rechaza la original si | Exige en la mejorada |
+| Métrica | En la original: problema a corregir con IA si | Exige en la mejorada |
 |---|---|---|
-| Resolución (lado menor) | < 600 px | ≥ 600 px |
-| Proporción (lado mayor / menor) | > 2.0 (mal recortada) | ≤ 2.0 |
+| Resolución (lado menor) | < 600 px (< 256 px = irreparable, se rechaza) | ≥ 600 px |
+| Proporción (lado mayor / menor) | > 2.0 = irreparable (la mejora conserva el encuadre), se rechaza | ≤ 2.0 |
 | Brillo medio (0–255) | < 35 (muy oscura) o > 235 (quemada) | 70–225 |
 | Contraste (desv. estándar) | < 15 (lavada) | ≥ 28 |
 | Nitidez (varianza del laplaciano) | < 25 (borrosa/movida) | ≥ 45 |
 | Píxeles casi negros / casi blancos | > 60 % / > 45 % | ≤ 35 % / ≤ 25 % |
 
-La original solo se rechaza por lo que la IA **no** puede arreglar; una foto algo oscura pasa a la mejora, pero si el resultado sigue sin ser publicable, no se acepta. Medido sobre la escena de prueba: nítida 572 de nitidez, desenfoque leve 18, muy oscura 31 de brillo, recorte 3:1 → 3.0. Todos los umbrales son variables `IMAGE_QUALITY_*`; calibrar con fotos reales:
+La original solo se rechaza por lo que la IA **no** puede arreglar (`analizarRecuperable`): archivo ilegible, lado menor < `IMAGE_QUALITY_MIN_LADO_ABSOLUTO` (256 px) o proporción > 2:1. Todo lo demás (oscura, borrosa, quemada, lavada, < 600 px) pasa a la mejora y se le indica al modelo qué corregir (`prompts.js`, `CORRECCIONES`); si el resultado sigue sin ser publicable, no se acepta. Medido sobre la escena de prueba: nítida 572 de nitidez, desenfoque leve 18, muy oscura 31 de brillo, recorte 3:1 → 3.0. Todos los umbrales son variables `IMAGE_QUALITY_*`; calibrar con fotos reales:
 
 ```bash
 cd backend && node scripts/probar-calidad-imagen.js ruta/a/carpeta-con-fotos
 ```
 
-**Revisión con IA** (`revisionIA.js`): `gpt-6-luna` (configurable con `OPENAI_VISION_MODEL`) recibe la foto y responde un JSON estricto `{ apta, problemas[], resumen }`. Rechaza: no es comida/producto, producto cortado o mal encuadrado, muy borrosa, tan oscura que no se distingue, presentación descuidada, captura/collage/texto encima, manos o personas dominando. No rechaza por luz baja moderada o color (eso lo corrige la mejora).
+**Revisión con IA** (`revisionIA.js`): `gpt-6-luna` (configurable con `OPENAI_VISION_MODEL`) recibe la foto y responde un JSON estricto `{ apta, problemas[], resumen }`. Corre dos veces: sobre la **original** (modo `original`), donde solo `no_es_comida` y `captura_o_collage` frenan el flujo y el resto se anota como problema a corregir; y sobre el **resultado** (modo `resultado`), donde cualquier problema (cortado, borroso, descuidado, aspecto artificial…) bloquea la publicación con su motivo.
 
-**Validación del resultado**: la mejorada debe conservar la estructura de la original (similitud ≥ 0.55), no sobresaturarse, tener un cambio visible y pasar el nivel *publicable*. Si no, `fallida` (reintentable): nunca se publica una versión que no representa el producto.
+**Validación del resultado**: la mejorada debe conservar la estructura de la original (similitud ≥ 0.55), no sobresaturarse, tener un cambio visible y pasar el nivel *publicable*. Si no, `fallida` (reintentable): nunca se publica una versión que no representa el producto. **Fallback seguro**: si la original ya era publicable y sin problemas, se usa la original (`usa_original: true`, la publicación queda con `estado_procesamiento_imagen = descartada`). Si OpenAI falla (sin créditos, clave inválida, caída) el trabajo queda `fallida` con `error_codigo` `proveedor_sin_credito` / `proveedor_clave` / `proveedor_modelo` / `proveedor` y un mensaje que lo dice; la original nunca se pierde.
 
 ## 3. Regla de publicación (backend)
 
@@ -117,8 +121,8 @@ Opcionales: `OPENAI_IMAGE_QUALITY` (low/medium/high), `IMAGE_AI_MAX_TRABAJOS_POR
 
 1. Aplicar las dos migraciones (sección 5) en el proyecto de Supabase de desarrollo.
 2. En `backend/.env`: `IMAGE_AI_PROVIDER=openai`, `OPENAI_API_KEY=…`, `TEXT_AI_PROVIDER=gemini`, `GEMINI_API_KEY=…`.
-3. `cd backend && node scripts/verificar-ia.js` → debe mostrar ✅ en diagnóstico, Gemini y revisión. Con `--imagen` hace además una mejora real (≈ US$0.015) y guarda `verificacion-mejorada.webp`.
-4. `npm start` → en el log: `[IA] Imagen: OPERATIVA`, `[IA] Texto: OPERATIVA`, `[IA] Migraciones: OK`.
+3. `cd backend && node scripts/verificar-ia.js` → `Gemini texto: OK`, `OpenAI imagen: OK`, `Migraciones: OK` (prueba en vivo con el motivo exacto si algo falla, p. ej. "la cuenta de OpenAI no tiene créditos"). Con `--imagen` recorre además el flujo completo real (analizar → mejorar → validar, ≈ US$0.015) y guarda `verificacion-mejorada.webp`.
+4. `npm start` → en el log: `[IA] Imagen: OPERATIVA`, `[IA] Texto: OPERATIVA`, `[IA] Migraciones: OK`. Con el backend arriba: `GET http://localhost:3000/api/ia/status?probar=1` (sin login en desarrollo; solo admin en producción) devuelve el mismo diagnóstico en JSON. Cada foto deja en consola líneas `[IMAGEN_IA] <id> …` por paso (subida, análisis, llamada a OpenAI, validación, resultado o fallo).
 5. `cd bocara-mobile && npx expo start --web` → entrar como restaurante → Mis publicaciones → Nueva.
 6. Elegir una foto: se ven "Subiendo imagen…", luego los pasos (Analizando calidad → Mejorando con IA → Validando resultado) y el 🔒 en Guardar con el motivo.
 7. Al llegar a "✅ Imagen lista para publicar", la vista previa cambia a la mejorada y Guardar se habilita.

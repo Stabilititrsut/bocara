@@ -101,11 +101,19 @@ test('DESC-UI-4: el usuario puede modificar la propuesta antes de guardar', asyn
 });
 
 test('DESC-UI-5: fallo de la API conserva la descripción anterior y muestra el mensaje', async () => {
-  for (const status of [502, 500, 401, undefined]) {
+  // Error sin código IA_TEXTO_* del backend → genérico.
+  for (const status of [502, 500, 401]) {
     const m = crearMejorador(async () => { const e = new Error('detalle técnico'); e.status = status; throw e; });
     const r = await m.mejorar(FORM);
     assert.deepEqual(plano(r), { estado: 'error', error: MENSAJE_FALLO_IA, descripcion: 'Hamburguesa con papas' }, String(status));
   }
+  // Error con código del backend → su mensaje específico (dice POR QUÉ), y el campo no se toca.
+  const motivo = 'La IA de texto no pudo responder: el modelo de Gemini configurado en el servidor ya no está disponible. Avísale al administrador (GEMINI_TEXT_MODEL).';
+  const conCodigo = Object.assign(new Error(motivo), { status: 502, responseData: { error: motivo, codigo: 'IA_TEXTO_MODELO_NO_DISPONIBLE', detalle: 'gemini (x): HTTP 404 NOT_FOUND' } });
+  const r = await crearMejorador(async () => { throw conCodigo; }).mejorar(FORM);
+  assert.deepEqual(plano(r), { estado: 'error', error: motivo, descripcion: 'Hamburguesa con papas' });
+  // En desarrollo se agrega el detalle técnico.
+  assert.equal(mensajeError(conCodigo, { dev: true }), `${motivo} (Detalle: gemini (x): HTTP 404 NOT_FOUND)`);
   assert.equal(MENSAJE_FALLO_IA, 'No pudimos mejorar la descripción. Intenta nuevamente.');
   // Respuesta 200 sin texto útil → tampoco se toca el campo.
   const vacia = await crearMejorador(async () => ({ descripcion: '  ' })).mejorar(FORM);
@@ -113,15 +121,15 @@ test('DESC-UI-5: fallo de la API conserva la descripción anterior y muestra el 
   assert.equal(vacia.descripcion, 'Hamburguesa con papas');
 });
 
-test('DESC-UI-6: timeout (504 o sin respuesta del servidor) conserva la descripción', async () => {
+test('DESC-UI-6: timeout (504 de Gemini o sin respuesta del servidor) conserva la descripción y dice que tardó', async () => {
   const timeouts = [
-    Object.assign(new Error('No pudimos mejorar la descripción. Intenta nuevamente.'), { status: 504 }),
+    Object.assign(new Error('Gemini tardó demasiado en responder. Intenta de nuevo.'), { status: 504, responseData: { codigo: 'IA_TEXTO_TIMEOUT' } }),
     Object.assign(new Error('El servidor tardó demasiado en responder. Intenta de nuevo.'), { status: null }),
   ];
   for (const e of timeouts) {
     const r = await crearMejorador(async () => { throw e; }).mejorar(FORM);
     assert.equal(r.estado, 'error');
-    assert.equal(r.error, MENSAJE_FALLO_IA);
+    assert.match(r.error, /tardó demasiado/);
     assert.equal(r.descripcion, 'Hamburguesa con papas');
   }
 });

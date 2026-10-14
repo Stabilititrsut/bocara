@@ -46,7 +46,14 @@ test('IMG-FE-1: textos visibles exactos de cada estado', () => {
   assert.equal(P.resumenProceso(trabajo('subida')).titulo, 'Imagen subida');
   assert.equal(P.resumenProceso(trabajo('lista')).titulo, '✅ Imagen lista para publicar');
   assert.equal(P.resumenProceso(trabajo('fallida', { error: 'x' })).titulo, '⚠️ No se pudo mejorar la imagen');
-  assert.equal(P.resumenProceso(trabajo('rechazada')).titulo, '❌ Esta imagen no cumple la calidad mínima para Bocara');
+  // Rechazo tras mejorar y validar vs. rechazo de algo irreparable al analizar.
+  assert.equal(P.resumenProceso(trabajo('rechazada', { paso_error: 'validando' })).titulo, '❌ Esta imagen no cumple la calidad mínima para Bocara');
+  assert.equal(P.resumenProceso(trabajo('rechazada', { paso_error: 'analizando' })).titulo, '❌ Imagen rechazada: no se puede usar esta foto');
+  // Mientras procesa: el mensaje pedido, explícito.
+  for (const estado of ['subida', 'analizando', 'mejorando', 'validando']) {
+    assert.equal(P.resumenProceso(trabajo(estado)).mensajes[0], 'Procesando imagen con IA, espera un momento…', estado);
+  }
+  assert.equal(P.BLOQUEOS.procesando, 'Procesando imagen con IA, espera un momento…');
   assert.equal(P.TEXTOS_IMAGEN.reintentar, 'Reintentar');
   assert.equal(P.TEXTOS_IMAGEN.cambiarFoto, 'Cambiar foto');
 });
@@ -60,6 +67,10 @@ test('IMG-FE-2: pasos — avance, rechazo en "Analizando calidad" y fallo en el 
   assert.deepEqual(e(trabajo('rechazada')), ['hecho', 'error', 'pendiente', 'pendiente']);
   assert.deepEqual(e(trabajo('fallida', { error_codigo: 'proveedor' })), ['hecho', 'hecho', 'error', 'pendiente']);
   assert.deepEqual(e(trabajo('fallida', { error_codigo: 'validacion' })), ['hecho', 'hecho', 'hecho', 'error']);
+  // paso_error del backend manda: rechazo tras mejorar → ✗ en "Validando resultado".
+  assert.deepEqual(e(trabajo('rechazada', { paso_error: 'validando' })), ['hecho', 'hecho', 'hecho', 'error']);
+  assert.deepEqual(e(trabajo('fallida', { error_codigo: 'proveedor_sin_credito', paso_error: 'mejorando' })), ['hecho', 'hecho', 'error', 'pendiente']);
+  assert.deepEqual(e(trabajo('fallida', { error_codigo: 'proveedor_sin_credito' })), ['hecho', 'hecho', 'error', 'pendiente']);
   assert.deepEqual(plano(P.pasosProceso(trabajo('mejorando'))).map((p) => p.texto),
     ['Imagen subida', 'Analizando calidad', 'Mejorando con IA', 'Validando resultado']);
 });
@@ -205,12 +216,18 @@ test('IMG-FE-11: componente — fallida: Reintentar y Cambiar foto llaman a sus 
   botones(a).find((b) => texto(b) === 'Reintentar').props.onPress();
   botones(a).find((b) => texto(b) === 'Cambiar foto').props.onPress();
   assert.deepEqual(acciones, ['reintentar', 'cambiar']);
-  const r = Estado({ trabajo: trabajo('rechazada', { motivos: [{ codigo: 'oscura', mensaje: 'La foto está demasiado oscura.' }] }), onReintentar() {}, onCambiarFoto() {} });
+  const r = Estado({ trabajo: trabajo('rechazada', { paso_error: 'validando', motivos: [{ codigo: 'recortada', mensaje: 'El producto está cortado.' }] }), onReintentar() {}, onCambiarFoto() {} });
   assert.match(texto(r), /❌ Esta imagen no cumple la calidad mínima para Bocara/);
-  assert.match(texto(r), /La foto está demasiado oscura/);
+  assert.match(texto(r), /La mejoramos con IA, pero el resultado final no se puede publicar/);
+  assert.match(texto(r), /El producto está cortado/);
+  assert.match(texto(r), /✓Mejorando con IA✗Validando resultado/);
   assert.deepEqual(botones(r).map(texto), ['Cambiar foto']);
   const ok = Estado({ trabajo: trabajo('lista'), onReintentar() {}, onCambiarFoto() {} });
   assert.match(texto(ok), /✅ Imagen lista para publicar/);
+  const corregida = Estado({ trabajo: trabajo('lista', { problemas_corregidos: ['oscura', 'borrosa'] }), onReintentar() {}, onCambiarFoto() {} });
+  assert.match(texto(corregida), /La IA mejoró tu foto: iluminación, nitidez./);
+  const original = Estado({ trabajo: trabajo('lista', { usa_original: true }), onReintentar() {}, onCambiarFoto() {} });
+  assert.match(texto(original), /Usaremos tu foto original/);
 });
 
 // ── Pantalla real: Guardar no llama a la API si la foto no está lista ──────

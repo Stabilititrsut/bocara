@@ -76,17 +76,24 @@ export function payloadDescripcionIA(d: DatosDescripcionIA): PayloadDescripcionI
   return p;
 }
 
-// Mensaje para el restaurante según el error del backend: validación y
-// límites traen su propio texto; IA sin configurar lo dice explícitamente
-// (en desarrollo, además, el detalle del servidor: qué variable falta); todo lo
-// demás (502/504/red) el genérico.
+// Mensaje para el restaurante según el error del backend. Nunca un genérico
+// si se sabe el porqué: el backend manda un texto específico (modelo de Gemini
+// no disponible, clave inválida, cuota, tiempo agotado, IA sin configurar…)
+// con un `codigo` IA_TEXTO_*; validación y límites traen su propio texto; sin
+// respuesta del servidor, el interceptor ya explica (sin conexión / tardó).
+// En desarrollo se agrega el detalle técnico del servidor.
 export function mensajeError(e: any, { dev = false }: { dev?: boolean } = {}): string {
   const status = e?.status;
   const datos = e?.responseData;
+  const mensaje = typeof e?.message === 'string' ? e.message : '';
   if (status === 503 && datos?.codigo === 'IA_TEXTO_NO_CONFIGURADA') {
     return dev && datos.detalle ? `${MENSAJE_NO_CONFIGURADA} ${datos.detalle}` : MENSAJE_NO_CONFIGURADA;
   }
-  if ((status === 400 || status === 429 || status === 503) && typeof e?.message === 'string' && e.message) return e.message;
+  if (typeof datos?.codigo === 'string' && datos.codigo.startsWith('IA_TEXTO_') && mensaje) {
+    return dev && datos.detalle ? `${mensaje} (Detalle: ${datos.detalle})` : mensaje;
+  }
+  if ((status === 400 || status === 429 || status === 503) && mensaje) return mensaje;
+  if (!status && mensaje) return mensaje;
   return MENSAJE_FALLO_IA;
 }
 

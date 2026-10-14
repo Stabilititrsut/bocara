@@ -5,7 +5,7 @@ Ayuda al restaurante a redactar la descripción de una **Promoción** o de un pr
 | | Fotos | Descripción |
 |---|---|---|
 | Proveedor | OpenAI (`IMAGE_AI_PROVIDER=openai`) | Gemini (`TEXT_AI_PROVIDER=gemini`) |
-| Modelo | `OPENAI_IMAGE_MODEL=gpt-image-1-mini` | `GEMINI_TEXT_MODEL=gemini-2.5-flash-lite` |
+| Modelo | `OPENAI_IMAGE_MODEL=gpt-image-1-mini` | `GEMINI_TEXT_MODEL=gemini-3.5-flash-lite` |
 | Cuándo corre | automático al guardar una foto nueva | solo cuando el restaurante toca el botón |
 | Qué se guarda | original + mejorada | **nada**: la propuesta va al campo y el restaurante decide |
 
@@ -68,7 +68,9 @@ y una línea en `obtenerProveedorTexto()` (`services/text-ai/index.js`). La ruta
 
 ### Gemini: contrato verificado (documentación oficial, 2026-10-14)
 
-- Modelo: `gemini-2.5-flash-lite` (ID estable; entrada hasta 1 048 576 tokens, salida hasta 65 536). El razonamiento ("thinking") viene **apagado por defecto** en Flash-Lite, así que no se envía `thinkingConfig`.
+- Modelo: `gemini-3.5-flash-lite` (`GEMINI_TEXT_MODEL`). **`gemini-2.5-flash-lite` ya no está disponible para claves nuevas**: la API real responde `404 NOT_FOUND — This model … is no longer available to new users` (verificado el 2026-10-14). En la familia 3.x se envía `thinkingConfig.thinkingLevel = "minimal"`.
+- Respaldo: `GEMINI_TEXT_MODEL_FALLBACK` (por defecto `gemini-3.1-flash-lite`; `none` lo apaga). Si el principal responde 503/5xx, 429, 404 o se agota el tiempo, se intenta una vez con el respaldo dentro del mismo presupuesto (`TEXT_AI_TIMEOUT_MS`, 20 s por defecto: 60 % para el primer intento).
+- Errores: la ruta responde un mensaje que dice el porqué y un `codigo` estable: `IA_TEXTO_NO_CONFIGURADA` (503), `IA_TEXTO_MODELO_NO_DISPONIBLE`, `IA_TEXTO_CLAVE_INVALIDA`, `IA_TEXTO_PROVEEDOR`, `IA_TEXTO_BLOQUEADO`, `IA_TEXTO_SALIDA_INVALIDA` (502), `IA_TEXTO_CUOTA` (429), `IA_TEXTO_TIMEOUT` (504). Fuera de producción incluye `detalle` técnico.
 - Endpoint: `POST https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent`
 - Autenticación: header `x-goog-api-key` (la clave **nunca** va en la URL).
 - Body: `systemInstruction.parts[].text`, `contents[].role/parts[].text`, `generationConfig.{temperature, maxOutputTokens, candidateCount}`.
@@ -76,7 +78,7 @@ y una línea en `obtenerProveedorTexto()` (`services/text-ai/index.js`). La ruta
 
 Se usa `fetch` nativo (Node ≥ 20) en lugar del SDK: es una sola llamada y así no se suma una dependencia.
 
-Referencias: [modelo](https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-lite) · [generateContent](https://ai.google.dev/api/generate-content) · [precios](https://ai.google.dev/gemini-api/docs/pricing) · [límites](https://ai.google.dev/gemini-api/docs/rate-limits)
+Referencias: [modelos](https://ai.google.dev/gemini-api/docs/models) · [generateContent](https://ai.google.dev/api/generate-content) · [precios](https://ai.google.dev/gemini-api/docs/pricing) · [límites](https://ai.google.dev/gemini-api/docs/rate-limits)
 
 ## 3. Qué datos se envían (y cuáles no)
 
@@ -137,7 +139,7 @@ Solo en el backend (`backend/.env` en local, variables de entorno en Render):
 ```
 TEXT_AI_PROVIDER=gemini
 GEMINI_API_KEY=
-GEMINI_TEXT_MODEL=gemini-2.5-flash-lite
+GEMINI_TEXT_MODEL=gemini-3.5-flash-lite
 ```
 
 `GEMINI_API_KEY` **nunca** va en la app (`bocara-mobile`), en variables `EXPO_PUBLIC_*` ni en git. La app solo conoce `POST /api/ia/descripcion`.

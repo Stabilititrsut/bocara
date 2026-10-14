@@ -4,6 +4,11 @@
 //
 //   subida → analizando → mejorando → validando → lista | rechazada | fallida
 //
+// Una foto oscura, borrosa o pequeña NO se rechaza al analizarla: pasa por la
+// mejora con IA y recién al validar el resultado se decide. Solo lo
+// irreparable (no es imagen, resolución absurda, no es comida) se rechaza en
+// "Analizando calidad".
+//
 // Regla de la app (el backend la aplica igual): una foto NUEVA solo se puede
 // guardar con su trabajo en 'lista'.
 export type EstadoTrabajo = 'subida' | 'analizando' | 'mejorando' | 'validando' | 'lista' | 'rechazada' | 'fallida';
@@ -20,6 +25,13 @@ export interface TrabajoImagen {
   error: string | null;
   detalle: string | null;
   puede_reintentar: boolean;
+  // Lista con la foto original: la versión con IA no pasó la validación y la
+  // original ya cumplía la calidad (fallback seguro del backend).
+  usa_original?: boolean;
+  // Problemas de la original que la IA corrigió (oscura, borrosa…).
+  problemas_corregidos?: string[];
+  // Paso donde terminó una rechazada/fallida (lo calcula el backend).
+  paso_error?: 'analizando' | 'mejorando' | 'validando' | null;
 }
 
 export const TEXTOS_IMAGEN = Object.freeze({
@@ -29,8 +41,11 @@ export const TEXTOS_IMAGEN = Object.freeze({
   mejorando: '✨ Mejorando imagen con IA…',
   validando: '🔍 Validando calidad de imagen…',
   lista: '✅ Imagen lista para publicar',
+  procesando: 'Procesando imagen con IA, espera un momento…',
   fallida: '⚠️ No se pudo mejorar la imagen',
   rechazada: '❌ Esta imagen no cumple la calidad mínima para Bocara',
+  rechazadaAntes: '❌ Imagen rechazada: no se puede usar esta foto',
+  usaOriginal: 'Usaremos tu foto original: ya cumple la calidad de Bocara y la versión con IA no superó la validación.',
   reintentar: 'Reintentar',
   cambiarFoto: 'Cambiar foto',
 });
@@ -53,15 +68,19 @@ export function esTerminal(estado: EstadoTrabajo | null | undefined): boolean {
 
 export type EstadoPaso = 'hecho' | 'activo' | 'pendiente' | 'error';
 
-// Lista de pasos para mostrar. Un rechazo se marca en "Analizando calidad";
-// un fallo, en el paso donde iba (según el código de error).
-export function pasosProceso(t: Pick<TrabajoImagen, 'estado' | 'error_codigo'> | null): { texto: string; estado: EstadoPaso }[] {
+// Lista de pasos para mostrar. Un rechazo o fallo se marca en el paso donde
+// ocurrió: paso_error del backend o, si no viene, se deduce del código.
+export function pasosProceso(t: Pick<TrabajoImagen, 'estado' | 'error_codigo'> & Partial<Pick<TrabajoImagen, 'paso_error'>> | null): { texto: string; estado: EstadoPaso }[] {
   if (!t) return [];
   let pasoError = -1;
-  if (t.estado === 'rechazada') pasoError = 1;
-  if (t.estado === 'fallida') {
-    pasoError = t.error_codigo === 'validacion' || t.error_codigo === 'calidad_resultado' ? 3
-      : t.error_codigo === 'proveedor' ? 2 : 1;
+  if (t.estado === 'rechazada' || t.estado === 'fallida') {
+    const paso = (t as Partial<TrabajoImagen>).paso_error;
+    if (paso) pasoError = ORDEN[paso];
+    else if (t.estado === 'rechazada') pasoError = 1;
+    else {
+      pasoError = t.error_codigo === 'validacion' || t.error_codigo === 'calidad_resultado' ? 3
+        : String(t.error_codigo || '').startsWith('proveedor') ? 2 : 1;
+    }
   }
   const actual = ORDEN[t.estado] ?? -1;
   return PASOS.map((p, i) => {
@@ -71,6 +90,12 @@ export function pasosProceso(t: Pick<TrabajoImagen, 'estado' | 'error_codigo'> |
     return { texto: p.texto, estado: 'pendiente' };
   });
 }
+
+// Problemas de la original → lo que se le dice al restaurante que se corrigió.
+const CORREGIDO: Record<string, string> = {
+  oscura: 'iluminación', muy_oscura: 'iluminación', quemada: 'exposición', sin_contraste: 'contraste y color',
+  borrosa: 'nitidez', resolucion: 'resolución', baja_calidad: 'calidad general', desordenada: 'presentación',
+};
 
 export interface ResumenProceso {
   titulo: string;
@@ -85,12 +110,31 @@ export interface ResumenProceso {
 export function resumenProceso(t: TrabajoImagen | null, { dev = false }: { dev?: boolean } = {}): ResumenProceso | null {
   if (!t) return null;
   if (enCurso(t.estado)) {
-    return { titulo: TEXTOS_IMAGEN[t.estado as 'subida'], tono: 'progreso', mensajes: ['Guardar se habilita cuando la imagen esté lista.'], puedeReintentar: false, puedeCambiar: true };
+    return {
+      titulo: TEXTOS_IMAGEN[t.estado as 'subida'], tono: 'progreso',
+      mensajes: [TEXTOS_IMAGEN.procesando, 'Guardar se habilita cuando la imagen esté lista.'],
+      puedeReintentar: false, puedeCambiar: true,
+    };
   }
-  if (t.estado === 'lista') return { titulo: TEXTOS_IMAGEN.lista, tono: 'ok', mensajes: [], puedeReintentar: false, puedeCambiar: true };
+  if (t.estado === 'lista') {
+    const corregidos = (t.problemas_corregidos || []).map((c) => CORREGIDO[c]).filter(Boolean);
+    const mensajes = t.usa_original ? [TEXTOS_IMAGEN.usaOriginal]
+      : corregidos.length ? [`La IA mejoró tu foto: ${[...new Set(corregidos)].join(', ')}.`] : [];
+    return { titulo: TEXTOS_IMAGEN.lista, tono: 'ok', mensajes, puedeReintentar: false, puedeCambiar: true };
+  }
   if (t.estado === 'rechazada') {
     const mensajes = (t.motivos || []).map((m) => m.mensaje);
-    return { titulo: TEXTOS_IMAGEN.rechazada, tono: 'rechazo', mensajes: mensajes.length ? mensajes : ['Usa otra foto del producto.'], puedeReintentar: false, puedeCambiar: true };
+    // Tras mejorar y validar: la versión final no llegó a la calidad mínima.
+    const despuesDeMejorar = t.paso_error === 'validando';
+    return {
+      titulo: despuesDeMejorar ? TEXTOS_IMAGEN.rechazada : TEXTOS_IMAGEN.rechazadaAntes,
+      tono: 'rechazo',
+      mensajes: [
+        ...(despuesDeMejorar ? ['La mejoramos con IA, pero el resultado final no se puede publicar:'] : []),
+        ...(mensajes.length ? mensajes : ['Usa otra foto del producto.']),
+      ],
+      puedeReintentar: false, puedeCambiar: true,
+    };
   }
   const mensajes = [t.error || 'Ocurrió un error al procesar la foto.'];
   for (const m of t.motivos || []) mensajes.push(m.mensaje);
@@ -103,7 +147,7 @@ export const BLOQUEOS = Object.freeze({
   subiendo: 'Guardar bloqueado: la foto se está subiendo.',
   sinFoto: 'Guardar bloqueado: agrega una foto del producto.',
   sinProcesar: 'Guardar bloqueado: la foto debe pasar por la mejora con IA. Cámbiala para procesarla.',
-  procesando: 'Guardar bloqueado: la imagen se está procesando con IA.',
+  procesando: 'Procesando imagen con IA, espera un momento…',
   rechazada: 'Guardar bloqueado: la imagen no cumple la calidad mínima. Cambia la foto.',
   fallida: 'Guardar bloqueado: no se pudo mejorar la imagen. Reintenta o cambia la foto.',
   errorRed: 'Guardar bloqueado: no pudimos consultar el estado de la imagen. Reintenta.',
