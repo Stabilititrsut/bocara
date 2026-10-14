@@ -98,6 +98,7 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
     '@/src/utils/horarioRecogida': horarioReal,
     '@/src/utils/estadoPublicacion': load('src/utils/estadoPublicacion.ts', { './horarioRecogida': horarioReal }),
     '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+    '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
     '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
     '@/src/utils/pickImage': {},
     '@/src/utils/hora': load('src/utils/hora.ts'),

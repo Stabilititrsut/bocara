@@ -93,6 +93,7 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     '@/constants/Colors': { Colors: {} },
     '@/src/utils/estadoPublicacion': estadoReal,
     '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+    '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
     '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
     '@/src/utils/pickImage': { pickImage: async () => null },
     // Dobles de las pantallas del cliente (tienda, detalle): los mismos módulos
@@ -383,6 +384,7 @@ function pantallaDisponibles(lista, api = {}) {
     mocks: {
       '@/src/utils/hora': load('src/utils/hora.ts'),
       '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+      '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
       '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
       '@/src/utils/pickImage': {},
       '@/src/services/api': {

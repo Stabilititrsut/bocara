@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { emitSessionInvalid } from './sessionEvents';
 import { getAuthToken } from './authTokenStorage';
 import type { CrearBolsaPayload, ActualizarBolsaPayload } from '../types';
+import type { PayloadDescripcionIA } from '../utils/descripcionIA';
 
 // Puerto donde corre el backend local (ver docs/ENTORNO_LOCAL.md). Ajustable sin
 // tocar código si algún día el backend local cambia de puerto.
@@ -230,6 +231,13 @@ export const notificacionesAPI = {
 export const imagenesAPI = {
   accion: (tipo: 'publicacion' | 'negocio', id: string, accion: 'reintentar' | 'usar-original' | 'usar-mejorada') =>
     api.post(`/imagenes/${tipo}/${id}/${accion}`),
+};
+
+// Descripción propuesta con IA (backend/routes/ia.js). Solo devuelve el texto:
+// no guarda nada. 30 s: el backend corta al proveedor a los 10 s.
+export const iaAPI = {
+  mejorarDescripcion: (payload: PayloadDescripcionIA) =>
+    api.post<{ descripcion: string }>('/ia/descripcion', payload, { timeout: 30000 }).then((r) => r.data),
 };
 
 export const favoritosAPI = {

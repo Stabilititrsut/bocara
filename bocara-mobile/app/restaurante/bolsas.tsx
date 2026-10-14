@@ -10,6 +10,7 @@ import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 import HoraPicker from '@/components/HoraPicker';
 import EstadoImagenIA from '@/components/EstadoImagenIA';
+import BotonDescripcionIA from '@/components/BotonDescripcionIA';
 import { hayMejoraEnCurso } from '@/src/utils/estadoImagen';
 import CalendarioPicker from '@/components/CalendarioPicker';
 import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
@@ -183,6 +184,9 @@ export default function BolsasRestauranteScreen() {
   const [saving, setSaving] = useState(false);
   // Se intentó guardar sin foto: marca el bloque de foto en rojo.
   const [fotoFaltante, setFotoFaltante] = useState(false);
+  // "Mejorar descripción con IA" en curso: el campo Descripción se bloquea
+  // para que la propuesta no pise lo que el restaurante esté escribiendo.
+  const [generandoDescripcion, setGenerandoDescripcion] = useState(false);
   const fileInputRef = useRef<any>(null);
   // Scroll del formulario y posición del bloque de foto, para llevar al
   // usuario hasta ella si intenta guardar sin foto.
@@ -720,7 +724,21 @@ export default function BolsasRestauranteScreen() {
 
             <Text style={s.sectionLabel}>📝 Información</Text>
             <Field label="Nombre *" value={form.nombre} onChange={set('nombre')} placeholder={form.tipo_form === 'cupon' ? 'Ej. Descuento miércoles' : 'Ej. Bolsa de panadería'} />
-            <Field label="Descripción" value={form.descripcion} onChange={set('descripcion')} placeholder="Detalles adicionales..." multiline />
+            <Field
+              label="Descripción"
+              value={form.descripcion}
+              onChange={set('descripcion')}
+              placeholder="Detalles adicionales..."
+              multiline
+              editable={!generandoDescripcion}
+            />
+            {/* Mismo botón para Promoción y Tiempo limitado. key: estado limpio en cada apertura. */}
+            <BotonDescripcionIA
+              key={modal ? (editId || 'nueva') : 'cerrado'}
+              datos={form}
+              onPropuesta={set('descripcion')}
+              onProcesando={setGenerandoDescripcion}
+            />
 
             {/* Campos específicos por tipo */}
             {form.tipo_form === 'cupon' ? (
@@ -881,12 +899,13 @@ export default function BolsasRestauranteScreen() {
   );
 }
 
-function Field({ label, value, onChange, placeholder, multiline, keyboard, autoCapitalize }: any) {
+function Field({ label, value, onChange, placeholder, multiline, keyboard, autoCapitalize, editable = true }: any) {
   return (
     <View style={{ marginBottom: 4 }}>
       <Text style={sf.label}>{label}</Text>
       <TextInput
-        style={[sf.input, multiline && { height: 72 }]}
+        style={[sf.input, multiline && { height: 72 }, !editable && { opacity: 0.6 }]}
+        editable={editable}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}
