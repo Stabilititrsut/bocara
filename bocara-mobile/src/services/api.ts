@@ -226,6 +226,12 @@ export const notificacionesAPI = {
     api.delete('/notificaciones/token', { data: { expo_push_token: token }, timeout: 5000 }),
 };
 
+// Mejora automática de fotos (backend/routes/imagenes.js).
+export const imagenesAPI = {
+  accion: (tipo: 'publicacion' | 'negocio', id: string, accion: 'reintentar' | 'usar-original' | 'usar-mejorada') =>
+    api.post(`/imagenes/${tipo}/${id}/${accion}`),
+};
+
 export const favoritosAPI = {
   listar:       () => api.get('/favoritos/negocios'),
   listarBolsas: () => api.get('/favoritos/bolsas'),
