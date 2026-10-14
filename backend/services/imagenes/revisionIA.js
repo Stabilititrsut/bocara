@@ -22,43 +22,57 @@ const LADO_REVISION = 768;
 
 const PROBLEMAS = Object.freeze({
   no_es_comida: 'La foto no muestra un producto de comida o bebida.',
-  recortada: 'El producto está cortado o mal encuadrado. Toma la foto con el producto completo y centrado.',
+  captura_o_collage: 'Parece una captura de pantalla, un collage o una imagen con texto encima. Sube una foto real del producto.',
+  irreconocible: 'No se alcanza a reconocer el producto en la foto. Sube una foto donde se vea qué es.',
+  recortada: 'El producto está cortado o mal encuadrado.',
   borrosa: 'La foto está borrosa o fuera de foco.',
   muy_oscura: 'La foto está tan oscura que no se distingue el producto.',
-  desordenada: 'La presentación se ve descuidada (fondo desordenado, empaques abiertos o sobras). Toma una foto más limpia.',
-  captura_o_collage: 'Parece una captura de pantalla, un collage o una imagen con texto encima. Sube una foto real del producto.',
+  desordenada: 'La presentación se ve descuidada (fondo desordenado o empaques abiertos).',
   manos_o_personas: 'Las manos o personas ocupan gran parte de la foto. El protagonista debe ser el producto.',
   baja_calidad: 'La foto no tiene la calidad mínima para mostrarse en Bocara.',
+  aspecto_artificial: 'La versión mejorada se ve artificial (aspecto de render, plástico o ilustración).',
+  producto_distinto: 'La versión mejorada ya no muestra el mismo producto que tu foto.',
+  ingrediente_inventado: 'La versión mejorada agregó o quitó ingredientes, guarniciones u objetos de tu producto.',
+  cantidad_alterada: 'La versión mejorada cambió la cantidad o el tamaño de la porción.',
 });
 
 // Problemas que ninguna mejora de imagen arregla: con ellos ni se intenta.
-const IRREPARABLES = Object.freeze(new Set(['no_es_comida', 'captura_o_collage']));
+const IRREPARABLES = Object.freeze(new Set(['no_es_comida', 'captura_o_collage', 'irreconocible']));
+// La IA cambió el producto: el resultado no es fiel a la foto del restaurante.
+const INFIDELIDAD = Object.freeze(new Set(['producto_distinto', 'ingrediente_inventado', 'cantidad_alterada']));
+// Un close-up o un plato que sale del cuadro NO es motivo para no publicar.
+const IGNORAR_EN_RESULTADO = Object.freeze(new Set(['recortada']));
 
 const ESQUEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['apta', 'problemas', 'resumen'],
   properties: {
-    apta: { type: 'boolean', description: 'true si, tras mejorar luz/color/nitidez, la foto puede publicarse en un marketplace de comida.' },
+    apta: { type: 'boolean', description: 'Ver instrucciones: depende del modo de revisión.' },
     problemas: { type: 'array', items: { type: 'string', enum: Object.keys(PROBLEMAS) } },
     resumen: { type: 'string', description: 'Una frase en español, máximo 160 caracteres.' },
   },
 };
 
+// La pregunta NO es "¿la foto ya está perfecta?" sino "¿hay información
+// visual suficiente para convertirla en una foto comercial fiel?".
 const INSTRUCCIONES_ORIGINAL = [
   'Eres revisor de fotos de Bocara, un marketplace de comida en Guatemala.',
-  'Decide si esta foto, DESPUÉS de una mejora automática de iluminación, balance de blancos, contraste, color y nitidez leve, puede publicarse como foto comercial del producto.',
-  'Esa mejora NO puede: reencuadrar, recuperar partes cortadas, quitar desenfoque fuerte, cambiar el fondo ni el contenido.',
-  'Marca apta=false y lista los problemas si: no es comida, bebida o un producto de restaurante; el producto principal está cortado por los bordes o muy descentrado; está muy borrosa o movida; está tan oscura que no se distingue el producto; la presentación es descuidada; es captura de pantalla, collage o tiene texto superpuesto; manos o personas dominan la imagen; o la calidad general es inaceptable.',
-  'NO rechaces solo por luz algo baja, tono de color o poco contraste: eso lo corrige la mejora.',
-  'Sé estricto pero justo: una foto casera bien encuadrada y enfocada es apta.',
+  'Una IA de edición va a convertir esta foto de celular en una fotografía comercial: puede corregir iluminación, exposición, balance de blancos, contraste, nitidez moderada, ruido y poca resolución, extender el fondo para recomponer el encuadre y ordenar el entorno. No puede inventar comida.',
+  'Decide si hay información visual suficiente para hacerlo de forma FIEL.',
+  'Marca apta=false SOLO si: no muestra comida, bebida ni un producto de restaurante (no_es_comida); es una captura de pantalla, collage, menú o imagen con texto encima en lugar de una foto (captura_o_collage); o el producto no se reconoce en absoluto (irreconocible).',
+  'En cualquier otro caso apta=true, y lista en problemas lo que la edición debe corregir: muy_oscura, borrosa, recortada (producto cortado o encuadre muy cerrado), desordenada, manos_o_personas, baja_calidad.',
+  'Una foto oscura, algo movida, pequeña, mal encuadrada o un close-up de comida NO es motivo para apta=false.',
 ].join('\n');
 
 const INSTRUCCIONES_RESULTADO = [
   'Eres revisor de fotos de Bocara, un marketplace de comida en Guatemala.',
-  'Esta foto YA fue mejorada automáticamente (luz, color, nitidez). Decide si, TAL COMO ESTÁ, puede publicarse como foto comercial del producto.',
-  'Marca apta=false y lista los problemas si: no es comida, bebida o un producto de restaurante; el producto principal está cortado por los bordes o muy descentrado; está borrosa; está oscura o quemada; la presentación es descuidada; es captura de pantalla, collage o tiene texto superpuesto; manos o personas dominan la imagen; o se ve artificial (aspecto de render, plástico o ilustración).',
-  'Sé estricto pero justo: una foto casera bien encuadrada, enfocada y con buena luz es apta.',
+  'Recibes DOS imágenes: la PRIMERA es la foto original del restaurante; la SEGUNDA es la versión editada con IA que se publicaría.',
+  'Decide si la SEGUNDA puede publicarse como fotografía comercial FIEL al producto de la primera.',
+  'Fidelidad (lo más importante): marca producto_distinto si ya no es reconociblemente el mismo producto; ingrediente_inventado si agregó o quitó ingredientes, guarniciones, salsas, piezas, utensilios, logos o empaques; cantidad_alterada si cambió sustancialmente la cantidad o el tamaño de la porción. Extender la mesa, la superficie o el fondo alrededor NO es un cambio del producto.',
+  'Calidad: marca borrosa, muy_oscura, desordenada, manos_o_personas, aspecto_artificial (render, plástico, ilustración) o baja_calidad si la segunda no sirve como foto comercial.',
+  'NO marques problemas porque sea un close-up, porque el plato completo no aparezca o porque la comida salga del cuadro.',
+  'apta=true si es fiel y presentable. Sé estricto con la fidelidad y justo con el resto.',
 ].join('\n');
 const INSTRUCCIONES = Object.freeze({ original: INSTRUCCIONES_ORIGINAL, resultado: INSTRUCCIONES_RESULTADO });
 
@@ -80,14 +94,18 @@ function crearRevisorIA({
 
   return {
     modelo,
-    // → { apta, irreparable, problemas: [{ codigo, mensaje }], resumen, uso }. Lanza ErrorProveedor.
-    // irreparable: algún problema que la mejora no puede arreglar.
-    async revisar(buffer, { modo = 'original' } = {}) {
+    // → { apta, irreparable, infiel, problemas: [{ codigo, mensaje }], resumen, uso }. Lanza ErrorProveedor.
+    //   irreparable: algún problema que la mejora no puede arreglar (modo original).
+    //   infiel: la versión editada cambió el producto (modo resultado, con `original`).
+    async revisar(buffer, { modo = 'original', original = null } = {}) {
       if (!INSTRUCCIONES[modo]) throw new Error(`modo de revisión desconocido: ${modo}`);
       const inicio = Date.now();
-      const jpeg = await sharp()(buffer, { failOn: 'none' }).rotate()
+      const aJpeg = async (img) => (await sharp()(img, { failOn: 'none' }).rotate()
         .resize({ width: LADO_REVISION, height: LADO_REVISION, fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 85 }).toBuffer();
+        .jpeg({ quality: 85 }).toBuffer()).toString('base64');
+      // Resultado: original primero, editada después (para juzgar fidelidad).
+      const imagenes = modo === 'resultado' && original ? [await aJpeg(original), await aJpeg(buffer)] : [await aJpeg(buffer)];
+      const detalle = imagenes.length > 1 ? 'high' : 'low';
       console.log('[IMAGEN_IA] OpenAI revisión (%s) → modelo=%s', modo, modelo);
       let r;
       try {
@@ -99,8 +117,8 @@ function crearRevisorIA({
           input: [{
             role: 'user',
             content: [
-              { type: 'input_text', text: 'Revisa esta foto de una publicación.' },
-              { type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, detail: 'low' },
+              { type: 'input_text', text: imagenes.length > 1 ? 'Primera: foto original. Segunda: versión editada con IA.' : 'Revisa esta foto de una publicación.' },
+              ...imagenes.map((b64) => ({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: detalle })),
             ],
           }],
           text: { format: { type: 'json_schema', name: 'revision_foto', schema: ESQUEMA, strict: true } },
@@ -117,14 +135,17 @@ function crearRevisorIA({
       if (typeof datos?.apta !== 'boolean' || !Array.isArray(datos.problemas)) {
         throw new ErrorProveedor('revisión IA: respuesta incompleta', { reintentable: true });
       }
-      const codigos = [...new Set(datos.problemas.filter((p) => p in PROBLEMAS))];
+      let codigos = [...new Set(datos.problemas.filter((p) => p in PROBLEMAS))];
       // apta=false sin un problema reconocible → "baja_calidad" (nunca rechazo mudo).
       if (!datos.apta && !codigos.length) codigos.push('baja_calidad');
-      const apta = datos.apta && codigos.length === 0;
+      if (modo === 'resultado') codigos = codigos.filter((c) => !IGNORAR_EN_RESULTADO.has(c));
+      // Original: apta solo dice "hay información suficiente"; los problemas son lo que hay que corregir.
+      const apta = modo === 'original' ? !codigos.some((c) => IRREPARABLES.has(c)) : codigos.length === 0;
       console.log('[IMAGEN_IA] OpenAI revisión (%s) en %d ms: apta=%s problemas=[%s]', modo, Date.now() - inicio, apta, codigos.join(','));
       return {
         apta,
         irreparable: codigos.some((c) => IRREPARABLES.has(c)),
+        infiel: codigos.some((c) => INFIDELIDAD.has(c)),
         problemas: codigos.map((codigo) => ({ codigo, mensaje: PROBLEMAS[codigo] })),
         resumen: String(datos.resumen || '').slice(0, 200),
         uso: r.usage || null,
@@ -133,4 +154,4 @@ function crearRevisorIA({
   };
 }
 
-module.exports = { MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES, ESQUEMA, INSTRUCCIONES, crearRevisorIA };
+module.exports = { MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES, INFIDELIDAD, ESQUEMA, INSTRUCCIONES, crearRevisorIA };

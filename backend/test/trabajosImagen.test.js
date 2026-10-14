@@ -21,7 +21,8 @@ const { crearFakeSupabase } = require('./helpers/fakeSupabase');
 const { escena, PLATO, OTRO_PLATO } = require('./helpers/escenaComida');
 const { HORA_INICIO_PRUEBA, horaFinVigente } = require('./helpers/horarioPrueba');
 const { analizarCalidad, analizarRecuperable } = require('../services/imagenes/calidad');
-const { crearRevisorIA, MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES } = require('../services/imagenes/revisionIA');
+const { crearRevisorIA, MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES, INFIDELIDAD } = require('../services/imagenes/revisionIA');
+const { prepararLienzo } = require('../services/imagenes/proveedorOpenAI');
 const { ErrorProveedor } = require('../services/imagenes/errores');
 const trabajos = require('../services/imagenes/trabajos');
 const iaEstado = require('../services/iaEstado');
@@ -47,12 +48,19 @@ test.before(async () => {
     oscura: await sharp(b).modulate({ brightness: 0.2 }).jpeg().toBuffer(),
     algoOscura: await sharp(b).modulate({ brightness: 0.55 }).jpeg().toBuffer(),
     pequena: await sharp(b).resize(400).jpeg().toBuffer(),
+    mediana: await sharp(b).resize(560).jpeg().toBuffer(), // 560×420: bajo el ideal, reconocible
     diminuta: await sharp(b).resize(160).jpeg().toBuffer(),
+    cien: await sharp(b).resize(100, 100, { fit: 'fill' }).jpeg().toBuffer(),
     noImagen: Buffer.from('esto no es una imagen'),
+    // Foto de celular de buen tamaño: ya cumple el estándar de salida (≥ 1024 px).
+    buenaGrande: await sharp(b).resize(1365, 1024).jpeg().toBuffer(),
+    // Close-up: solo el centro del plato.
+    closeup: await sharp(b).extract({ left: 250, top: 140, width: 400, height: 400 }).resize(800, 800).jpeg().toBuffer(),
     panoramica: await sharp(b).extract({ left: 0, top: 250, width: 900, height: 300 }).jpeg().toBuffer(),
     quemada: await sharp(b).linear(1, 140).jpeg().toBuffer(),
     // "Mejora" verosímil: más luz y color, misma escena.
-    mejorada: await sharp(b).modulate({ brightness: 1.08, saturation: 1.05 }).linear(1.1, -8).webp().toBuffer(),
+    // Al tamaño estándar de salida (lado menor 1024).
+    mejorada: await sharp(b).resize(1365, 1024).modulate({ brightness: 1.08, saturation: 1.05 }).linear(1.1, -8).webp().toBuffer(),
   });
 });
 
@@ -93,13 +101,13 @@ test('CAL-5: umbrales ajustables por variable de entorno', async () => {
   } finally { delete process.env.IMAGE_QUALITY_MIN_LADO; }
 });
 
-test('CAL-6: analizarRecuperable — oscura/borrosa/pequeña son recuperables (problemas a corregir); ilegible, diminuta y panorámica no', async () => {
-  for (const [foto, problema] of [['oscura', 'oscura'], ['borrosa', 'borrosa'], ['pequena', 'resolucion']]) {
+test('CAL-6: analizarRecuperable — oscura, borrosa, pequeña (400–599 px) y mal proporcionada son recuperables; ilegible y 100×100/160 px no', async () => {
+  for (const [foto, problema] of [['oscura', 'oscura'], ['borrosa', 'borrosa'], ['pequena', 'resolucion'], ['mediana', 'resolucion'], ['panoramica', 'proporcion']]) {
     const r = await analizarRecuperable(fotos[foto]);
     assert.equal(r.ok, true, foto);
     assert.ok(codigos({ motivos: r.problemas }).includes(problema), foto);
   }
-  for (const [foto, codigo] of [['noImagen', 'ilegible'], ['diminuta', 'resolucion_irreparable'], ['panoramica', 'proporcion']]) {
+  for (const [foto, codigo] of [['noImagen', 'ilegible'], ['cien', 'resolucion_irreparable'], ['diminuta', 'resolucion_irreparable']]) {
     const r = await analizarRecuperable(fotos[foto]);
     assert.equal(r.ok, false, foto);
     assert.ok(codigos(r).includes(codigo), `${foto}: ${JSON.stringify(r.motivos)}`);
@@ -108,14 +116,25 @@ test('CAL-6: analizarRecuperable — oscura/borrosa/pequeña son recuperables (p
   try { assert.equal((await analizarRecuperable(fotos.pequena)).ok, false); } finally { delete process.env.IMAGE_QUALITY_MIN_LADO_ABSOLUTO; }
 });
 
-test('REV-4: modo "resultado" usa otras instrucciones; "irreparable" solo con no_es_comida o captura', async () => {
-  const c = openaiFalso({ apta: false, problemas: ['borrosa'], resumen: 'x' });
-  const r = await silenciar(() => crearRevisorIA({ cliente: c }).revisar(fotos.buena, { modo: 'resultado' }));
-  assert.equal(r.irreparable, false);
-  assert.match(c.llamadas[0].instructions, /YA fue mejorada/);
-  const r2 = await silenciar(() => crearRevisorIA({ cliente: openaiFalso({ apta: false, problemas: ['no_es_comida'], resumen: 'x' }) }).revisar(fotos.buena));
-  assert.equal(r2.irreparable, true);
+test('REV-4: modo "resultado" manda ORIGINAL + RESULTADO y juzga fidelidad; un close-up (recortada) no es defecto; irreparable solo no_es_comida / captura / irreconocible', async () => {
+  const c = openaiFalso({ apta: false, problemas: ['ingrediente_inventado', 'recortada'], resumen: 'agregó cebolla' });
+  const r = await silenciar(() => crearRevisorIA({ cliente: c }).revisar(fotos.mejorada, { modo: 'resultado', original: fotos.buena }));
+  assert.match(c.llamadas[0].instructions, /PRIMERA es la foto original/);
+  assert.match(c.llamadas[0].instructions, /NO marques problemas porque sea un close-up/);
+  assert.equal(c.llamadas[0].input[0].content.filter((x) => x.type === 'input_image').length, 2, 'original y resultado');
+  assert.equal(r.infiel, true);
+  assert.equal(r.apta, false);
+  assert.deepEqual(r.problemas.map((p) => p.codigo), ['ingrediente_inventado'], '"recortada" se ignora en el resultado');
+  const soloCloseup = await silenciar(() => crearRevisorIA({ cliente: openaiFalso({ apta: false, problemas: ['recortada'], resumen: 'close-up' }) }).revisar(fotos.mejorada, { modo: 'resultado', original: fotos.buena }));
+  assert.equal(soloCloseup.apta, true, 'un close-up fiel es publicable');
+  for (const codigo of ['no_es_comida', 'captura_o_collage', 'irreconocible']) {
+    const r2 = await silenciar(() => crearRevisorIA({ cliente: openaiFalso({ apta: false, problemas: [codigo], resumen: 'x' }) }).revisar(fotos.buena));
+    assert.equal(r2.irreparable, true, codigo);
+    assert.equal(r2.apta, false, codigo);
+  }
+  assert.match(INSTRUCCIONES_ORIGINAL_TXT(), /información visual suficiente/);
 });
+const INSTRUCCIONES_ORIGINAL_TXT = () => require('../services/imagenes/revisionIA').INSTRUCCIONES.original;
 
 // ── REV ─────────────────────────────────────────────────────────────────────
 
@@ -148,9 +167,10 @@ test('REV-1: manda la foto como input_image con Structured Outputs estricto y el
   try { assert.equal(crearRevisorIA({ cliente: c }).modelo, 'otro-modelo-vision'); } finally { delete process.env.OPENAI_VISION_MODEL; }
 });
 
-test('REV-2: no apta → problemas traducidos; no apta sin problema reconocible → "baja_calidad" (nunca rechazo mudo)', async () => {
-  const r = await crearRevisorIA({ cliente: openaiFalso({ apta: false, problemas: ['recortada', 'inventado'], resumen: 'x' }) }).revisar(fotos.buena);
-  assert.equal(r.apta, false);
+test('REV-2: problemas traducidos; en la ORIGINAL un problema arreglable no la hace "no apta"; sin problema reconocible → "baja_calidad" (nunca rechazo mudo)', async () => {
+  const r = await silenciar(() => crearRevisorIA({ cliente: openaiFalso({ apta: false, problemas: ['recortada', 'inventado'], resumen: 'x' }) }).revisar(fotos.buena));
+  assert.equal(r.apta, true, 'cortada se arregla con IA: hay información suficiente');
+  assert.equal(r.irreparable, false);
   assert.deepEqual(r.problemas, [{ codigo: 'recortada', mensaje: PROBLEMAS.recortada }]);
   const r2 = await crearRevisorIA({ cliente: openaiFalso({ apta: false, problemas: [], resumen: 'x' }) }).revisar(fotos.buena);
   assert.deepEqual(r2.problemas.map((p) => p.codigo), ['baja_calidad']);
@@ -190,15 +210,23 @@ function entorno({
       return { buffer: fotos[resultado], contentType: 'image/webp', meta: { mock: true } };
     },
   };
-  // Igual que el revisor real: 'irreparable' si algún problema no tiene arreglo.
+  // Misma semántica que el revisor real (REV-* lo prueba contra la API simulada):
+  // original → apta = sin irreparables; resultado → 'recortada' no cuenta.
   const revisor = {
     modelo: 'gpt-6-luna',
-    revisar: async (buffer, { modo = 'original' } = {}) => {
+    revisar: async (buffer, { modo = 'original', original = null } = {}) => {
       llamadas.revisor += 1; llamadas.revisorModos.push(modo);
+      if (modo === 'resultado') llamadas.originalEnResultado = !!original;
       const r = modo === 'resultado' ? revisionFinal : revision;
       if (r instanceof Error) throw r;
-      const problemas = r.problemas || [];
-      return { ...r, irreparable: problemas.some((c) => IRREPARABLES.has(c)), problemas: problemas.map((c) => ({ codigo: c, mensaje: PROBLEMAS[c] })) };
+      let problemas = r.problemas || [];
+      if (modo === 'resultado') problemas = problemas.filter((c) => c !== 'recortada');
+      const irreparable = problemas.some((c) => IRREPARABLES.has(c));
+      return {
+        resumen: r.resumen, apta: modo === 'original' ? !irreparable : problemas.length === 0,
+        irreparable, infiel: problemas.some((c) => INFIDELIDAD.has(c)),
+        problemas: problemas.map((c) => ({ codigo: c, mensaje: PROBLEMAS[c] })),
+      };
     },
   };
   const opts = {
@@ -224,25 +252,80 @@ test('FLU-1: éxito → analizando → mejorando → validando → lista; mejora
   assert.equal(trabajos.serializar(t).mejorada_url, t.mejorada_url);
 });
 
-test('FLU-2: foto oscura, borrosa o pequeña pero recuperable → NO se rechaza: pasa por la mejora con IA (con sus problemas) y queda lista', async () => {
-  for (const [foto, problema] of [['oscura', 'oscura'], ['borrosa', 'borrosa'], ['pequena', 'resolucion']]) {
+// Mejora "realista" para las pruebas de encuadre: mismo lienzo que el
+// proveedor OpenAI real (prepararLienzo), retoque de luz/color, y se entrega
+// el lienzo COMPLETO con meta.region (encuadre comercial).
+function proveedorRealista(llamadas) {
+  return {
+    nombre: 'openai', ia: true, modelo: 'gpt-image-1-mini', necesitaUrl: false,
+    mejorar: async ({ buffer, contexto }) => {
+      llamadas.proveedor += 1; llamadas.contextos.push(contexto);
+      const margen = (contexto.problemas || []).includes('recortada') ? 0.84 : 1;
+      const { lienzo, tamano, rect } = await prepararLienzo(buffer, { margen });
+      const salida = await sharp(lienzo).modulate({ saturation: 1.1 }).linear(1.06, -6).webp().toBuffer();
+      llamadas.lienzo = { tamano, rect, margen };
+      return {
+        buffer: salida, contentType: 'image/webp',
+        meta: { region: { left: rect.left / tamano.ancho, top: rect.top / tamano.alto, width: rect.width / tamano.ancho, height: rect.height / tamano.alto } },
+      };
+    },
+  };
+}
+function entornoRealista(opciones = {}) {
+  const env = entorno(opciones);
+  env.opts.deps.proveedor = proveedorRealista(env.llamadas);
+  return env;
+}
+const procesar = (env) => silenciar(() => trabajos.procesarTrabajo('t1', env.opts));
+
+test('FLU-2: recuperables → SIEMPRE intentan IA (con qué corregir) y quedan listas: 400–599 px reconocible, oscura, borrosa moderada', async () => {
+  for (const [foto, problema] of [['pequena', 'resolucion'], ['mediana', 'resolucion'], ['oscura', 'oscura'], ['borrosa', 'borrosa']]) {
     const env = entorno({ foto });
-    assert.equal(await silenciar(() => trabajos.procesarTrabajo('t1', env.opts)), 'lista', foto);
+    assert.equal(await procesar(env), 'lista', foto);
     assert.deepEqual(env.estados, ['analizando', 'mejorando', 'validando', 'lista'], foto);
     assert.equal(env.llamadas.proveedor, 1, foto);
+    assert.equal(env.llamadas.contextos[0].encuadre, 'comercial', `${foto}: formato comercial estándar`);
     assert.deepEqual(env.llamadas.revisorModos, ['original', 'resultado'], `${foto}: revisa la original y el resultado`);
+    assert.equal(env.llamadas.originalEnResultado, true, 'la revisión final compara con la original');
     assert.ok(env.llamadas.contextos[0].problemas.includes(problema), `${foto}: la IA recibe qué corregir (${env.llamadas.contextos[0].problemas})`);
     const s = trabajos.serializar(env.fila());
     assert.ok(s.problemas_corregidos.includes(problema));
     assert.equal(s.usa_original, false);
     assert.equal(env.fila().original_url, urlFoto(), 'la original no se toca');
+    assert.ok(Math.min(env.fila().calidad_resultado.ancho, env.fila().calidad_resultado.alto) >= 1024, 'salida ≥ 1024 px');
   }
 });
 
-test('FLU-2b: casos extremos → rechazada ANTES de mejorar (no se gasta IA): no es imagen, resolución irreparable, proporción imposible', async () => {
-  for (const [foto, codigo] of [['noImagen', 'ilegible'], ['diminuta', 'resolucion_irreparable'], ['panoramica', 'proporcion']]) {
+test('FLU-2d: proporción inconveniente (3:1) → intenta IA: sale en formato estándar 1536×1024 con fondo extendido y la comida intacta', async () => {
+  const env = entornoRealista({ foto: 'panoramica' });
+  assert.equal(await procesar(env), 'lista');
+  assert.equal(env.llamadas.lienzo.tamano.size, '1536x1024');
+  assert.ok(env.llamadas.contextos[0].problemas.includes('proporcion'));
+  const c = env.fila().calidad_resultado;
+  assert.deepEqual([c.ancho, c.alto], [1536, 1024]);
+  assert.ok(c.similitud > 0.9, `la región de la comida no cambió (similitud ${c.similitud})`);
+});
+
+test('FLU-2e: close-up → intenta IA y se publica como close-up (la revisión final no lo penaliza)', async () => {
+  const env = entornoRealista({ foto: 'closeup', revisionFinal: { apta: false, problemas: ['recortada'], resumen: 'close-up' } });
+  assert.equal(await procesar(env), 'lista');
+  assert.equal(env.llamadas.proveedor, 1);
+  assert.equal(env.llamadas.lienzo.tamano.size, '1024x1024');
+});
+
+test('FLU-2f: producto parcialmente fuera del cuadro → intenta IA con margen para recomponer (sin inventar comida) y queda lista', async () => {
+  const env = entornoRealista({ foto: 'closeup', revision: { apta: true, problemas: ['recortada'], resumen: 'plato cortado' } });
+  assert.equal(await procesar(env), 'lista');
+  assert.ok(env.llamadas.contextos[0].problemas.includes('recortada'));
+  assert.equal(env.llamadas.lienzo.margen, 0.84, 'la foto entra con margen para extender el fondo');
+  assert.ok(env.llamadas.lienzo.rect.width < 1024);
+  assert.ok(trabajos.serializar(env.fila()).problemas_corregidos.includes('recortada'));
+});
+
+test('FLU-2b: rechazo ANTES de IA (no se gasta nada) solo en extremos: no es imagen, 100×100 / 160 px irreconocible', async () => {
+  for (const [foto, codigo] of [['noImagen', 'ilegible'], ['cien', 'resolucion_irreparable'], ['diminuta', 'resolucion_irreparable']]) {
     const env = entorno({ foto });
-    assert.equal(await silenciar(() => trabajos.procesarTrabajo('t1', env.opts)), 'rechazada', foto);
+    assert.equal(await procesar(env), 'rechazada', foto);
     assert.equal(env.llamadas.revisor, 0, foto);
     assert.equal(env.llamadas.proveedor, 0, foto);
     assert.deepEqual(codigos(env.fila()), [codigo], foto);
@@ -252,28 +335,53 @@ test('FLU-2b: casos extremos → rechazada ANTES de mejorar (no se gasta IA): no
   }
 });
 
-test('FLU-2c: contenido no relacionado (no es comida / captura) → rechazada antes de mejorar; un problema arreglable (desordenada) NO frena', async () => {
-  for (const problema of ['no_es_comida', 'captura_o_collage']) {
+test('FLU-2c: screenshot / collage, no es comida o irreconocible → rechazada antes de IA; problemas arreglables (desordenada, recortada, manos) NO frenan', async () => {
+  for (const problema of ['captura_o_collage', 'no_es_comida', 'irreconocible']) {
     const env = entorno({ revision: { apta: false, problemas: [problema, 'borrosa'], resumen: 'x' } });
-    assert.equal(await silenciar(() => trabajos.procesarTrabajo('t1', env.opts)), 'rechazada', problema);
+    assert.equal(await procesar(env), 'rechazada', problema);
     assert.equal(env.llamadas.proveedor, 0);
     assert.deepEqual(env.fila().motivos, [{ codigo: problema, mensaje: PROBLEMAS[problema] }], 'solo el motivo irreparable');
   }
-  const env = entorno({ revision: { apta: false, problemas: ['desordenada'], resumen: 'mesa desordenada' } });
-  assert.equal(await silenciar(() => trabajos.procesarTrabajo('t1', env.opts)), 'lista');
-  assert.ok(env.llamadas.contextos[0].problemas.includes('desordenada'));
+  const env = entorno({ revision: { apta: true, problemas: ['desordenada', 'recortada', 'manos_o_personas'], resumen: 'mesa desordenada' } });
+  assert.equal(await procesar(env), 'lista');
+  for (const p of ['desordenada', 'recortada', 'manos_o_personas']) assert.ok(env.llamadas.contextos[0].problemas.includes(p), p);
 });
 
-test('FLU-3: tras mejorar, la revisión final la ve no apta (producto cortado) → rechazada en "validando" con el motivo; no se guarda mejorada', async () => {
-  const env = entorno({ revision: { apta: false, problemas: ['recortada'], resumen: 'cortado' }, revisionFinal: { apta: false, problemas: ['recortada'], resumen: 'sigue cortado' } });
-  assert.equal(await silenciar(() => trabajos.procesarTrabajo('t1', env.opts)), 'rechazada');
+test('FLU-3: tras mejorar, fiel pero no presentable (aspecto artificial) → rechazada en "validando" con el motivo; no se guarda mejorada', async () => {
+  const env = entorno({ revisionFinal: { apta: false, problemas: ['aspecto_artificial'], resumen: 'parece render' } });
+  assert.equal(await procesar(env), 'rechazada');
   assert.equal(env.llamadas.proveedor, 1, 'primero se intentó mejorar');
   assert.deepEqual(env.estados, ['analizando', 'mejorando', 'validando', 'rechazada']);
-  assert.deepEqual(env.fila().motivos, [{ codigo: 'recortada', mensaje: PROBLEMAS.recortada }]);
+  assert.deepEqual(env.fila().motivos, [{ codigo: 'aspecto_artificial', mensaje: PROBLEMAS.aspecto_artificial }]);
   assert.equal(env.llamadas.subidas.length, 0);
   const s = trabajos.serializar(env.fila());
   assert.equal(s.paso_error, 'validando');
   assert.equal(s.mejorada_url, null);
+});
+
+test('FLU-3b: resultado con ingrediente inventado (o cantidad alterada / otro producto) → NO se publica: fallida "fidelidad" reintentable', async () => {
+  for (const problema of ['ingrediente_inventado', 'cantidad_alterada', 'producto_distinto']) {
+    const env = entorno({ foto: 'oscura', revisionFinal: { apta: false, problemas: [problema], resumen: 'cambió el plato' } });
+    assert.equal(await procesar(env), 'fallida', problema);
+    const s = trabajos.serializar(env.fila());
+    assert.equal(s.error_codigo, 'fidelidad');
+    assert.match(s.error, /cambió tu producto/);
+    assert.deepEqual(s.motivos.map((m) => m.codigo), [problema]);
+    assert.equal(s.paso_error, 'validando');
+    assert.equal(s.puede_reintentar, true);
+    assert.equal(s.mejorada_url, null);
+    assert.equal(env.llamadas.subidas.length, 0, 'la versión infiel nunca se guarda');
+  }
+});
+
+test('FLU-3c: resultado mejorado y fiel → lista, mejorada guardada aparte (≥ 1024 px) y original intacta', async () => {
+  const env = entornoRealista({ foto: 'buenaGrande' });
+  assert.equal(await procesar(env), 'lista');
+  const t = env.fila();
+  assert.match(t.mejorada_url, /\/mejoradas\/trabajos\/t1\/\d+\.webp$/);
+  assert.equal(t.original_url, urlFoto());
+  assert.equal(t.revision_ia.resultado.apta, true);
+  assert.ok(Math.min(t.calidad_resultado.ancho, t.calidad_resultado.alto) >= 1024);
 });
 
 test('FLU-4: proveedor caído (no reintentable) → fallida "proveedor" reintentable por el usuario; transitorio → reintenta solo y completa', async () => {
@@ -307,7 +415,7 @@ test('FLU-5: la IA devuelve otra escena y la original NO era publicable → fall
 });
 
 test('FLU-5b: fallback seguro — la mejorada no pasa la validación pero la original ya cumplía todo → lista con la ORIGINAL (usa_original)', async () => {
-  const env = entorno({ resultado: 'otra' });
+  const env = entorno({ foto: 'buenaGrande', resultado: 'otra' });
   assert.equal(await silenciar(() => trabajos.procesarTrabajo('t1', env.opts)), 'lista');
   const t = env.fila();
   assert.equal(t.mejorada_url, urlFoto(), 'la foto final es la original');

@@ -51,6 +51,34 @@ const PROMPT_FOTO_COMIDA = [OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO]
   .map((seccion) => seccion.join(' '))
   .join('\n');
 
+// Encuadre COMERCIAL (fotos de publicaciones): el restaurante sube una foto
+// normal de celular y Bocara la entrega en un formato comercial estándar.
+// La foto va completa dentro del lienzo (proveedorOpenAI.prepararLienzo); el
+// borde desenfocado es relleno que el modelo reemplaza por la continuación
+// natural de la mesa / superficie / fondo. La comida se queda donde está.
+const ENCUADRE_COMERCIAL = [
+  'The original photo occupies a rectangle of this canvas; the soft blurred area around it is only padding.',
+  'Replace that padding with a natural, seamless continuation of the same table, surface and background,',
+  'so the result is one complete, well-composed commercial food photograph that fills the whole canvas.',
+  'Keep the food inside the original rectangle exactly where it is, at the same size: do not move, zoom, crop or rotate it.',
+  'Never place food, extra pieces, ingredients, garnishes, sauces, utensils, logos, labels or packaging in the extended area.',
+  'If the food is cut by the edge of the original photo, you may complete only a small, obvious continuation of the plate, container or surface;',
+  'if completing it would require inventing a substantial part of the food, leave it as a close-up and just extend the background.',
+  'A tight close-up of food is acceptable and must stay a close-up.',
+];
+// Igual que PRESERVAR, pero sin "same framing" ni "keep the aspect ratio":
+// aquí el encuadre sí se amplía (solo el fondo).
+const PRESERVAR_COMERCIAL = [
+  PRESERVAR[0],
+  'same plate, bowl, cup, tray or packaging, same arrangement and positions, same camera angle.',
+  PRESERVAR[2],
+];
+const PROHIBIDO_COMERCIAL = PROHIBIDO.filter((l) => !l.startsWith('Soft blurred borders'));
+
+const PROMPT_COMERCIAL = [OBJETIVO, PRESERVAR_COMERCIAL, MEJORAR, ENCUADRE_COMERCIAL, PROHIBIDO_COMERCIAL, ESTILO]
+  .map((seccion) => seccion.join(' '))
+  .join('\n');
+
 // Problemas detectados en el análisis de la original (calidad.js y
 // revisionIA.js) → indicación concreta para el modelo. Sin entrada aquí, el
 // problema no se menciona (el prompt base ya cubre la mejora general).
@@ -63,12 +91,21 @@ const CORRECCIONES = Object.freeze({
   resolucion: 'The photo is low resolution: restore clean, natural fine detail.',
   baja_calidad: 'The photo has low overall quality: clean up noise and compression artifacts.',
   desordenada: 'The surroundings look messy: make them cleaner and less distracting without replacing the setting.',
+  recortada: 'The food is partly cut by the edges or tightly framed: give it a balanced commercial composition by extending only the background and surface, never the food itself.',
+  proporcion: 'The original photo has an awkward aspect ratio: extend the background and surface so the canvas looks like a natural commercial photo.',
+  manos_o_personas: 'Hands or people are visible: keep the food as the clear protagonist and make them less prominent without altering the food.',
 });
 
-function promptMejora({ problemas = [] } = {}) {
+// encuadre: 'original' (fotos de negocio: mismo encuadre y proporción) o
+// 'comercial' (publicaciones: lienzo estándar con el fondo extendido).
+function promptMejora({ problemas = [], encuadre = 'original' } = {}) {
   if (process.env.IMAGE_AI_PROMPT) return process.env.IMAGE_AI_PROMPT;
+  const base = encuadre === 'comercial' ? PROMPT_COMERCIAL : PROMPT_FOTO_COMIDA;
   const extra = [...new Set(problemas.map((c) => CORRECCIONES[c]).filter(Boolean))];
-  return extra.length ? `${PROMPT_FOTO_COMIDA}\nSpecific fixes for this photo: ${extra.join(' ')}` : PROMPT_FOTO_COMIDA;
+  return extra.length ? `${base}\nSpecific fixes for this photo: ${extra.join(' ')}` : base;
 }
 
-module.exports = { PROMPT_FOTO_COMIDA, CORRECCIONES, promptMejora, SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO } };
+module.exports = {
+  PROMPT_FOTO_COMIDA, PROMPT_COMERCIAL, CORRECCIONES, promptMejora,
+  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL },
+};

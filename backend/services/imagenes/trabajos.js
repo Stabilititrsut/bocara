@@ -3,23 +3,26 @@
 //   subida → analizando → mejorando → validando → lista
 //                ↘ rechazada        ↘ fallida    ↘ rechazada | fallida
 //
-//   analizando  diagnóstico de la original. SOLO se rechaza aquí lo que ninguna
-//               mejora arregla: archivo ilegible/no imagen, resolución
-//               absurdamente baja, proporción imposible (calidad.js,
-//               analizarRecuperable) o contenido no relacionado (revisión con
-//               visión: no es comida, captura o collage). Una foto oscura,
-//               borrosa, lavada o pequeña PASA a la mejora: sus problemas se
-//               le indican al modelo para que los corrija.
-//   mejorando   proveedor de IA (OpenAI GPT Image por defecto).
-//   validando   la mejorada debe parecerse a la original (validacion.js),
-//               cumplir la calidad 'publicable' (calidad.js) y pasar la
-//               revisión con visión en modo 'resultado'. Recién aquí se decide:
+//   analizando  ¿hay información visual suficiente para una foto comercial
+//               fiel? SOLO se rechaza: archivo ilegible/no imagen, resolución
+//               tan baja que no se reconoce (< 200 px, calidad.js
+//               analizarRecuperable), no es comida, captura/collage o
+//               producto irreconocible (revisión con visión). Oscura, borrosa,
+//               pequeña, mal proporcionada, cortada, close-up o desordenada
+//               PASA a la mejora con la lista de qué corregir.
+//   mejorando   OpenAI GPT Image en encuadre 'comercial': lienzo estándar
+//               (≥ 1024 px), fondo extendido para recomponer, sin inventar comida.
+//   validando   la comida (región de la original) debe seguir siendo la misma
+//               (validacion.js), el resultado cumplir la calidad 'publicable'
+//               y la revisión con visión comparar original vs. resultado
+//               (fidelidad + presentable; un close-up no es defecto):
 //                 · pasa todo               → lista (se publica la mejorada)
-//                 · no se parece / no llega a la calidad, pero la ORIGINAL ya
-//                   era publicable          → lista con la original (fallback
+//                 · no se parece / no llega a la calidad / cambió el producto
+//                   (fidelidad), pero la ORIGINAL ya era publicable
+//                                           → lista con la original (fallback
 //                                             seguro, usa_original=true)
-//                 · no se parece / no llega → fallida (reintentable)
-//                 · la revisión final la ve no apta → rechazada con motivos
+//                 · lo mismo sin fallback   → fallida (reintentable)
+//                 · fiel pero no presentable → rechazada con motivos
 //   lista       única condición para que POST/PUT /api/bolsas acepten la foto.
 //
 // Sin IA configurada, o si el proveedor falla (sin créditos, clave inválida,
@@ -29,7 +32,7 @@
 const { ErrorProveedor } = require('./errores');
 const { prepararEntrada, validarResultado, ErrorValidacion } = require('./validacion');
 const { analizarCalidad, analizarRecuperable } = require('./calidad');
-const { crearRevisorIA, IRREPARABLES } = require('./revisionIA');
+const { crearRevisorIA, IRREPARABLES, INFIDELIDAD } = require('./revisionIA');
 const { obtenerProveedor } = require('./proveedores');
 const pipeline = require('./pipeline');
 const { estadoIAImagen } = require('../iaEstado');
@@ -52,6 +55,7 @@ const MENSAJES_FALLO = Object.freeze({
   proveedor_modelo: 'La IA no pudo procesar la foto: el modelo configurado en el servidor no está disponible. Avísale al administrador.',
   validacion: 'La versión mejorada no se parecía lo suficiente a tu foto, así que no la usamos.',
   calidad_resultado: 'Aun después de mejorarla con IA, la foto no alcanzó la calidad mínima para Bocara.',
+  fidelidad: 'La versión con IA cambió tu producto (por ejemplo, agregó o quitó ingredientes), así que no la usamos. Reintenta para generar otra versión.',
   interrumpido: 'El procesamiento se interrumpió.',
   descarga: 'No pudimos leer la foto subida.',
   interno: 'Ocurrió un error inesperado al procesar la foto.',
@@ -86,7 +90,7 @@ function pasoError(t) {
   if (t.estado === ESTADOS.RECHAZADA) return t.proveedor ? ESTADOS.VALIDANDO : ESTADOS.ANALIZANDO;
   if (t.estado !== ESTADOS.FALLIDA) return null;
   if (t.error_codigo === 'interrumpido') return /desde (\w+)/.exec(t.error || '')?.[1] || ESTADOS.ANALIZANDO;
-  if (t.error_codigo === 'validacion' || t.error_codigo === 'calidad_resultado' || t.calidad_resultado) return ESTADOS.VALIDANDO;
+  if (['validacion', 'calidad_resultado', 'fidelidad'].includes(t.error_codigo) || t.calidad_resultado) return ESTADOS.VALIDANDO;
   if (String(t.error_codigo || '').startsWith('proveedor') && t.proveedor) return ESTADOS.MEJORANDO;
   return ESTADOS.ANALIZANDO;
 }
@@ -252,19 +256,24 @@ async function procesarTrabajo(id, {
     let resultado;
     try {
       resultado = await conReintento(() => proveedor.mejorar({
-        buffer: prep.buffer, urlEntrada, urlOriginal: t.original_url, contexto: { trabajo: id, problemas: problemasPrevios },
+        buffer: prep.buffer, urlEntrada, urlOriginal: t.original_url,
+        // Comercial: formato estándar (≥ 1024 px) con el fondo extendido si hace falta.
+        contexto: { trabajo: id, problemas: problemasPrevios, encuadre: 'comercial' },
       }), dormir);
     } catch (err) {
       return await fallar(codigoProveedor(err), err.message);
     }
 
-    // 3. Validar el resultado y decidir.
+    // 3. Validar el resultado y decidir:
+    //    a) la comida (región de la foto original) sigue siendo la misma,
+    //    b) calidad y resolución publicables,
+    //    c) revisión IA comparando original vs. resultado: fiel y presentable.
     if (!(await mover(cliente, id, ESTADOS.MEJORANDO, { estado: ESTADOS.VALIDANDO }))) return null;
     estadoActual = ESTADOS.VALIDANDO;
     console.log('[IMAGEN_IA] %s validando resultado', id);
-    let fallo = null; // por qué la mejorada no sirve
+    let fallo = null; // por qué la mejorada no sirve (reintentable)
     let similitud = null;
-    try { similitud = await validarResultado(prep.buffer, resultado.buffer); } catch (err) {
+    try { similitud = await validarResultado(prep.buffer, resultado.buffer, { region: resultado.meta?.region || null }); } catch (err) {
       if (!(err instanceof ErrorValidacion)) throw err;
       fallo = { codigo: 'validacion', detalle: err.message, motivos: null, metricas: err.metricas || {} };
     }
@@ -276,44 +285,49 @@ async function procesarTrabajo(id, {
           motivos: calidadFinal.motivos, metricas: { ...similitud, ...calidadFinal.metricas } };
       }
     }
+    let revisionFinal = null;
+    let revisionIA = { modelo: revisor.modelo, resumen: revision.resumen, apta: revision.apta, problemas_previos: problemasPrevios };
+    if (!fallo) {
+      const metricas = { ...similitud, ...calidadFinal.metricas, meta_proveedor: resultado.meta || null };
+      try {
+        revisionFinal = await conReintento(() => revisor.revisar(resultado.buffer, { modo: 'resultado', original: prep.buffer }), dormir);
+      } catch (err) {
+        if (err instanceof ErrorProveedor) return await fallar(codigoProveedor(err), err.message, { calidad_resultado: metricas });
+        throw err;
+      }
+      revisionIA = { ...revisionIA, resultado: { apta: revisionFinal.apta, resumen: revisionFinal.resumen, problemas: revisionFinal.problemas.map((p) => p.codigo) } };
+      if (revisionFinal.infiel) {
+        // La IA cambió el producto (agregó/quitó ingredientes, cambió la cantidad):
+        // ese resultado nunca se publica. Reintentar genera otra versión.
+        const motivos = revisionFinal.problemas.filter((p) => INFIDELIDAD.has(p.codigo));
+        fallo = { codigo: 'fidelidad', detalle: motivos.map((m) => m.codigo).join(','), motivos, metricas };
+      } else if (!revisionFinal.apta) {
+        return await rechazar(revisionFinal.problemas, { calidad_resultado: metricas, revision_ia: revisionIA });
+      }
+    }
     if (fallo) {
       console.warn('[IMAGEN_IA] %s la mejorada no pasó la validación (%s): %s', id, fallo.codigo, fallo.detalle);
       // Fallback seguro: si la ORIGINAL ya cumplía todo (sin problemas en el
       // análisis ni en la revisión), se publica la original tal cual.
       if (!problemasPrevios.length && (await analizarCalidad(original, { nivel: 'publicable' })).ok) {
         await mover(cliente, id, ESTADOS.VALIDANDO, {
-          estado: ESTADOS.LISTA, mejorada_url: t.original_url,
+          estado: ESTADOS.LISTA, mejorada_url: t.original_url, revision_ia: revisionIA,
           calidad_resultado: { ...fallo.metricas, fallback_original: true, motivo_fallback: fallo.detalle },
         });
         console.log('[IMAGEN_IA] %s LISTA con la original (ya cumplía la calidad) en %d ms', id, Date.now() - inicio);
         return ESTADOS.LISTA;
       }
-      return await fallar(fallo.codigo, fallo.detalle, { motivos: fallo.motivos, calidad_resultado: fallo.metricas });
-    }
-
-    const metricasFinales = { ...similitud, ...calidadFinal.metricas, meta_proveedor: resultado.meta || null };
-    let revisionFinal;
-    try {
-      revisionFinal = await conReintento(() => revisor.revisar(resultado.buffer, { modo: 'resultado' }), dormir);
-    } catch (err) {
-      if (err instanceof ErrorProveedor) return await fallar(codigoProveedor(err), err.message, { calidad_resultado: metricasFinales });
-      throw err;
-    }
-    const revisionIA = {
-      modelo: revisor.modelo, resumen: revision.resumen, apta: revision.apta, problemas_previos: problemasPrevios,
-      resultado: { apta: revisionFinal.apta, resumen: revisionFinal.resumen, problemas: revisionFinal.problemas.map((p) => p.codigo) },
-    };
-    if (!revisionFinal.apta) {
-      return await rechazar(revisionFinal.problemas, { calidad_resultado: metricasFinales, revision_ia: revisionIA });
+      return await fallar(fallo.codigo, fallo.detalle, { motivos: fallo.motivos, calidad_resultado: fallo.metricas, revision_ia: revisionIA });
     }
 
     const ruta = `mejoradas/trabajos/${id}/${Date.now()}.webp`;
     const url = await almacenamiento.subir(ruta, resultado.buffer, resultado.contentType || 'image/webp');
     await mover(cliente, id, ESTADOS.VALIDANDO, {
       estado: ESTADOS.LISTA, mejorada_url: url, revision_ia: revisionIA,
-      calidad_resultado: { ...metricasFinales, ruta },
+      calidad_resultado: { ...similitud, ...calidadFinal.metricas, meta_proveedor: resultado.meta || null, ruta },
     });
-    console.log('[IMAGEN_IA] %s LISTA para publicar (%s, similitud %s) en %d ms', id, proveedor.nombre, similitud.similitud, Date.now() - inicio);
+    console.log('[IMAGEN_IA] %s LISTA para publicar (%s, %dx%d, similitud %s) en %d ms', id, proveedor.nombre,
+      calidadFinal.metricas.ancho, calidadFinal.metricas.alto, similitud.similitud, Date.now() - inicio);
     return ESTADOS.LISTA;
   } catch (err) {
     return fallar(err instanceof ErrorProveedor ? codigoProveedor(err) : 'interno', err.message);

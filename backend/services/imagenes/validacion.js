@@ -101,14 +101,28 @@ function diferenciaMedia(a, b) {
 }
 
 // Lanza ErrorValidacion si el resultado no debe publicarse. Devuelve métricas.
-async function validarResultado(entrada, resultado) {
+// `region` (fracciones 0–1, encuadre comercial): dónde quedó la foto original
+// dentro del resultado. La comparación se hace SOLO ahí: el fondo extendido
+// por la IA no cuenta, la comida tiene que seguir siendo la misma.
+async function validarResultado(entrada, resultadoCompleto, { region = null } = {}) {
   const u = umbrales();
+  const mCompleto = await sharp()(resultadoCompleto, { failOn: 'none' }).metadata().catch(() => ({}));
+  if (!mCompleto.width || !mCompleto.height) throw new ErrorValidacion('el resultado no es una imagen válida');
+  if (Math.min(mCompleto.width, mCompleto.height) < LADO_MIN_RESULTADO) throw new ErrorValidacion('resultado demasiado pequeño');
+  let resultado = resultadoCompleto;
+  if (region) {
+    const recorte = {
+      left: Math.max(0, Math.round(region.left * mCompleto.width)),
+      top: Math.max(0, Math.round(region.top * mCompleto.height)),
+    };
+    recorte.width = Math.min(mCompleto.width - recorte.left, Math.round(region.width * mCompleto.width));
+    recorte.height = Math.min(mCompleto.height - recorte.top, Math.round(region.height * mCompleto.height));
+    resultado = await sharp()(resultadoCompleto).extract(recorte).png().toBuffer();
+  }
   const [mE, mR] = await Promise.all([
     sharp()(entrada, { failOn: 'none' }).metadata(),
     sharp()(resultado, { failOn: 'none' }).metadata().catch(() => ({})),
   ]);
-  if (!mR.width || !mR.height) throw new ErrorValidacion('el resultado no es una imagen válida');
-  if (Math.min(mR.width, mR.height) < LADO_MIN_RESULTADO) throw new ErrorValidacion('resultado demasiado pequeño');
   const girada = (mE.orientation || 1) >= 5;
   const pE = girada ? mE.height / mE.width : mE.width / mE.height;
   const pR = mR.width / mR.height;
@@ -123,7 +137,7 @@ async function validarResultado(entrada, resultado) {
   const satE = saturacionMedia(e64), satR = saturacionMedia(r64);
   const diferencia = diferenciaMedia(e64, r64);
   const metricas = {
-    ancho: mR.width, alto: mR.height,
+    ancho: mCompleto.width, alto: mCompleto.height, ...(region ? { region_comparada: { ancho: mR.width, alto: mR.height } } : {}),
     similitud: Number(similitud.toFixed(3)),
     saturacion_original: Number(satE.toFixed(3)), saturacion_resultado: Number(satR.toFixed(3)),
     diferencia_media: Number(diferencia.toFixed(2)),

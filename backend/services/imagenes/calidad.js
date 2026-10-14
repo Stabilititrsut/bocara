@@ -5,9 +5,10 @@
 //                   borrosa, poca resolución…). NO decide el rechazo: esos
 //                   problemas se le pasan a la mejora con IA para que los
 //                   corrija. Solo lo IRREPARABLE frena antes de mejorar
-//                   (analizarRecuperable): archivo ilegible, resolución
-//                   absurdamente baja y una proporción que ningún retoque
-//                   corrige (la mejora conserva el encuadre).
+//                   (analizarRecuperable): archivo ilegible o resolución tan
+//                   baja que el producto no se reconoce. Poca resolución o una
+//                   proporción incómoda se corrigen: la IA entrega la foto en
+//                   un formato comercial estándar (≥ 1024 px).
 //   · 'publicable'→ ¿el RESULTADO mejorado es presentable? Umbrales más
 //                   exigentes de brillo, contraste y nitidez. Este sí bloquea.
 // La IA de revisión (revisionIA.js) cubre lo que estas métricas no ven
@@ -44,7 +45,8 @@ function umbralesCalidad() {
       quemadosMax: 0.45,
     },
     publicable: {
-      ladoMin: num('IMAGE_QUALITY_MIN_LADO', 600),
+      // Estándar de salida: los formatos de OpenAI dan 1024 px en el lado menor.
+      ladoMin: num('IMAGE_QUALITY_PUBLICABLE_MIN_LADO', 1024),
       proporcionMax: num('IMAGE_QUALITY_MAX_PROPORCION', 2.0),
       brilloMin: num('IMAGE_QUALITY_PUBLICABLE_MIN_BRILLO', 70),
       brilloMax: num('IMAGE_QUALITY_PUBLICABLE_MAX_BRILLO', 225),
@@ -60,7 +62,7 @@ function umbralesCalidad() {
 const MENSAJES = Object.freeze({
   ilegible: 'No pudimos leer la imagen (archivo dañado o no es una foto). Sube una foto JPG, PNG o WEBP.',
   resolucion: 'La foto tiene muy poca resolución. Usa una foto de al menos 600 px por lado.',
-  resolucion_irreparable: 'La foto es demasiado pequeña para poder mejorarla. Sube la foto original de la cámara, no una miniatura ni una captura.',
+  resolucion_irreparable: 'La foto es tan pequeña que no se reconoce el producto. Sube la foto original de la cámara, no una miniatura.',
   proporcion: 'La foto está muy alargada o mal recortada. Usa una foto cuadrada o 4:3 con el producto completo.',
   oscura: 'La foto está demasiado oscura: no se distingue el producto. Tómala con más luz.',
   quemada: 'La foto está sobreexpuesta (demasiado clara). Evita el flash directo o la luz de frente.',
@@ -144,10 +146,8 @@ async function analizarCalidad(buffer, { nivel = 'original' } = {}) {
 // Extremos que la mejora con IA no puede rescatar.
 function umbralesIrreparables() {
   return {
-    ladoMinAbsoluto: num('IMAGE_QUALITY_MIN_LADO_ABSOLUTO', 256),
-    // La mejora conserva la proporción: si el resultado no podrá pasar la
-    // regla 'publicable', no tiene sentido gastar IA en intentarlo.
-    proporcionMax: umbralesCalidad().publicable.proporcionMax,
+    // Por debajo de esto el producto no se reconoce: no hay información que mejorar.
+    ladoMinAbsoluto: num('IMAGE_QUALITY_MIN_LADO_ABSOLUTO', 200),
   };
 }
 
@@ -162,12 +162,12 @@ async function analizarRecuperable(buffer) {
   if (Math.min(r.metricas.ancho, r.metricas.alto) < u.ladoMinAbsoluto) {
     motivos.push({ codigo: 'resolucion_irreparable', mensaje: MENSAJES.resolucion_irreparable });
   }
-  if (r.metricas.proporcion > u.proporcionMax) motivos.push({ codigo: 'proporcion', mensaje: MENSAJES.proporcion });
   return {
     ok: motivos.length === 0,
     metricas: r.metricas,
     motivos,
-    problemas: r.motivos.filter((m) => m.codigo !== 'proporcion'),
+    // 'proporcion' y 'resolucion' NO frenan: la IA lleva la foto a un formato comercial (≥ 1024 px).
+    problemas: r.motivos,
   };
 }
 

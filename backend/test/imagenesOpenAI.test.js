@@ -293,3 +293,58 @@ test('OAI-12: el prompt exige mismo producto y prohíbe inventar; la clave nunca
   await env.procesar();
   assert.ok(!JSON.stringify(env.fila()).match(/sk-/), 'sin secretos en la fila');
 });
+
+test('OAI-COM: encuadre comercial — prompt comercial, lienzo COMPLETO ≥ 1024 px, región de la original y margen si viene cortada', async () => {
+  const { PROMPT_COMERCIAL } = require('../services/imagenes/prompts');
+  const falso = openaiFalso();
+  const proveedor = crearProveedorOpenAI({ cliente: falso.cliente });
+  const panoramica = await sharp(await escena(PLATO)).extract({ left: 0, top: 250, width: 900, height: 300 }).jpeg().toBuffer();
+  const r = await silenciar(() => proveedor.mejorar({ buffer: panoramica, contexto: { encuadre: 'comercial', problemas: ['proporcion'] } }));
+  const p = falso.llamadas[0];
+  assert.ok(p.prompt.startsWith(PROMPT_COMERCIAL), 'prompt comercial');
+  assert.match(p.prompt, /extend the background and surface/);
+  const meta = await sharp(r.buffer).metadata();
+  assert.deepEqual([meta.width, meta.height], [1536, 1024], 'lienzo completo, no recortado');
+  assert.equal(r.meta.encuadre, 'comercial');
+  assert.ok(r.meta.region.height < 1 && r.meta.region.width === 1, JSON.stringify(r.meta.region));
+
+  // Cortada / muy cerrada → entra con margen para recomponer.
+  const falso2 = openaiFalso();
+  const plato = await escena(PLATO);
+  const r2 = await silenciar(() => crearProveedorOpenAI({ cliente: falso2.cliente }).mejorar({ buffer: plato, contexto: { encuadre: 'comercial', problemas: ['recortada'] } }));
+  assert.ok(r2.meta.region.width < 0.9 && r2.meta.region.height < 0.9, JSON.stringify(r2.meta.region));
+  assert.match(falso2.llamadas[0].prompt, /never the food itself/);
+
+  // Sin encuadre comercial (fotos de negocio): igual que antes, recorta a la original.
+  const falso3 = openaiFalso();
+  const r3 = await silenciar(() => crearProveedorOpenAI({ cliente: falso3.cliente }).mejorar({ buffer: panoramica }));
+  assert.equal(falso3.llamadas[0].prompt, PROMPT_FOTO_COMIDA);
+  assert.equal(r3.meta.region, null);
+  const m3 = await sharp(r3.buffer).metadata();
+  assert.ok(Math.abs(m3.width / m3.height - 3) < 0.05, 'conserva la proporción 3:1');
+});
+
+test('OAI-COM: el prompt comercial prohíbe inventar comida en el fondo extendido y conserva el close-up', () => {
+  const { PROMPT_COMERCIAL } = require('../services/imagenes/prompts');
+  for (const frase of [
+    /Never place food, extra pieces, ingredients, garnishes, sauces, utensils, logos, labels or packaging in the extended area/,
+    /Keep the food inside the original rectangle exactly where it is/,
+    /leave it as a close-up/,
+    /A tight close-up of food is acceptable/,
+    /Do not add or remove any ingredient/,
+  ]) assert.match(PROMPT_COMERCIAL, frase);
+  assert.doesNotMatch(PROMPT_COMERCIAL, /do not crop, zoom, rotate or reframe/);
+});
+
+test('OAI-FID: input_fidelity "high" con modelos que lo admiten (gpt-image-1.5); nunca con *-mini; configurable', async () => {
+  const foto = await escena(PLATO);
+  const f1 = openaiFalso();
+  await silenciar(() => crearProveedorOpenAI({ cliente: f1.cliente, modelo: 'gpt-image-1.5' }).mejorar({ buffer: foto }));
+  assert.equal(f1.llamadas[0].input_fidelity, 'high');
+  const f2 = openaiFalso();
+  await silenciar(() => crearProveedorOpenAI({ cliente: f2.cliente, modelo: 'gpt-image-1-mini' }).mejorar({ buffer: foto }));
+  assert.ok(!('input_fidelity' in f2.llamadas[0]));
+  const f3 = openaiFalso();
+  await silenciar(() => crearProveedorOpenAI({ cliente: f3.cliente, modelo: 'gpt-image-1.5', fidelidad: 'low' }).mejorar({ buffer: foto }));
+  assert.equal(f3.llamadas[0].input_fidelity, 'low');
+});
