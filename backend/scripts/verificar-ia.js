@@ -1,83 +1,132 @@
 // Verificación de la IA de Bocara contra los servicios REALES (manual: no lo
 // corren los tests ni CI). Usa backend/.env.
-//   node scripts/verificar-ia.js            diagnóstico + prueba en vivo de Gemini y OpenAI
-//                                           + una descripción real con Gemini (costo ~0)
-//   node scripts/verificar-ia.js --imagen   además, el flujo completo de imagen con OpenAI
-//                                           (analizar → mejorar → validar; ~US$0.01–0.02)
-//   node scripts/verificar-ia.js --imagen ruta/a/foto.jpg   con una foto propia
-// Lo mismo, sin la mejora de imagen, responde GET /api/ia/status?probar=1.
-// Termina con código 1 si algo no está operativo.
+//   node scripts/verificar-ia.js                          infraestructura: diagnóstico + prueba en vivo
+//                                                         de Gemini y OpenAI + una descripción real
+//   node scripts/verificar-ia.js --imagen "C:\ruta\comida.jpg"
+//                                                         además, procesa ESA foto con el flujo real
+//                                                         de la app (~US$0.015 por foto)
+//   node scripts/verificar-ia.js --imagen                 igual, con una escena sintética interna
+//                                                         (no es una foto real: la revisión puede
+//                                                         rechazarla como no_es_comida, y está bien)
+//
+// Separa dos cosas que no son lo mismo:
+//   · Infraestructura IA: ¿responden Gemini y OpenAI? ¿hay claves y migraciones?
+//   · Resultado de la foto: lista / rechazada / no publicable según las reglas
+//     de calidad. Un rechazo (p. ej. no_es_comida) NO es una falla de la IA.
+// La foto se procesa con trabajos.procesarTrabajo (las MISMAS reglas que la
+// app) sobre una tabla en memoria: no toca la base de datos ni el Storage.
+// Código de salida: 1 solo si la infraestructura falla.
 require('dotenv').config();
 const fs = require('fs');
+const path = require('path');
 const { estadoCompleto } = require('../services/iaEstado');
 const textoIA = require('../services/text-ai');
-const { crearRevisorIA } = require('../services/imagenes/revisionIA');
-const { obtenerProveedor } = require('../services/imagenes/proveedores');
-const { analizarCalidad, analizarRecuperable } = require('../services/imagenes/calidad');
-const { prepararEntrada, validarResultado } = require('../services/imagenes/validacion');
+const trabajos = require('../services/imagenes/trabajos');
 
-const ok = (m) => console.log(`  ✅ ${m}`);
-const mal = (m) => console.log(`  ❌ ${m}`);
 const linea = (nombre, estado, motivo) => console.log(`  ${estado === 'OK' ? '✅' : '❌'} ${nombre}: ${estado}${motivo ? ` — ${motivo}` : ''}`);
 
-async function fotoDePrueba() {
-  const ruta = process.argv.find((a, i) => i > 1 && !a.startsWith('--'));
+// Fallos del trabajo que son de infraestructura; el resto es veredicto sobre la foto.
+const FALLOS_INFRA = new Set(['ia_no_configurada', 'proveedor', 'proveedor_sin_credito', 'proveedor_clave', 'proveedor_modelo', 'interno', 'interrumpido']);
+
+function rutaFoto() {
+  return process.argv.slice(2).find((a) => !a.startsWith('--')) || null;
+}
+
+async function fotoDePrueba(ruta) {
   if (ruta) return fs.readFileSync(ruta);
   const { escena, PLATO } = require('../test/helpers/escenaComida');
   return escena(PLATO);
 }
 
+// Corre el flujo real de la app sobre la foto, en memoria.
+async function procesarFoto(foto) {
+  const { crearFakeSupabase } = require('../test/helpers/fakeSupabase');
+  const HOST = 'verificacion.local';
+  const cliente = crearFakeSupabase({
+    trabajos_imagen: [{ id: 'verificacion', estado: 'subida', original_url: `https://${HOST}/original`, intentos: 0, usuario_id: 'local', negocio_id: 'local' }],
+  });
+  let mejorada = null;
+  const estado = await trabajos.procesarTrabajo('verificacion', {
+    cliente,
+    hosts: new Set([HOST]),
+    descargar: async () => ({ buffer: foto, contentType: 'application/octet-stream' }),
+    almacenamiento: { subir: async (ruta, buffer) => { mejorada = buffer; return `https://${HOST}/${ruta}`; } },
+  });
+  return { estado, trabajo: trabajos.serializar(cliente.tabla('trabajos_imagen')[0], { expone: true }), mejorada };
+}
+
 async function main() {
-  let fallas = 0;
-  console.log('\n[1] Diagnóstico (configuración + prueba en vivo)');
+  const infra = []; // motivos de falla de infraestructura
+
+  console.log('\n[1] Infraestructura (configuración + prueba en vivo)');
   const e = await estadoCompleto({ probar: true });
   linea('Gemini texto ', e.resumen.gemini_texto, e.texto.prueba?.motivo || e.texto.mensaje);
   linea('OpenAI imagen', e.resumen.openai_imagen, e.imagen.prueba?.motivo || e.imagen.mensaje);
   linea('Migraciones  ', e.resumen.migraciones === 'OK' ? 'OK' : 'ERROR', e.migraciones.mensaje);
-  console.log(`     modelos: texto=${e.modelos.texto} imagen=${e.modelos.imagen} revisión=${e.modelos.revision_imagen}`);
+  console.log(`     modelos: texto=${e.modelos.texto} (respaldo ${e.modelos.texto_respaldo || '-'}) imagen=${e.modelos.imagen} revisión=${e.modelos.revision_imagen}`);
   if (e.faltan_claves.length) console.log(`     faltan en backend/.env: ${e.faltan_claves.join(', ')}`);
-  if (Object.values(e.resumen).some((v) => v !== 'OK')) fallas += 1;
+  if (e.resumen.gemini_texto !== 'OK') infra.push(`Gemini: ${e.texto.prueba?.motivo || e.texto.mensaje}`);
+  if (e.resumen.openai_imagen !== 'OK') infra.push(`OpenAI: ${e.imagen.prueba?.motivo || e.imagen.mensaje}`);
+  if (e.resumen.migraciones !== 'OK') infra.push(e.migraciones.mensaje);
 
   console.log('\n[2] Descripción — Gemini (llamada real)');
-  if (e.resumen.gemini_texto !== 'OK') mal('omitido: Gemini no está operativo (ver [1])');
+  if (e.resumen.gemini_texto !== 'OK') console.log('  ⏭️  omitida: Gemini no está operativo (ver [1])');
   else {
     try {
       const { datos } = textoIA.validarEntrada({ tipo: 'bolsa', nombre: 'Hamburguesa con papas', descripcion: 'hamburguesa de res con papas fritas', precio_original: 60, precio_descuento: 35 });
       const r = await textoIA.generarDescripcion(datos);
-      ok(`"${r.descripcion}" (${r.meta.modelo}, ${r.meta.ms} ms)`);
-    } catch (err) { mal(`${err.codigo || ''} ${err.message}`); fallas += 1; }
-  }
-
-  if (process.argv.includes('--imagen')) {
-    console.log('\n[3] Imagen — flujo completo con OpenAI (llamadas reales, con costo)');
-    if (e.resumen.openai_imagen !== 'OK') mal('omitido: OpenAI no está operativo (ver [1])');
-    else {
-      try {
-        const foto = await fotoDePrueba();
-        const rec = await analizarRecuperable(foto);
-        if (!rec.ok) throw new Error(`rechazada antes de mejorar (irreparable): ${rec.motivos.map((m) => m.codigo).join(', ')}`);
-        ok(`analizada: recuperable; a corregir: [${rec.problemas.map((p) => p.codigo).join(', ')}]`);
-        const prep = await prepararEntrada(foto);
-        const revisor = crearRevisorIA();
-        const rev = await revisor.revisar(prep.buffer, { modo: 'original' });
-        if (rev.irreparable) throw new Error(`rechazada: ${rev.problemas.map((p) => p.codigo).join(', ')}`);
-        ok(`revisión original: apta=${rev.apta} [${rev.problemas.map((p) => p.codigo).join(', ')}] — ${rev.resumen}`);
-        const problemas = [...new Set([...rec.problemas, ...rev.problemas].map((p) => p.codigo))];
-        const proveedor = obtenerProveedor();
-        const r = await proveedor.mejorar({ buffer: prep.buffer, contexto: { problemas } });
-        fs.writeFileSync('verificacion-mejorada.webp', r.buffer);
-        ok(`mejorada con ${proveedor.nombre}/${proveedor.modelo} en ${r.meta?.ms} ms → verificacion-mejorada.webp`);
-        const val = await validarResultado(prep.buffer, r.buffer);
-        const pub = await analizarCalidad(r.buffer, { nivel: 'publicable' });
-        const fin = await revisor.revisar(r.buffer, { modo: 'resultado' });
-        const lista = pub.ok && fin.apta;
-        (lista ? ok : mal)(`validación: similitud=${val.similitud} publicable=${pub.ok ? 'sí' : pub.motivos.map((m) => m.codigo).join(',')} revisión final apta=${fin.apta} → ${lista ? 'LISTA PARA PUBLICAR' : 'NO PUBLICABLE'}`);
-        if (!lista) fallas += 1;
-      } catch (err) { mal(err.message); fallas += 1; }
+      console.log(`  ✅ "${r.descripcion}" (${r.meta.modelo}, ${r.meta.ms} ms)`);
+    } catch (err) {
+      console.log(`  ❌ ${err.codigo || ''} ${err.message}`);
+      infra.push(`Gemini (descripción): ${err.message}`);
     }
   }
-  console.log(fallas ? '\nResultado: HAY PIEZAS NO OPERATIVAS (ver ❌).\n' : '\nResultado: IA operativa.\n');
-  process.exit(fallas ? 1 : 0);
+
+  let resultadoFoto = null;
+  if (process.argv.includes('--imagen')) {
+    const ruta = rutaFoto();
+    console.log(`\n[3] Foto — flujo real de la app con OpenAI (llamadas reales, con costo)`);
+    console.log(`     foto: ${ruta ? path.resolve(ruta) : 'escena sintética interna (no es una foto real; pasa una ruta para probar comida real)'}`);
+    if (e.resumen.openai_imagen !== 'OK') {
+      console.log('  ⏭️  omitida: OpenAI no está operativo (ver [1])');
+      resultadoFoto = 'NO EVALUADA — OpenAI no operativo';
+    } else {
+      let foto;
+      try { foto = await fotoDePrueba(ruta); } catch (err) {
+        console.log(`  ❌ no se pudo leer la foto: ${err.message}`);
+        resultadoFoto = `NO EVALUADA — no se pudo leer ${ruta}`;
+      }
+      if (foto) {
+        const { estado, trabajo: t, mejorada } = await procesarFoto(foto);
+        const codigos = (t.motivos || []).map((m) => m.codigo).join(', ');
+        const mensajes = (t.motivos || []).map((m) => `       · ${m.mensaje}`).join('\n');
+        if (t.problemas_corregidos.length) console.log(`     problemas detectados en la original (a corregir con IA): ${t.problemas_corregidos.join(', ')}`);
+        if (estado === 'lista') {
+          if (mejorada) fs.writeFileSync('verificacion-mejorada.webp', mejorada);
+          resultadoFoto = t.usa_original
+            ? 'LISTA PARA PUBLICAR — se usa la original (ya cumplía; la versión IA no pasó la validación)'
+            : 'LISTA PARA PUBLICAR — mejorada guardada en verificacion-mejorada.webp';
+        } else if (estado === 'rechazada') {
+          resultadoFoto = `RECHAZADA en "${t.paso_error}" — ${codigos}`;
+          if (mensajes) console.log(mensajes);
+        } else if (estado === 'fallida' && FALLOS_INFRA.has(t.error_codigo)) {
+          infra.push(`OpenAI durante el procesamiento (${t.error_codigo}): ${t.detalle || t.error}`);
+          resultadoFoto = `NO EVALUADA — falla de infraestructura (${t.error_codigo})`;
+        } else {
+          // validacion / calidad_resultado / descarga: veredicto sobre la foto o el resultado.
+          resultadoFoto = `NO PUBLICABLE en "${t.paso_error}" (${t.error_codigo}) — ${t.error}${t.detalle ? ` [${t.detalle}]` : ''}`;
+          if (mensajes) console.log(mensajes);
+        }
+      }
+    }
+  }
+
+  console.log('\n──────────────────────────────────────────────');
+  console.log(`Infraestructura IA: ${infra.length ? 'ERROR' : 'OPERATIVA'}`);
+  for (const m of infra) console.log(`  · ${m}`);
+  if (resultadoFoto) console.log(`Resultado de la foto: ${resultadoFoto}`);
+  console.log('');
+  process.exit(infra.length ? 1 : 0);
 }
 
-main();
+main().catch((err) => { console.error('Error inesperado:', err); process.exit(1); });
