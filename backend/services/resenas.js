@@ -57,6 +57,28 @@ function esDuplicado(error) {
   return error?.code === '23505';
 }
 
+// Promedio y total de reseñas VISIBLES por negocio, para el panel admin
+// (/admin/negocios con filtro por mes). Mismo criterio que el trigger de la
+// base: las ocultas por moderación no cuentan. Promedio a 1 decimal; las
+// calificaciones fuera de 1–5 se ignoran.
+function resumirCalificacionesPorNegocio(resenas = []) {
+  const acc = new Map();
+  for (const r of resenas) {
+    if (!r || r.visible === false || !r.negocio_id) continue;
+    const c = Number(r.calificacion);
+    if (!Number.isInteger(c) || c < 1 || c > 5) continue;
+    const a = acc.get(r.negocio_id) || { suma: 0, total: 0 };
+    a.suma += c;
+    a.total += 1;
+    acc.set(r.negocio_id, a);
+  }
+  const resultado = {};
+  for (const [negocioId, { suma, total }] of acc) {
+    resultado[negocioId] = { promedio: Math.round((suma / total) * 10) / 10, total };
+  }
+  return resultado;
+}
+
 module.exports = {
   MAX_COMENTARIO,
   MAX_RESPUESTA,
@@ -67,4 +89,5 @@ module.exports = {
   validarRespuesta,
   validarModeracion,
   esDuplicado,
+  resumirCalificacionesPorNegocio,
 };

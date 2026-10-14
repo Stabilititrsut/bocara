@@ -12,7 +12,7 @@ const {
   planParaNegocio, crearLiquidacionMensual, guardarComprobanteSeguro, urlFirmadaComprobante,
   ventanaLiquidacion, puedeForzarVentana, MENSAJE_FUERA_DE_VENTANA,
 } = require('../services/liquidaciones');
-const { validarModeracion } = require('../services/resenas');
+const { validarModeracion, resumirCalificacionesPorNegocio } = require('../services/resenas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
@@ -466,7 +466,8 @@ router.put('/negocios/:id/toggle', authMiddleware, adminOnly, async (req, res) =
 
 // GET /api/admin/financiero?periodo=hoy|7d|30d|mes|todo[&mes=AAAA-MM]
 // Resumen por restaurante ("Top restaurantes"), con desglose Tiempo Limitado
-// (25%) vs Promoción (20%). Los rangos se cortan en hora de Guatemala.
+// (25%) vs Promoción (20%) y tarifa de servicio (3.5%). Los rangos se cortan
+// en hora de Guatemala.
 router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
   const rango = resolverPeriodoFinanciero(req.query, { porDefecto: 'todo' });
   if (rango.error) return res.status(400).json({ error: rango.error });
@@ -576,6 +577,11 @@ router.get('/financiero', authMiddleware, adminOnly, async (req, res) => {
     ventas_promocion: d.ventas_promocion,
     comision_bocara_tiempo_limitado: d.comision_tiempo_limitado,
     comision_bocara_promocion: d.comision_promocion,
+    // Tarifa de servicio al cliente (3.5% del subtotal) y comisión total Bocara
+    // = TL + Promo + 3.5% — la misma suma que resumen_financiero.total_bocara de
+    // GET /admin/stats, para que la tabla y el Resumen financiero cuadren 1:1.
+    cargo_plataforma: d.cargo_plataforma,
+    comision_total_bocara: d.total_bocara,
     neto_restaurante: d.pago_restaurante,
     total: d.total_cobrado,
   });
@@ -952,6 +958,30 @@ router.get('/resenas', authMiddleware, adminOnly, async (req, res) => {
   const { data, error } = await q;
   if (error) return res.status(500).json({ error: error.message });
   res.json(data || []);
+});
+
+// GET /api/admin/resenas/resumen[?mes=AAAA-MM] — promedio y total de reseñas
+// visibles por negocio. Con `mes`, solo las reseñas creadas ese mes (hora de
+// Guatemala); sin él, el histórico completo. Para /admin/negocios.
+const PAGINA_RESENAS = 1000;
+router.get('/resenas/resumen', authMiddleware, adminOnly, async (req, res) => {
+  let rango = { desde: null, hasta: null };
+  if (req.query.mes) {
+    rango = resolverPeriodoFinanciero({ periodo: 'mes_especifico', mes: req.query.mes });
+    if (rango.error) return res.status(400).json({ error: rango.error });
+  }
+  // Paginado: PostgREST corta en 1000 filas por respuesta.
+  const resenas = [];
+  for (let desde = 0; ; desde += PAGINA_RESENAS) {
+    const { data, error } = await aplicarRango(
+      supabase.from('resenas').select('negocio_id,calificacion,visible,created_at').eq('visible', true),
+      rango,
+    ).order('created_at', { ascending: true }).range(desde, desde + PAGINA_RESENAS - 1);
+    if (error) return res.status(500).json({ error: error.message });
+    resenas.push(...(data || []));
+    if (!data || data.length < PAGINA_RESENAS) break;
+  }
+  res.json({ mes: rango.mes || null, negocios: resumirCalificacionesPorNegocio(resenas) });
 });
 
 // PATCH /api/admin/resenas/:id/moderar — { visible: boolean, motivo }

@@ -144,6 +144,50 @@ test('Promociones (cliente): cada foco vuelve a pedir GET /bolsas?tipo=cupon', a
   assert.equal(llamadas, 2, 'al volver a la pestaña tras una aprobación');
 });
 
+// Píldoras de categoría de Tiendas: en web salían aplastadas, sin texto visible
+// o con fondo transparente. Se revisan los estilos que lo evitan con la paleta real.
+test('Tiendas (cliente): las píldoras de categoría tienen altura fija, fondo sólido y texto legible', () => {
+  const { Colors } = load('constants/Colors.ts', {});
+  const app = montar('app/(tabs)/tiendas.tsx', {
+    forcedStates: [[], new Set(), false, false, 'Panadería'], // negocios, favIds, loading, refreshing, catFilter
+    mocks: {
+      '@/constants/Colors': { Colors },
+      '@/src/services/api': { negociosAPI: { feed: async () => ({ data: [] }) }, favoritosAPI: { listar: async () => ({ data: [] }) } },
+    },
+  });
+  const plano = (st) => Object.assign({}, ...[st].flat(Infinity).filter(Boolean));
+  const nodos = walk(app.tree);
+  const scroll = nodos.find(n => n.type === 'ScrollView' && n.props.horizontal);
+  assert.ok(scroll, 'fila horizontal de filtros');
+  assert.equal(plano(scroll.props.style).flexShrink, 0, 'el ScrollView horizontal no debe encogerse');
+  const fila = nodos.find(n => n.type === 'View' && [n.props.children].flat().includes(scroll));
+  const estiloFila = plano(fila.props.style);
+  assert.ok(estiloFila.height >= 44 && estiloFila.flexShrink === 0, 'contenedor de altura fija que no se aplasta');
+
+  const luminancia = (hex) => {
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contraste = (a, b) => { const [x, y] = [luminancia(a), luminancia(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+
+  const chips = scroll.props.children.flat();
+  assert.equal(chips.length, 9);
+  for (const chip of chips) {
+    const ec = plano(chip.props.style);
+    const texto = [chip.props.children].flat().find(n => n?.type === 'Text');
+    const et = plano(texto.props.style);
+    const nombre = textOf(texto);
+    assert.ok(nombre.trim(), 'cada píldora muestra su texto');
+    assert.equal(texto.props.numberOfLines, 1, `${nombre}: una sola línea`);
+    assert.ok(/^#[0-9A-F]{6}$/i.test(ec.backgroundColor || ''), `${nombre}: fondo sólido, no transparente`);
+    assert.ok(ec.height >= 32 && ec.flexShrink === 0, `${nombre}: altura mínima y sin encogerse`);
+    assert.ok(contraste(et.color, ec.backgroundColor) >= 4.5, `${nombre}: contraste de texto insuficiente`);
+  }
+  const activa = chips.find(c => textOf(c).includes('Panadería'));
+  assert.equal(plano(activa.props.style).backgroundColor, Colors.primary, 'la categoría elegida se resalta');
+});
+
 test('Tiendas (cliente): cada foco vuelve a pedir el feed de negocios', async () => {
   let llamadas = 0;
   const app = montar('app/(tabs)/tiendas.tsx', { mocks: {

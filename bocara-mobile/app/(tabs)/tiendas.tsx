@@ -84,24 +84,34 @@ export default function TiendasScreen() {
         </View>
       </View>
 
-      {/* Filtros de categoría */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={s.filterRow}
-        contentContainerStyle={s.filterContent}
-      >
-        {CATEGORIAS_FILTER.map(cat => (
-          <TouchableOpacity
-            key={cat}
-            style={[s.chip, catFilter === cat && s.chipActive]}
-            onPress={() => setCatFilter(cat)}
-            activeOpacity={0.8}
-          >
-            <Text style={[s.chipText, catFilter === cat && s.chipTextActive]}>{cat}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      {/* Filtros de categoría. El contenedor tiene altura fija y no se encoge:
+          un ScrollView horizontal como hijo directo de la columna (con solo
+          maxHeight) en react-native-web hereda flexShrink y la lista de abajo
+          lo aplastaba hasta dejar las píldoras sin texto visible. */}
+      <View style={s.filterRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={s.filterScroll}
+          contentContainerStyle={s.filterContent}
+        >
+          {CATEGORIAS_FILTER.map(cat => {
+            const activo = catFilter === cat;
+            return (
+              <TouchableOpacity
+                key={cat}
+                style={[s.chip, activo && s.chipActive]}
+                onPress={() => setCatFilter(cat)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: activo }}
+              >
+                <Text style={[s.chipText, activo && s.chipTextActive]} numberOfLines={1}>{cat}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      </View>
 
       <ScrollView
         contentContainerStyle={s.scroll}
@@ -226,11 +236,19 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 28, fontWeight: '900', color: Colors.textPrimary, letterSpacing: -0.5 },
   headerSub: { fontSize: 13, color: Colors.textSecondary, marginTop: 3 },
 
-  filterRow: { maxHeight: 52, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  filterContent: { paddingHorizontal: 20, paddingVertical: 10, gap: 8 },
-  chip: { borderWidth: 1.5, borderColor: Colors.border, borderRadius: 50, paddingHorizontal: 16, paddingVertical: 7 },
+  filterRow: {
+    height: 58, flexShrink: 0, justifyContent: 'center',
+    backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border,
+  },
+  filterScroll: { flexGrow: 0, flexShrink: 0 },
+  filterContent: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 8 },
+  chip: {
+    flexShrink: 0, height: 36, minWidth: 64, justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 16, borderRadius: 18, borderWidth: 1.5,
+    borderColor: Colors.border, backgroundColor: Colors.surface,
+  },
   chipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  chipText: { fontSize: 12, color: Colors.textSecondary, fontWeight: '600' },
+  chipText: { fontSize: 13, lineHeight: 18, color: Colors.textPrimary, fontWeight: '600', textAlign: 'center' },
   chipTextActive: { color: Colors.white, fontWeight: '700' },
 
   scroll: { padding: 16 },

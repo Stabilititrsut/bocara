@@ -6,6 +6,8 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
+import CalendarioPicker from '@/components/CalendarioPicker';
+import { mesEnCurso, nombreMes } from '@/components/SelectorPeriodo';
 
 const BG     = '#F8FAFC';
 const CARD   = '#FFFFFF';
@@ -15,6 +17,8 @@ const TEXT2  = '#6B7280';
 const GOLD   = '#E8820C';
 
 type Filtro = 'todos' | 'pendientes' | 'verificados' | 'suspendidos' | 'inactivos';
+type PeriodoResenas = 'mes' | 'todo';
+type ResumenResena = { promedio: number; total: number };
 
 export default function AdminNegociosScreen() {
   const router = useRouter();
@@ -32,6 +36,13 @@ export default function AdminNegociosScreen() {
   const [rechazarModal, setRechazarModal] = useState<any>(null);
   const [motivoRechazo, setMotivoRechazo] = useState('');
 
+  // Promedio de reseñas por negocio: mes en curso por defecto, meses
+  // históricos con el selector, o el histórico completo.
+  const [periodoResenas, setPeriodoResenas] = useState<PeriodoResenas>('mes');
+  const [mesResenas, setMesResenas] = useState<string>(() => mesEnCurso());
+  const [resenas, setResenas] = useState<Record<string, ResumenResena> | null>(null);
+  const [cargandoResenas, setCargandoResenas] = useState(false);
+
   const cargar = useCallback(async () => {
     try {
       const res = await adminAPI.negocios();
@@ -40,6 +51,29 @@ export default function AdminNegociosScreen() {
   }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  useEffect(() => {
+    let vigente = true;
+    setCargandoResenas(true);
+    adminAPI.resenasResumen(periodoResenas === 'mes' ? mesResenas : undefined)
+      .then((res) => { if (vigente) setResenas(res.data?.negocios || {}); })
+      .catch(() => { if (vigente) setResenas(null); })
+      .finally(() => { if (vigente) setCargandoResenas(false); });
+    return () => { vigente = false; };
+  }, [periodoResenas, mesResenas]);
+
+  const etiquetaResenas = periodoResenas === 'mes'
+    ? (mesResenas === mesEnCurso() ? `mes en curso (${nombreMes(mesResenas)})` : nombreMes(mesResenas))
+    : 'histórico';
+  // Sin respuesta del resumen (error de red o backend anterior), el
+  // histórico cae al promedio guardado en el negocio.
+  const resenaDe = (n: any): ResumenResena | null => {
+    if (resenas) return resenas[n.id] || null;
+    if (periodoResenas === 'todo' && n.calificacion_promedio) {
+      return { promedio: Number(n.calificacion_promedio), total: Number(n.total_resenas) || 0 };
+    }
+    return null;
+  };
 
   async function aprobar(n: any) {
     setProcesando(n.id);
@@ -146,6 +180,34 @@ export default function AdminNegociosScreen() {
         ))}
       </View>
 
+      {/* Reseñas: periodo del promedio mostrado en cada tarjeta */}
+      <View style={s.resenasBar}>
+        <Text style={s.resenasBarLabel}>⭐ Reseñas</Text>
+        {([['mes', 'Por mes'], ['todo', 'Histórico']] as [PeriodoResenas, string][]).map(([p, label]) => (
+          <TouchableOpacity
+            key={p}
+            style={[s.chip, periodoResenas === p && s.chipActive]}
+            onPress={() => setPeriodoResenas(p)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: periodoResenas === p }}
+          >
+            <Text style={[s.chipText, periodoResenas === p && s.chipTextActive]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+        {periodoResenas === 'mes' && (
+          <View style={s.resenasMes}>
+            <CalendarioPicker
+              label="Mes"
+              modo="mes"
+              value={mesResenas}
+              maxDate={mesEnCurso()}
+              onChange={(mes) => { if (mes) setMesResenas(mes); }}
+            />
+          </View>
+        )}
+        {cargandoResenas && <ActivityIndicator color={GOLD} size="small" />}
+      </View>
+
       <ScrollView
         contentContainerStyle={s.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={GOLD} />}
@@ -175,10 +237,18 @@ export default function AdminNegociosScreen() {
                 <Text style={s.meta}>{[n.categoria, n.zona && `Zona ${n.zona}`, n.ciudad].filter(Boolean).join(' · ')}</Text>
                 {n.telefono && <Text style={s.meta}>{n.telefono}</Text>}
                 {n.email && <Text style={s.meta}>{n.email}</Text>}
-                <Text style={s.stats}>
-                  {n.total_bolsas_vendidas || 0} vendidas
-                  {n.calificacion_promedio ? `  ·  ★ ${n.calificacion_promedio.toFixed(1)}` : ''}
-                </Text>
+                <Text style={s.stats}>{n.total_bolsas_vendidas || 0} vendidas</Text>
+                {(() => {
+                  const r = resenaDe(n);
+                  return (
+                    <View style={s.resenaChip}>
+                      <Text style={s.resenaPromedio}>{r ? `★ ${r.promedio.toFixed(1)}` : '★ —'}</Text>
+                      <Text style={s.resenaDetalle}>
+                        {r ? `${r.total} reseña${r.total !== 1 ? 's' : ''}` : 'Sin reseñas'} · {etiquetaResenas}
+                      </Text>
+                    </View>
+                  );
+                })()}
               </View>
               <View style={{ alignItems: 'flex-end', gap: 5 }}>
                 {n.verificado
@@ -273,6 +343,13 @@ const s = StyleSheet.create({
   chipActive:   { backgroundColor: GOLD, borderColor: GOLD },
   chipText:     { fontSize: 12, color: TEXT2, fontWeight: '600' },
   chipTextActive: { color: '#fff', fontWeight: '800' },
+
+  resenasBar:      { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingHorizontal: 14, marginBottom: 8 },
+  resenasBarLabel: { fontSize: 12, color: TEXT, fontWeight: '700' },
+  resenasMes:      { minWidth: 180, maxWidth: 260, flexGrow: 1 },
+  resenaChip:      { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, marginTop: 6, backgroundColor: '#FFF7ED', borderRadius: 10, borderWidth: 1, borderColor: '#FED7AA', paddingHorizontal: 8, paddingVertical: 3 },
+  resenaPromedio:  { fontSize: 12, fontWeight: '800', color: '#9A3412' },
+  resenaDetalle:   { fontSize: 11, color: '#9A3412' },
 
   scroll:  { padding: 14 },
   count:   { fontSize: 11, color: TEXT2, marginBottom: 10, fontWeight: '600' },

@@ -78,6 +78,11 @@ export default function AdminLiquidacionesScreen() {
     const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
     return `${MESES[Number(mes.slice(5, 7)) - 1] || mes} ${mes.slice(0, 4)}`;
   };
+  // Comisión total que Bocara genera con el comercio: comisión de productos
+  // (25% / 20%) + tarifa de servicio cobrada al cliente (3.5%). Respaldo para
+  // un backend sin comisionTotalBocara.
+  const servicioAcum = (r: any): number => r?.cargoPlataforma || 0;
+  const comisionTotalAcum = (r: any): number => r?.comisionTotalBocara ?? ((r?.comisionBocara || 0) + servicioAcum(r));
   const montoPagable = (r: any): number => fueraDeVentana
     ? (r.liquidaciones_pendientes || []).reduce((s: number, l: any) => s + (l.monto || 0), 0)
     : r.neto;
@@ -151,14 +156,17 @@ export default function AdminLiquidacionesScreen() {
                             <Text style={s.acumVal}>Q{r.bruto.toFixed(2)}</Text>
                           </View>
                           <View style={s.acumCifra}>
-                            <Text style={s.acumLabel}>Comisión Bocara</Text>
-                            <Text style={[s.acumVal, { color: Colors.orange }]}>Q{r.comisionBocara.toFixed(2)}</Text>
+                            <Text style={s.acumLabel}>Comisión total Bocara</Text>
+                            <Text style={[s.acumVal, { color: Colors.orange }]}>Q{comisionTotalAcum(r).toFixed(2)}</Text>
                           </View>
                           <View style={s.acumCifra}>
                             <Text style={s.acumLabel}>Saldo neto</Text>
                             <Text style={[s.acumVal, { color: Colors.green }]}>Q{r.neto.toFixed(2)}</Text>
                           </View>
                         </View>
+                        <Text style={s.acumNota}>
+                          Comisión productos Q{r.comisionBocara.toFixed(2)} + servicio 3.5% Q{servicioAcum(r).toFixed(2)} (lo paga el cliente, no se descuenta del saldo neto).
+                        </Text>
                         {r.pedidos_en_curso > 0 && (
                           <Text style={s.acumNota}>
                             Incluye {r.pedidos_en_curso} pedido{r.pedidos_en_curso !== 1 ? 's' : ''} aún sin entregar (Q{r.neto_en_curso.toFixed(2)}).
@@ -178,14 +186,17 @@ export default function AdminLiquidacionesScreen() {
                           <Text style={s.acumVal}>Q{acumulado.totales.bruto.toFixed(2)}</Text>
                         </View>
                         <View style={s.acumCifra}>
-                          <Text style={s.acumLabel}>Total comisión</Text>
-                          <Text style={[s.acumVal, { color: Colors.orange }]}>Q{acumulado.totales.comisionBocara.toFixed(2)}</Text>
+                          <Text style={s.acumLabel}>Total comisión Bocara</Text>
+                          <Text style={[s.acumVal, { color: Colors.orange }]}>Q{comisionTotalAcum(acumulado.totales).toFixed(2)}</Text>
                         </View>
                         <View style={s.acumCifra}>
                           <Text style={s.acumLabel}>Total neto</Text>
                           <Text style={[s.acumVal, { color: Colors.green }]}>Q{acumulado.totales.neto.toFixed(2)}</Text>
                         </View>
                       </View>
+                      <Text style={s.acumNota}>
+                        Comisión productos Q{acumulado.totales.comisionBocara.toFixed(2)} + servicio 3.5% Q{servicioAcum(acumulado.totales).toFixed(2)}.
+                      </Text>
                     </View>
                   </>
                 )}

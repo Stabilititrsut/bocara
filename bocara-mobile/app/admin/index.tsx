@@ -36,7 +36,7 @@ const q = (v: number | null | undefined) => `Q${(v || 0).toFixed(2)}`;
 // Columnas de "Top restaurantes": ancho FIJO por columna (mismo valor en
 // encabezado y filas, así nunca se desalinean) y sin `flex` — en
 // react-native-web, `flex: 1` deja flexBasis 0% y las columnas colapsaban a
-// ancho 0, encimando todos los textos. Suman 950; la tabla mide al menos
+// ancho 0, encimando todos los textos. Suman 1035; la tabla mide al menos
 // ANCHO_MIN_TABLA y lo que sobra se lo lleva la columna Restaurante.
 type AlineacionCol = 'left' | 'center' | 'right';
 const COL_TOP = {
@@ -44,11 +44,12 @@ const COL_TOP = {
   unidades: { ancho: 70,  align: 'center' as AlineacionCol },
   ventas:   { ancho: 85,  align: 'right' as AlineacionCol },
   comision: { ancho: 90,  align: 'right' as AlineacionCol },
+  servicio: { ancho: 85,  align: 'right' as AlineacionCol },
   neto:     { ancho: 90,  align: 'right' as AlineacionCol },
   comTotal: { ancho: 100, align: 'right' as AlineacionCol },
   total:    { ancho: 90,  align: 'right' as AlineacionCol },
 };
-const ANCHO_MIN_TABLA = 1000;
+const ANCHO_MIN_TABLA = 1085;
 
 function Celda({ col, children, encabezado, crecer, estilo }: {
   col: { ancho: number; align: AlineacionCol };
@@ -232,10 +233,18 @@ export default function AdminDashboard() {
   // Serie del mismo periodo que las tarjetas (GET /admin/stats → serie_cobrado).
   const chartData = ((stats?.serie_cobrado || []) as { clave: string; etiqueta: string; valor: number }[])
     .map((d) => ({ key: d.clave, label: d.etiqueta, value: d.valor }));
-  // Comisión Bocara de una fila (o de los totales) de Top: TL (25%) + Promo (20%).
-  const comisionTotalTop = (r: any) => r?.comision_bocara_tiempo_limitado != null
-    ? (r.comision_bocara_tiempo_limitado || 0) + (r.comision_bocara_promocion || 0)
-    : (r?.comisionBocara || 0);
+  // Tarifa de servicio cobrada al cliente (3.5% del subtotal) de una fila de Top.
+  const servicioTop = (r: any) => r?.cargo_plataforma ?? r?.cargoPlataforma ?? 0;
+  // Comisión Total Bocara de una fila (o de los totales) de Top:
+  // TL (25%) + Promo (20%) + servicio (3.5%) — la misma suma que "Total Bocara
+  // (comisiones + 3.5%)" del Resumen financiero, así cuadran 1:1 a igual periodo.
+  const comisionTotalTop = (r: any) => {
+    if (r?.comision_total_bocara != null) return r.comision_total_bocara;
+    const productos = r?.comision_bocara_tiempo_limitado != null
+      ? (r.comision_bocara_tiempo_limitado || 0) + (r.comision_bocara_promocion || 0)
+      : (r?.comisionBocara || 0);
+    return productos + servicioTop(r);
+  };
 
   return (
     <SafeAreaView style={s.root}>
@@ -358,7 +367,7 @@ export default function AdminDashboard() {
         <Text style={s.sectionTitle}>Top restaurantes — {tituloTop}</Text>
         <SelectorPeriodo valor={periodoTop} onChange={setPeriodoTop} />
         <View style={[card(), { marginBottom: 20, overflow: 'hidden' }]}>
-          {/* 10 columnas: scroll horizontal para que quepan en el teléfono. */}
+          {/* 11 columnas: scroll horizontal para que quepan en el teléfono. */}
           <ScrollView horizontal showsHorizontalScrollIndicator={true} contentContainerStyle={{ minWidth: ANCHO_MIN_TABLA }}>
             <View style={{ minWidth: ANCHO_MIN_TABLA, flexGrow: 1 }}>
               <View style={s.tablaFilaHead}>
@@ -369,6 +378,7 @@ export default function AdminDashboard() {
                 <Celda col={COL_TOP.ventas} encabezado>Ventas Promo</Celda>
                 <Celda col={COL_TOP.comision} encabezado>{`Com. TL (${pctTL})`}</Celda>
                 <Celda col={COL_TOP.comision} encabezado>{`Com. Promo (${pctPromo})`}</Celda>
+                <Celda col={COL_TOP.servicio} encabezado>Servicio (3.5%)</Celda>
                 <Celda col={COL_TOP.comTotal} encabezado>Comisión Total Bocara</Celda>
                 <Celda col={COL_TOP.neto} encabezado>Neto Rest.</Celda>
                 <Celda col={COL_TOP.total} encabezado>Total</Celda>
@@ -400,6 +410,7 @@ export default function AdminDashboard() {
                     <Celda col={COL_TOP.ventas} estilo={{ color: TEXT }}>{q(r.ventas_promocion)}</Celda>
                     <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_tiempo_limitado ?? r.comisionBocara)}</Celda>
                     <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '700' }}>{q(r.comision_bocara_promocion)}</Celda>
+                    <Celda col={COL_TOP.servicio} estilo={{ color: GOLD, fontWeight: '700' }}>{q(servicioTop(r))}</Celda>
                     <Celda col={COL_TOP.comTotal} estilo={{ color: GOLD, fontWeight: '900' }}>{q(comisionTotalTop(r))}</Celda>
                     <Celda col={COL_TOP.neto} estilo={{ color: GREEN, fontWeight: '700' }}>{q(r.neto_restaurante ?? r.neto)}</Celda>
                     <Celda col={COL_TOP.total} estilo={{ color: TEXT, fontWeight: '700' }}>{q(r.total ?? r.totalCobrado)}</Celda>
@@ -417,6 +428,7 @@ export default function AdminDashboard() {
                   <Celda col={COL_TOP.ventas} estilo={{ color: TEXT, fontWeight: '700' }}>{q(totalesTop.ventas_promocion)}</Celda>
                   <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '800' }}>{q(totalesTop.comision_bocara_tiempo_limitado ?? totalesTop.comisionBocara)}</Celda>
                   <Celda col={COL_TOP.comision} estilo={{ color: GOLD, fontWeight: '800' }}>{q(totalesTop.comision_bocara_promocion)}</Celda>
+                  <Celda col={COL_TOP.servicio} estilo={{ color: GOLD, fontWeight: '800' }}>{q(servicioTop(totalesTop))}</Celda>
                   <Celda col={COL_TOP.comTotal} estilo={{ color: GOLD, fontWeight: '900' }}>{q(comisionTotalTop(totalesTop))}</Celda>
                   <Celda col={COL_TOP.neto} estilo={{ color: GREEN, fontWeight: '800' }}>{q(totalesTop.neto_restaurante ?? totalesTop.neto)}</Celda>
                   <Celda col={COL_TOP.total} estilo={{ color: TEXT, fontWeight: '800' }}>{q(totalesTop.total ?? totalesTop.totalCobrado)}</Celda>
