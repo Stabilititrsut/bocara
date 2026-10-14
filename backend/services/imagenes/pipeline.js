@@ -24,6 +24,10 @@ const ESTADOS = Object.freeze({
   FALLIDA: 'fallida', DESCARTADA: 'descartada',
 });
 const TABLAS = new Set(['bolsas', 'negocios']);
+// La cola en segundo plano solo procesa fotos de NEGOCIOS. Las de publicaciones
+// se validan antes de guardar con un trabajo (trabajos.js), que además exige
+// calidad mínima: procesarlas aquí permitiría una foto sin ese análisis.
+const TABLAS_COLA = Object.freeze(['negocios']);
 const MAX_INTENTOS = 3;
 const ESPERA_REINTENTO_MS = 2 * 60 * 1000;
 const ABANDONO_MS = 10 * 60 * 1000;
@@ -211,7 +215,7 @@ async function procesarFila(tabla, id, {
 async function procesarPendientes({ cliente = db(), limite = 5, ahora = Date.now(), ...opts } = {}) {
   const resumen = { procesadas: 0, completadas: 0, fallidas: 0 };
   if (!pipelineActivo()) return resumen;
-  for (const tabla of TABLAS) {
+  for (const tabla of TABLAS_COLA) {
     const limiteAbandono = new Date(ahora - ABANDONO_MS).toISOString();
     await cliente.from(tabla).update({ estado_procesamiento_imagen: ESTADOS.PENDIENTE })
       .eq('estado_procesamiento_imagen', ESTADOS.PROCESANDO).lt('imagen_procesamiento_iniciado_at', limiteAbandono);
@@ -306,7 +310,8 @@ async function usarMejorada(tabla, id, { cliente = db() } = {}) {
 
 module.exports = {
   ESTADOS, MAX_INTENTOS, ESPERA_REINTENTO_MS, ABANDONO_MS,
-  origenPermitido, esFotoNueva, pipelineActivo,
+  origenPermitido, hostsPermitidos, esFotoNueva, pipelineActivo,
+  descargadorPorDefecto, almacenamientoPorDefecto, MAX_BYTES_ORIGINAL,
   solicitarMejora, procesarFila, procesarPendientes, programarMejora, esperarMejorasEnCurso,
   reintentar, usarOriginal, usarMejorada,
 };

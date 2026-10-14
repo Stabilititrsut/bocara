@@ -18,7 +18,14 @@ const {
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { MENSAJE_FOTO_PUBLICACION, tieneFoto, normalizarFotoEnEdicion } = require('../services/fotoObligatoria');
 const { MENSAJE_ENLACES_MAPA, tieneEnlacesMapa } = require('../services/enlacesMapa');
-const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
+const { esFotoNueva } = require('../services/imagenes/pipeline');
+const {
+  trabajoParaPublicar, columnasImagenValidada, bolsaTieneImagenValidada, marcarUsado, CODIGOS_PUBLICAR,
+} = require('../services/imagenes/trabajos');
+
+// Una columna del pipeline de imágenes ausente = migración sin aplicar.
+const RE_COLUMNA_IMAGEN = /imagen_original_url|imagen_mejorada_url|estado_procesamiento_imagen|proveedor_imagen_ia|imagen_procesamiento_meta|imagen_procesada_at|error_procesamiento_imagen/;
+const MENSAJE_MIGRACION_IMAGEN = 'No se puede guardar la foto validada: falta aplicar la migración 20261006100000_pipeline_imagenes.sql.';
 const {
   TIPOS_PUBLICACION, MOTIVOS_NO_VISIBLE, motivosNoVisible, filtrarVisiblesParaCliente, decidirRevision,
   estaEliminada, activarSinAprobacionEsInvalido,
@@ -419,10 +426,9 @@ router.post('/', authMiddleware, async (req, res) => {
   // Foto obligatoria para toda publicación nueva (Promoción y Tiempo
   // limitado) — el formulario ya la exige, pero el backend no confía en eso.
   // null, '' y solo espacios cuentan como "sin foto" (services/fotoObligatoria.js).
-  if (!tieneFoto(imagen_url)) {
+  if (!tieneFoto(imagen_url) && !req.body.imagen_trabajo_id) {
     return res.status(400).json({ error: MENSAJE_FOTO_PUBLICACION });
   }
-  const imagenFinal = imagen_url.trim();
   const tipoFinal = tipo || 'bolsa';
   // Promoción nunca tiene fecha fin: se publica desde fecha_disponible y su
   // disponibilidad posterior depende de activo/stock/aprobación/horario, no
@@ -483,6 +489,14 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: MENSAJE_ENLACES_MAPA });
   }
 
+  // Foto validada por IA OBLIGATORIA (services/imagenes/trabajos.js): solo se
+  // publica con un trabajo 'lista' del mismo negocio. Se guarda la mejorada
+  // como imagen_url y la original en imagen_original_url; imagen_url del body
+  // se ignora (no se puede colar una foto sin procesar).
+  const permisoFoto = await trabajoParaPublicar(req.body.imagen_trabajo_id, { usuario: req.usuario, negocioId: nId });
+  if (!permisoFoto.ok) return res.status(permisoFoto.status).json({ error: permisoFoto.error, codigo: permisoFoto.codigo });
+  const fotoValidada = columnasImagenValidada(permisoFoto.trabajo);
+
   // Verificar que no exista una bolsa activa con el mismo nombre en este negocio
   const { data: existentes } = await supabase
     .from('bolsas')
@@ -538,7 +552,7 @@ router.post('/', authMiddleware, async (req, res) => {
       peso_estimado_kg: pesoKg,
       co2_salvado_kg: co2Unidad,
       categoria_alimento: categoria_alimento || null,
-      imagen_url: imagenFinal,
+      ...fotoValidada,
       estado_aprobacion: estadoAprobacion,
       fecha_disponible,
       fecha_caducidad: fechaCaducidadFinal,
@@ -574,7 +588,7 @@ router.post('/', authMiddleware, async (req, res) => {
         hora_recogida_fin,
         permite_envio: permite_envio || false,
         peso_estimado_kg: pesoKg,
-        imagen_url: imagenFinal,
+        ...fotoValidada,
         estado_aprobacion: estadoAprobacion,
         es_tiempo_limitado: es_tiempo_limitado ?? false,
         es_promocion: es_promocion ?? false,
@@ -588,7 +602,12 @@ router.post('/', authMiddleware, async (req, res) => {
     data = r.data; error = r.error;
   }
 
+  if (error && RE_COLUMNA_IMAGEN.test(error.message || '')) {
+    console.error('[BOLSAS] %s', MENSAJE_MIGRACION_IMAGEN);
+    return res.status(503).json({ error: MENSAJE_MIGRACION_IMAGEN, codigo: 'MIGRACION_PENDIENTE' });
+  }
   if (error) return res.status(400).json({ error: error.message });
+  await marcarUsado(permisoFoto.trabajo.id, data.id);
 
   // Solo nace aprobada si la crea un admin. El handler vuelve a comprobar la
   // visibilidad completa (negocio, vigencia, stock) antes de avisar a nadie.
@@ -606,10 +625,6 @@ router.post('/', authMiddleware, async (req, res) => {
       payload: { negocio_id: nId },
     });
   }
-
-  // Mejora automática de la foto (docs/PIPELINE_IMAGENES.md): asíncrona,
-  // nunca bloquea ni rompe la creación; la original queda visible mientras.
-  programarMejora('bolsas', data.id, data.imagen_url);
 
   res.status(201).json(data);
 });
@@ -672,6 +687,20 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const updates = {};
   campos.forEach(c => { if (req.body[c] !== undefined) updates[c] = req.body[c]; });
 
+  // Foto validada por IA (services/imagenes/trabajos.js). Con un trabajo
+  // 'lista' la foto nueva es la mejorada; imagen_url del body se ignora.
+  let fotoValidada = null;
+  let trabajoFoto = null;
+  if (req.body.imagen_trabajo_id !== undefined && req.body.imagen_trabajo_id !== null) {
+    const permisoFoto = await trabajoParaPublicar(req.body.imagen_trabajo_id, {
+      usuario: req.usuario, negocioId: bolsa.negocio_id, bolsaId: bolsa.id,
+    });
+    if (!permisoFoto.ok) return res.status(permisoFoto.status).json({ error: permisoFoto.error, codigo: permisoFoto.codigo });
+    trabajoFoto = permisoFoto.trabajo;
+    fotoValidada = columnasImagenValidada(trabajoFoto);
+    updates.imagen_url = fotoValidada.imagen_url;
+  }
+
   // Una edición nunca puede quitar la foto de una publicación que la tiene.
   // Una heredada sin foto que recibe vacío otra vez no es un cambio (se
   // descarta); si además la edición la manda a revisión, se exige foto abajo.
@@ -683,6 +712,20 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const fotoNueva = !errorFoto && updates.imagen_url !== undefined && esFotoNueva(updates.imagen_url, bolsa);
   if (!errorFoto && updates.imagen_url !== undefined && !fotoNueva) delete updates.imagen_url;
   if (errorFoto) return res.status(400).json({ error: errorFoto });
+  // Una foto nueva sin trabajo de IA 'lista' no se acepta nunca.
+  if (fotoNueva && !fotoValidada) {
+    return res.status(400).json({ error: CODIGOS_PUBLICAR.IMAGEN_NO_PROCESADA, codigo: 'IMAGEN_NO_PROCESADA' });
+  }
+  // Sin foto nueva, una publicación cuya foto nunca pasó la validación de IA
+  // solo puede ocultarse o ajustar unidades: ningún cambio de contenido ni
+  // reactivación (eso la volvería a publicar con una foto no validada).
+  if (!fotoValidada && !bolsaTieneImagenValidada(bolsa)) {
+    const claves = Object.keys(updates);
+    const soloOperativo = claves.every(c => c === 'cantidad_disponible' || (c === 'activo' && !(updates.activo === true || updates.activo === 'true')));
+    if (!soloOperativo) {
+      return res.status(409).json({ error: CODIGOS_PUBLICAR.IMAGEN_SIN_VALIDAR, codigo: 'IMAGEN_SIN_VALIDAR' });
+    }
+  }
 
   // Promoción nunca tiene fecha fin (igual que al crear, ver POST /api/bolsas):
   // si el tipo resultante es 'cupon', cualquier fecha_caducidad que venga en
@@ -716,6 +759,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   if (revision) Object.assign(updates, revision.cambios);
   else if (req.body.estado_aprobacion !== undefined) updates.estado_aprobacion = req.body.estado_aprobacion;
 
+  if (fotoValidada) Object.assign(updates, fotoValidada);
   const datosResultantes = { ...bolsa, ...updates };
 
   // Publicación heredada sin foto: puede seguir leyéndose, ocultándose,
@@ -812,11 +856,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (!error) break;
     const columnaFaltante = extraerColumnaFaltante(error);
     if (!columnaFaltante || !(columnaFaltante in updates)) break;
+    // Las columnas de la foto validada nunca se omiten: sin ellas no se guarda.
+    if (RE_COLUMNA_IMAGEN.test(columnaFaltante)) {
+      console.error('[PUT /bolsas/:id] %s', MENSAJE_MIGRACION_IMAGEN);
+      return res.status(503).json({ error: MENSAJE_MIGRACION_IMAGEN, codigo: 'MIGRACION_PENDIENTE' });
+    }
     delete updates[columnaFaltante];
     columnasOmitidas.push(columnaFaltante);
   }
   if (error) return res.status(400).json({ error: error.message });
-  if (fotoNueva) programarMejora('bolsas', req.params.id, data.imagen_url);
+  if (trabajoFoto) await marcarUsado(trabajoFoto.id, req.params.id);
   if (columnasOmitidas.length) {
     console.warn('[PUT /bolsas/:id] columnas omitidas por no existir en la BD:', columnasOmitidas.join(', '));
   }

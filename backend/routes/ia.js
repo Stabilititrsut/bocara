@@ -1,5 +1,7 @@
 // Asistente de IA para el restaurante.
 //   POST /api/ia/descripcion  → { descripcion }
+//   GET  /api/ia/estado       → qué IA está operativa y, si no, qué falta
+//                               (variables y migraciones; nunca valores de claves)
 // Propone una descripción para una Promoción (tipo=cupon) o Tiempo limitado
 // (tipo=bolsa) a partir de los datos del formulario. No guarda nada: el
 // restaurante revisa, edita y guarda con el flujo normal de /api/bolsas.
@@ -11,8 +13,10 @@ const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const textoIA = require('../services/text-ai');
 const { crearLimites } = require('../services/text-ai/limites');
+const iaEstado = require('../services/iaEstado');
 
 const MENSAJE_FALLO = 'No pudimos mejorar la descripción. Intenta nuevamente.';
+const MENSAJE_NO_CONFIGURADA = 'La mejora de descripción con IA no está configurada en el servidor.';
 const LIMITE_BODY = '8kb';
 
 // Categoría del negocio del propio restaurante (dato público del perfil). Si
@@ -31,9 +35,22 @@ function crearRouterIA({
   generar = textoIA.generarDescripcion,
   limites = crearLimites(),
   buscarCategoria = categoriaDelNegocio,
+  diagnostico = () => iaEstado.diagnosticoIA(),
 } = {}) {
   const router = express.Router();
   router.use(express.json({ limit: LIMITE_BODY }));
+
+  router.get('/estado', authMiddleware, async (req, res) => {
+    if (req.usuario?.rol !== 'restaurante' && req.usuario?.rol !== 'admin') {
+      return res.status(403).json({ error: 'No autorizado' });
+    }
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await diagnostico());
+    } catch (err) {
+      res.status(503).json({ error: 'No se pudo consultar el estado de la IA.' });
+    }
+  });
 
   router.post('/descripcion', authMiddleware, async (req, res) => {
     const usuario = req.usuario;
@@ -49,6 +66,13 @@ function crearRouterIA({
 
     const { datos, error } = textoIA.validarEntrada(req.body);
     if (error) return res.status(400).json({ error });
+
+    // Sin configuración no se consume cupo ni se llama a nadie.
+    const estadoTexto = iaEstado.estadoIATexto();
+    if (!estadoTexto.operativa) {
+      console.error('[TEXTO_IA] %s', estadoTexto.mensaje);
+      return res.status(503).json({ error: MENSAJE_NO_CONFIGURADA, codigo: 'IA_TEXTO_NO_CONFIGURADA', detalle: estadoTexto.mensaje, faltan: estadoTexto.faltan });
+    }
 
     const cupo = limites.consumirDiario(usuario.id);
     if (!cupo.ok) {
@@ -67,7 +91,10 @@ function crearRouterIA({
       const codigo = err?.codigo || 'interno';
       console.warn('[TEXTO_IA] fallo codigo=%s %s', codigo, err?.name === 'ErrorTextoIA' ? err.message : (err?.message || ''));
       if (codigo === 'no_configurado') {
-        return res.status(503).json({ error: 'La mejora de descripción con IA no está disponible por ahora.' });
+        // Nada ambiguo: código estable + qué variable falta (sin valores).
+        const estado = iaEstado.estadoIATexto();
+        console.error('[TEXTO_IA] %s', estado.mensaje);
+        return res.status(503).json({ error: MENSAJE_NO_CONFIGURADA, codigo: 'IA_TEXTO_NO_CONFIGURADA', detalle: estado.mensaje, faltan: estado.faltan });
       }
       return res.status(codigo === 'timeout' ? 504 : 502).json({ error: MENSAJE_FALLO });
     }
@@ -86,3 +113,4 @@ function crearRouterIA({
 module.exports = crearRouterIA();
 module.exports.crearRouterIA = crearRouterIA;
 module.exports.MENSAJE_FALLO = MENSAJE_FALLO;
+module.exports.MENSAJE_NO_CONFIGURADA = MENSAJE_NO_CONFIGURADA;

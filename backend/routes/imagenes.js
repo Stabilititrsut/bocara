@@ -4,10 +4,14 @@
 //   POST /api/imagenes/:tipo/:id/usar-mejorada  (descartada → completada)
 // :tipo = publicacion (tabla bolsas) | negocio (tabla negocios).
 // Solo el dueño del negocio o un admin.
+// Publicaciones: "reintentar" no aplica. Su foto se valida ANTES de guardar con
+// un trabajo (/trabajos, más abajo); reprocesarla aquí saltaría el análisis de
+// calidad. Para otra foto, el restaurante la cambia en el formulario.
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const pipeline = require('../services/imagenes/pipeline');
+const trabajos = require('../services/imagenes/trabajos');
 
 const router = express.Router();
 const TABLA_POR_TIPO = { publicacion: 'bolsas', negocio: 'negocios' };
@@ -29,6 +33,55 @@ async function puedeEditar(usuario, tabla, id) {
   return negocio.propietario_id === usuario.id ? { ok: true } : { ok: false, status: 403 };
 }
 
+// ── Trabajos previos a publicar (services/imagenes/trabajos.js) ────────────
+//   POST /api/imagenes/trabajos                { imagen_url, negocio_id? } → 202 { trabajo }
+//   GET  /api/imagenes/trabajos/:id            → { trabajo }   (la app lo consulta cada ~1.5 s)
+//   POST /api/imagenes/trabajos/:id/reintentar → 202 { trabajo }
+async function negocioDelUsuario(usuario, negocioIdBody) {
+  if (usuario.rol === 'admin') return typeof negocioIdBody === 'string' && negocioIdBody ? negocioIdBody : null;
+  const { data } = await supabase.from('negocios').select('id').eq('propietario_id', usuario.id).limit(1).maybeSingle();
+  return data?.id || null;
+}
+
+function responderError(res, r) {
+  return res.status(r.status || 400).json({ error: r.error, ...(r.codigo ? { codigo: r.codigo } : {}) });
+}
+
+router.post('/trabajos', authMiddleware, async (req, res) => {
+  if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin') return res.status(403).json({ error: 'No autorizado' });
+  try {
+    const negocioId = await negocioDelUsuario(req.usuario, req.body?.negocio_id);
+    if (!negocioId) return res.status(400).json({ error: 'No encontramos tu negocio.' });
+    const r = await trabajos.crearTrabajo({ usuario: req.usuario, negocioId, imagenUrl: req.body?.imagen_url });
+    if (!r.ok) return responderError(res, r);
+    res.status(202).json({ trabajo: trabajos.serializar(r.trabajo) });
+  } catch (err) {
+    console.error('[TRABAJOS_IMAGEN] crear falló: %s', err.message);
+    res.status(503).json({ error: 'No se pudo iniciar el procesamiento de la foto. Intenta de nuevo.' });
+  }
+});
+
+router.get('/trabajos/:id', authMiddleware, async (req, res) => {
+  try {
+    const r = await trabajos.leerTrabajoPropio(req.params.id, req.usuario);
+    if (!r.ok) return responderError(res, r);
+    res.set('Cache-Control', 'no-store');
+    res.json({ trabajo: trabajos.serializar(r.trabajo) });
+  } catch (err) {
+    res.status(503).json({ error: 'No se pudo consultar la foto. Intenta de nuevo.' });
+  }
+});
+
+router.post('/trabajos/:id/reintentar', authMiddleware, async (req, res) => {
+  try {
+    const r = await trabajos.reintentarTrabajo(req.params.id, req.usuario);
+    if (!r.ok) return responderError(res, r);
+    res.status(202).json({ trabajo: trabajos.serializar(r.trabajo) });
+  } catch (err) {
+    res.status(503).json({ error: 'No se pudo reintentar. Intenta de nuevo.' });
+  }
+});
+
 router.post('/:tipo/:id/:accion', authMiddleware, async (req, res) => {
   const tabla = TABLA_POR_TIPO[req.params.tipo];
   const accion = ACCIONES[req.params.accion];
@@ -36,6 +89,9 @@ router.post('/:tipo/:id/:accion', authMiddleware, async (req, res) => {
   try {
     const permiso = await puedeEditar(req.usuario, tabla, req.params.id);
     if (!permiso.ok) return res.status(permiso.status).json({ error: permiso.status === 404 ? 'No encontrada' : 'No autorizado' });
+    if (tabla === 'bolsas' && req.params.accion === 'reintentar') {
+      return res.status(409).json({ error: 'Para reprocesar la foto de una publicación, cámbiala en el formulario de edición.', codigo: 'IMAGEN_SIN_VALIDAR' });
+    }
 
     const r = await accion(tabla, req.params.id);
     if (!r.ok) return res.status(r.status || 400).json({ error: r.error });

@@ -51,6 +51,8 @@ const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 const { enqueueEventBestEffort } = require('./services/eventosDominio');
 const { ejecutarDespachador } = require('./services/despachadorEventos');
 const { procesarPendientes: procesarImagenesPendientes } = require('./services/imagenes/pipeline');
+const { procesarTrabajosPendientes } = require('./services/imagenes/trabajos');
+const { registrarDiagnosticoAlArrancar } = require('./services/iaEstado');
 const { resolverRequestId } = require('./utils/requestId');
 const { expirarIntentosDePedidos } = require('./services/intentosPago');
 
@@ -178,6 +180,8 @@ NO habilitar pagos con cupones hasta ejecutar la migración.
 app.listen(PORT, () => {
   console.log(`🚀 Bocara API corriendo en puerto ${PORT}`);
   console.log(`🌍 Ambiente: ${process.env.NODE_ENV}`);
+  // Qué IA está operativa y qué falta (claves/migraciones), sin ambigüedad.
+  registrarDiagnosticoAlArrancar();
 
   const _cuboUrl     = process.env.CUBO_API_URL || '';
   const _cuboKey     = process.env.CUBO_API_KEY || process.env.CUBOPAGO_API_KEY || '';
@@ -325,7 +329,19 @@ app.listen(PORT, () => {
     catch (err) { console.error('[IMAGENES] tick falló:', err.message); }
     finally { imagenesEnCurso = false; }
   }, 60 * 1000);
-  console.log('🖼️ Pipeline de imágenes activo (cada minuto, proveedor: %s)', process.env.IMAGE_AI_PROVIDER || 'local');
+  console.log('🖼️ Pipeline de fotos de negocio activo (cada minuto, proveedor: %s)', process.env.IMAGE_AI_PROVIDER || 'local');
+
+  // Trabajos de imagen de publicaciones (previos a publicar): el disparo es
+  // inmediato al subir la foto; este tick retoma huérfanos tras un reinicio y
+  // marca como interrumpidos los que quedaron a medias (el restaurante reintenta).
+  let trabajosEnCurso = false;
+  setInterval(async () => {
+    if (trabajosEnCurso) return;
+    trabajosEnCurso = true;
+    try { await procesarTrabajosPendientes(); }
+    catch (err) { console.error('[TRABAJOS_IMAGEN] tick falló:', err.message); }
+    finally { trabajosEnCurso = false; }
+  }, 30 * 1000);
 
   // Las publicaciones se conservan aunque estén ocultas o rechazadas. Nunca se
   // borran automáticamente: `activo=false` funciona como archivo recuperable.
