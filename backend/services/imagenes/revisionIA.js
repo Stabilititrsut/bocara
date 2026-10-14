@@ -1,8 +1,11 @@
-// Revisión con IA de la foto ORIGINAL: ¿puede convertirse en una foto
-// presentable de marketplace? Cubre lo que las métricas técnicas (calidad.js)
-// no ven: que no sea comida/producto, producto cortado o mal encuadrado,
-// desenfoque fuerte, presentación descuidada, capturas de pantalla, etc.
-// No rechaza lo que la mejora sí arregla (luz baja moderada, color, contraste).
+// Revisión con IA (visión) de una foto de publicación. Dos modos:
+//   · 'original'  → antes de mejorar. Solo IRREPARABLES (no es comida, captura
+//                   o collage) frenan el flujo; el resto de problemas se anota
+//                   y la foto pasa igual a la mejora con IA.
+//   · 'resultado' → la foto YA mejorada: ¿se puede publicar tal cual? Aquí sí
+//                   cualquier problema bloquea la publicación (con su motivo).
+// Cubre lo que las métricas técnicas (calidad.js) no ven: que no sea
+// comida/producto, producto cortado, presentación descuidada, capturas, etc.
 //
 // OpenAI Responses API con entrada de imagen y Structured Outputs (json_schema
 // estricto). Modelo: OPENAI_VISION_MODEL, por defecto `gpt-6-luna` (ID según
@@ -28,6 +31,9 @@ const PROBLEMAS = Object.freeze({
   baja_calidad: 'La foto no tiene la calidad mínima para mostrarse en Bocara.',
 });
 
+// Problemas que ninguna mejora de imagen arregla: con ellos ni se intenta.
+const IRREPARABLES = Object.freeze(new Set(['no_es_comida', 'captura_o_collage']));
+
 const ESQUEMA = {
   type: 'object',
   additionalProperties: false,
@@ -39,7 +45,7 @@ const ESQUEMA = {
   },
 };
 
-const INSTRUCCIONES = [
+const INSTRUCCIONES_ORIGINAL = [
   'Eres revisor de fotos de Bocara, un marketplace de comida en Guatemala.',
   'Decide si esta foto, DESPUÉS de una mejora automática de iluminación, balance de blancos, contraste, color y nitidez leve, puede publicarse como foto comercial del producto.',
   'Esa mejora NO puede: reencuadrar, recuperar partes cortadas, quitar desenfoque fuerte, cambiar el fondo ni el contenido.',
@@ -47,6 +53,14 @@ const INSTRUCCIONES = [
   'NO rechaces solo por luz algo baja, tono de color o poco contraste: eso lo corrige la mejora.',
   'Sé estricto pero justo: una foto casera bien encuadrada y enfocada es apta.',
 ].join('\n');
+
+const INSTRUCCIONES_RESULTADO = [
+  'Eres revisor de fotos de Bocara, un marketplace de comida en Guatemala.',
+  'Esta foto YA fue mejorada automáticamente (luz, color, nitidez). Decide si, TAL COMO ESTÁ, puede publicarse como foto comercial del producto.',
+  'Marca apta=false y lista los problemas si: no es comida, bebida o un producto de restaurante; el producto principal está cortado por los bordes o muy descentrado; está borrosa; está oscura o quemada; la presentación es descuidada; es captura de pantalla, collage o tiene texto superpuesto; manos o personas dominan la imagen; o se ve artificial (aspecto de render, plástico o ilustración).',
+  'Sé estricto pero justo: una foto casera bien encuadrada, enfocada y con buena luz es apta.',
+].join('\n');
+const INSTRUCCIONES = Object.freeze({ original: INSTRUCCIONES_ORIGINAL, resultado: INSTRUCCIONES_RESULTADO });
 
 function crearRevisorIA({
   apiKey = process.env.OPENAI_API_KEY,
@@ -66,18 +80,22 @@ function crearRevisorIA({
 
   return {
     modelo,
-    // → { apta, problemas: [{ codigo, mensaje }], resumen, uso }. Lanza ErrorProveedor.
-    async revisar(buffer) {
+    // → { apta, irreparable, problemas: [{ codigo, mensaje }], resumen, uso }. Lanza ErrorProveedor.
+    // irreparable: algún problema que la mejora no puede arreglar.
+    async revisar(buffer, { modo = 'original' } = {}) {
+      if (!INSTRUCCIONES[modo]) throw new Error(`modo de revisión desconocido: ${modo}`);
+      const inicio = Date.now();
       const jpeg = await sharp()(buffer, { failOn: 'none' }).rotate()
         .resize({ width: LADO_REVISION, height: LADO_REVISION, fit: 'inside', withoutEnlargement: true })
         .jpeg({ quality: 85 }).toBuffer();
+      console.log('[IMAGEN_IA] OpenAI revisión (%s) → modelo=%s', modo, modelo);
       let r;
       try {
         r = await obtener().responses.create({
           model: modelo,
           reasoning: { effort: 'low' },
           max_output_tokens: 600,
-          instructions: INSTRUCCIONES,
+          instructions: INSTRUCCIONES[modo],
           input: [{
             role: 'user',
             content: [
@@ -88,7 +106,9 @@ function crearRevisorIA({
           text: { format: { type: 'json_schema', name: 'revision_foto', schema: ESQUEMA, strict: true } },
         });
       } catch (err) {
-        throw clasificarError(err);
+        const e = clasificarError(err);
+        console.error('[IMAGEN_IA] OpenAI revisión (%s) FALLÓ en %d ms (motivo=%s): %s', modo, Date.now() - inicio, e.motivo, e.message);
+        throw e;
       }
       let datos;
       try { datos = JSON.parse(r?.output_text || ''); } catch {
@@ -100,8 +120,11 @@ function crearRevisorIA({
       const codigos = [...new Set(datos.problemas.filter((p) => p in PROBLEMAS))];
       // apta=false sin un problema reconocible → "baja_calidad" (nunca rechazo mudo).
       if (!datos.apta && !codigos.length) codigos.push('baja_calidad');
+      const apta = datos.apta && codigos.length === 0;
+      console.log('[IMAGEN_IA] OpenAI revisión (%s) en %d ms: apta=%s problemas=[%s]', modo, Date.now() - inicio, apta, codigos.join(','));
       return {
-        apta: datos.apta && codigos.length === 0,
+        apta,
+        irreparable: codigos.some((c) => IRREPARABLES.has(c)),
         problemas: codigos.map((codigo) => ({ codigo, mensaje: PROBLEMAS[codigo] })),
         resumen: String(datos.resumen || '').slice(0, 200),
         uso: r.usage || null,
@@ -110,4 +133,4 @@ function crearRevisorIA({
   };
 }
 
-module.exports = { MODELO_VISION_POR_DEFECTO, PROBLEMAS, ESQUEMA, crearRevisorIA };
+module.exports = { MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES, ESQUEMA, INSTRUCCIONES, crearRevisorIA };

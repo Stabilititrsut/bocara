@@ -55,16 +55,26 @@ async function prepararLienzo(buffer) {
   return { lienzo, tamano: t, rect };
 }
 
-// Clasifica errores del SDK: reintentar solo lo transitorio.
+// Códigos de OpenAI que significan "la cuenta no tiene saldo": reintentar no
+// sirve, hay que recargar créditos.
+const CODIGOS_SIN_CREDITO = new Set(['insufficient_quota', 'credit_balance_exhausted', 'billing_hard_limit_reached', 'billing_not_active']);
+
+// Clasifica errores del SDK: reintentar solo lo transitorio y decir el motivo.
 function clasificarError(err) {
   const status = err?.status;
   const codigo = err?.code || err?.error?.code;
-  const transitorio = err?.name === 'APIConnectionTimeoutError' || err?.name === 'APIConnectionError'
-    || status === 408 || status === 409 || (status >= 500)
-    || (status === 429 && codigo !== 'insufficient_quota');
+  let motivo = 'otro';
+  if (CODIGOS_SIN_CREDITO.has(codigo)) motivo = 'sin_credito';
+  else if (status === 401 || status === 403 || codigo === 'invalid_api_key') motivo = 'clave_invalida';
+  else if (status === 404 || codigo === 'model_not_found') motivo = 'modelo';
+  else if (status === 429) motivo = 'limite';
+  else if (err?.name === 'APIConnectionTimeoutError' || status === 408) motivo = 'timeout';
+  else if (err?.name === 'APIConnectionError') motivo = 'red';
+  const transitorio = motivo === 'limite' || motivo === 'timeout' || motivo === 'red'
+    || status === 409 || (status >= 500);
   const msg = err?.error?.message || err?.message || 'error desconocido';
   return new ErrorProveedor(`openai ${status || err?.name || ''}${codigo ? ` (${codigo})` : ''}: ${msg}`.trim(),
-    { reintentable: !!transitorio });
+    { reintentable: !!transitorio, motivo });
 }
 
 function crearProveedorOpenAI({
@@ -91,25 +101,29 @@ function crearProveedorOpenAI({
     ia: true,
     modelo,
     necesitaUrl: false, // la imagen viaja en la petición (multipart), no por URL
-    async mejorar({ buffer }) {
+    async mejorar({ buffer, contexto = {} }) {
       const inicio = Date.now();
       const { toFile } = require('openai');
       const { lienzo, tamano, rect } = await prepararLienzo(buffer);
 
+      console.log('[IMAGEN_IA] OpenAI images.edit → modelo=%s size=%s calidad=%s', modelo, tamano.size, calidad);
       let respuesta;
       try {
         respuesta = await obtenerCliente().images.edit({
           model: modelo,
           image: await toFile(lienzo, 'foto.jpg', { type: 'image/jpeg' }),
-          prompt: promptMejora(),
+          prompt: promptMejora({ problemas: contexto.problemas || [] }),
           size: tamano.size,
           quality: calidad,
           output_format: 'png',
           n: 1,
         });
       } catch (err) {
-        throw clasificarError(err);
+        const e = clasificarError(err);
+        console.error('[IMAGEN_IA] OpenAI images.edit FALLÓ en %d ms (motivo=%s): %s', Date.now() - inicio, e.motivo, e.message);
+        throw e;
       }
+      console.log('[IMAGEN_IA] OpenAI images.edit respondió en %d ms', Date.now() - inicio);
 
       const b64 = respuesta?.data?.[0]?.b64_json;
       if (!b64) throw new ErrorProveedor('openai: la respuesta no trae imagen', { reintentable: true });

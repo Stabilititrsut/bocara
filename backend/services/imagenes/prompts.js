@@ -51,8 +51,24 @@ const PROMPT_FOTO_COMIDA = [OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO]
   .map((seccion) => seccion.join(' '))
   .join('\n');
 
-function promptMejora() {
-  return process.env.IMAGE_AI_PROMPT || PROMPT_FOTO_COMIDA;
+// Problemas detectados en el análisis de la original (calidad.js y
+// revisionIA.js) → indicación concreta para el modelo. Sin entrada aquí, el
+// problema no se menciona (el prompt base ya cubre la mejora general).
+const CORRECCIONES = Object.freeze({
+  oscura: 'The photo is underexposed: brighten it and open the shadows so the food is clearly visible.',
+  muy_oscura: 'The photo is underexposed: brighten it and open the shadows so the food is clearly visible.',
+  quemada: 'The photo is overexposed: recover the blown highlights and restore texture.',
+  sin_contraste: 'The photo looks flat and washed out: restore natural contrast and color depth.',
+  borrosa: 'The photo is soft or slightly out of focus: recover crisp, natural detail on the food without inventing new details.',
+  resolucion: 'The photo is low resolution: restore clean, natural fine detail.',
+  baja_calidad: 'The photo has low overall quality: clean up noise and compression artifacts.',
+  desordenada: 'The surroundings look messy: make them cleaner and less distracting without replacing the setting.',
+});
+
+function promptMejora({ problemas = [] } = {}) {
+  if (process.env.IMAGE_AI_PROMPT) return process.env.IMAGE_AI_PROMPT;
+  const extra = [...new Set(problemas.map((c) => CORRECCIONES[c]).filter(Boolean))];
+  return extra.length ? `${PROMPT_FOTO_COMIDA}\nSpecific fixes for this photo: ${extra.join(' ')}` : PROMPT_FOTO_COMIDA;
 }
 
-module.exports = { PROMPT_FOTO_COMIDA, promptMejora, SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO } };
+module.exports = { PROMPT_FOTO_COMIDA, CORRECCIONES, promptMejora, SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO } };

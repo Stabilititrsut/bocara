@@ -1,24 +1,35 @@
 // Trabajos de imagen PREVIOS a publicar (Promoción / Tiempo limitado).
 //
 //   subida → analizando → mejorando → validando → lista
-//                ↘ rechazada                ↘ fallida
+//                ↘ rechazada        ↘ fallida    ↘ rechazada | fallida
 //
-//   analizando  calidad técnica de la original (calidad.js, nivel 'original')
-//               + revisión con visión (revisionIA.js). Lo que la mejora no
-//               puede arreglar → 'rechazada' con motivos: hay que cambiar la foto.
+//   analizando  diagnóstico de la original. SOLO se rechaza aquí lo que ninguna
+//               mejora arregla: archivo ilegible/no imagen, resolución
+//               absurdamente baja, proporción imposible (calidad.js,
+//               analizarRecuperable) o contenido no relacionado (revisión con
+//               visión: no es comida, captura o collage). Una foto oscura,
+//               borrosa, lavada o pequeña PASA a la mejora: sus problemas se
+//               le indican al modelo para que los corrija.
 //   mejorando   proveedor de IA (OpenAI GPT Image por defecto).
-//   validando   la mejorada debe parecerse a la original (validacion.js) y
-//               cumplir la calidad 'publicable'. Si no → 'fallida' (reintentable).
+//   validando   la mejorada debe parecerse a la original (validacion.js),
+//               cumplir la calidad 'publicable' (calidad.js) y pasar la
+//               revisión con visión en modo 'resultado'. Recién aquí se decide:
+//                 · pasa todo               → lista (se publica la mejorada)
+//                 · no se parece / no llega a la calidad, pero la ORIGINAL ya
+//                   era publicable          → lista con la original (fallback
+//                                             seguro, usa_original=true)
+//                 · no se parece / no llega → fallida (reintentable)
+//                 · la revisión final la ve no apta → rechazada con motivos
 //   lista       única condición para que POST/PUT /api/bolsas acepten la foto.
 //
-// Sin IA configurada el trabajo termina en 'fallida' con
-// error_codigo='ia_no_configurada' y el mensaje exacto de qué falta: nunca se
-// "aprueba" una foto sin IA ni se aparenta una mejora.
+// Sin IA configurada, o si el proveedor falla (sin créditos, clave inválida,
+// caída), el trabajo termina en 'fallida' con un error_codigo que dice el
+// motivo exacto: nunca se "aprueba" una foto sin IA ni se aparenta una mejora.
 // La original nunca se toca: la mejorada es un archivo nuevo en Storage.
 const { ErrorProveedor } = require('./errores');
 const { prepararEntrada, validarResultado, ErrorValidacion } = require('./validacion');
-const { analizarCalidad } = require('./calidad');
-const { crearRevisorIA } = require('./revisionIA');
+const { analizarCalidad, analizarRecuperable } = require('./calidad');
+const { crearRevisorIA, IRREPARABLES } = require('./revisionIA');
 const { obtenerProveedor } = require('./proveedores');
 const pipeline = require('./pipeline');
 const { estadoIAImagen } = require('../iaEstado');
@@ -36,8 +47,11 @@ const ESPERA_REINTENTO_PROVEEDOR_MS = 3000;
 const MENSAJES_FALLO = Object.freeze({
   ia_no_configurada: 'La mejora con IA no está configurada en el servidor.',
   proveedor: 'El servicio de IA no respondió. Intenta de nuevo en unos segundos.',
+  proveedor_sin_credito: 'La IA no pudo procesar la foto: la cuenta de OpenAI de Bocara no tiene créditos. Avísale al administrador para recargarla.',
+  proveedor_clave: 'La IA no pudo procesar la foto: la clave de OpenAI del servidor no es válida. Avísale al administrador.',
+  proveedor_modelo: 'La IA no pudo procesar la foto: el modelo configurado en el servidor no está disponible. Avísale al administrador.',
   validacion: 'La versión mejorada no se parecía lo suficiente a tu foto, así que no la usamos.',
-  calidad_resultado: 'La versión mejorada no alcanzó la calidad mínima.',
+  calidad_resultado: 'Aun después de mejorarla con IA, la foto no alcanzó la calidad mínima para Bocara.',
   interrumpido: 'El procesamiento se interrumpió.',
   descarga: 'No pudimos leer la foto subida.',
   interno: 'Ocurrió un error inesperado al procesar la foto.',
@@ -59,6 +73,24 @@ function dependenciasIA() {
   return { proveedor: obtenerProveedor(), revisor: crearRevisorIA() };
 }
 
+// error_codigo según el motivo del fallo del proveedor (errores.js).
+const CODIGO_POR_MOTIVO = Object.freeze({ sin_credito: 'proveedor_sin_credito', clave_invalida: 'proveedor_clave', modelo: 'proveedor_modelo' });
+function codigoProveedor(err) {
+  return CODIGO_POR_MOTIVO[err?.motivo] || 'proveedor';
+}
+
+// Paso del proceso donde terminó una rechazada/fallida (para que la app marque
+// el paso correcto). Se deduce de la fila: 'proveedor' se fija al pasar a
+// mejorando y 'calidad_resultado' solo existe si se llegó a validar.
+function pasoError(t) {
+  if (t.estado === ESTADOS.RECHAZADA) return t.proveedor ? ESTADOS.VALIDANDO : ESTADOS.ANALIZANDO;
+  if (t.estado !== ESTADOS.FALLIDA) return null;
+  if (t.error_codigo === 'interrumpido') return /desde (\w+)/.exec(t.error || '')?.[1] || ESTADOS.ANALIZANDO;
+  if (t.error_codigo === 'validacion' || t.error_codigo === 'calidad_resultado' || t.calidad_resultado) return ESTADOS.VALIDANDO;
+  if (String(t.error_codigo || '').startsWith('proveedor') && t.proveedor) return ESTADOS.MEJORANDO;
+  return ESTADOS.ANALIZANDO;
+}
+
 // Lo que ve la app. `detalle` (técnico) solo cuando expone=true (desarrollo).
 function serializar(t, { expone = process.env.NODE_ENV !== 'production' } = {}) {
   if (!t) return null;
@@ -67,7 +99,12 @@ function serializar(t, { expone = process.env.NODE_ENV !== 'production' } = {}) 
     estado: t.estado,
     original_url: t.original_url,
     mejorada_url: t.estado === ESTADOS.LISTA ? t.mejorada_url : null,
+    // Lista con la foto original (la mejorada no pasó y la original ya cumplía).
+    usa_original: t.estado === ESTADOS.LISTA && !!t.calidad_resultado?.fallback_original,
     motivos: Array.isArray(t.motivos) ? t.motivos : [],
+    // Lo que la IA corrigió (o intentó corregir) de la original.
+    problemas_corregidos: Array.isArray(t.revision_ia?.problemas_previos) ? t.revision_ia.problemas_previos : [],
+    paso_error: pasoError(t),
     error_codigo: t.error_codigo || null,
     error: t.estado === ESTADOS.FALLIDA ? (MENSAJES_FALLO[t.error_codigo] || MENSAJES_FALLO.interno) : null,
     detalle: expone ? (t.error || null) : null,
@@ -112,6 +149,7 @@ async function crearTrabajo({ usuario, negocioId, imagenUrl }, {
     created_at: new Date(ahora).toISOString(), updated_at: new Date(ahora).toISOString(),
   }]).select().single();
   if (error) return errorTabla(error);
+  console.log('[IMAGEN_IA] %s imagen subida (negocio %s): trabajo creado', data.id, negocioId);
   if (procesar) programarTrabajo(data.id, { cliente, hosts, deps });
   return { ok: true, trabajo: data };
 }
@@ -146,16 +184,25 @@ async function procesarTrabajo(id, {
 } = {}) {
   const { data: t } = await cliente.from('trabajos_imagen').select('*').eq('id', id).maybeSingle();
   if (!t || t.estado !== ESTADOS.SUBIDA) return null;
+  // Se limpia todo lo de un intento anterior (reintento): pasoError() lee estas columnas.
   if (!(await mover(cliente, id, ESTADOS.SUBIDA, {
     estado: ESTADOS.ANALIZANDO, iniciado_at: ahoraIso(), intentos: (t.intentos || 0) + 1,
-    motivos: null, error: null, error_codigo: null,
+    motivos: null, error: null, error_codigo: null, mejorada_url: null,
+    proveedor: null, modelo: null, revision_ia: null, calidad_resultado: null,
   }))) return null;
+  const inicio = Date.now();
+  console.log('[IMAGEN_IA] %s analizando calidad (intento %d)', id, (t.intentos || 0) + 1);
 
   let estadoActual = ESTADOS.ANALIZANDO;
   const fallar = async (codigo, detalle, extra = {}) => {
     await mover(cliente, id, estadoActual, { estado: ESTADOS.FALLIDA, error_codigo: codigo, error: String(detalle || '').slice(0, 400), ...extra });
-    console.warn('[TRABAJOS_IMAGEN] %s fallida (%s): %s', id, codigo, detalle);
+    console.error('[IMAGEN_IA] %s FALLIDA en %s (%s): %s', id, estadoActual, codigo, detalle);
     return ESTADOS.FALLIDA;
+  };
+  const rechazar = async (motivos, extra = {}) => {
+    await mover(cliente, id, estadoActual, { estado: ESTADOS.RECHAZADA, motivos, ...extra });
+    console.warn('[IMAGEN_IA] %s RECHAZADA en %s: [%s]', id, estadoActual, motivos.map((m) => m.codigo).join(','));
+    return ESTADOS.RECHAZADA;
   };
 
   try {
@@ -163,69 +210,113 @@ async function procesarTrabajo(id, {
     const { proveedor, revisor } = deps;
     if (!proveedor?.ia || !revisor) return await fallar('ia_no_configurada', 'proveedor sin IA real');
 
-    // 1. Analizar la original.
+    // 1. Analizar la original: solo se rechaza lo irreparable.
     if (!pipeline.origenPermitido(t.original_url, hosts)) return await fallar('descarga', 'origen no permitido');
     let original;
     try { original = (await descargar(t.original_url)).buffer; } catch (err) { return await fallar('descarga', err.message); }
     if (!original?.length || original.length > pipeline.MAX_BYTES_ORIGINAL) return await fallar('descarga', 'imagen vacía o demasiado grande');
 
-    const calidad = await analizarCalidad(original, { nivel: 'original' });
-    if (!calidad.ok) {
-      await mover(cliente, id, ESTADOS.ANALIZANDO, { estado: ESTADOS.RECHAZADA, motivos: calidad.motivos, calidad_original: calidad.metricas });
-      return ESTADOS.RECHAZADA;
-    }
+    const calidad = await analizarRecuperable(original);
+    console.log('[IMAGEN_IA] %s calidad original: %s', id, JSON.stringify(calidad.metricas));
+    if (!calidad.ok) return await rechazar(calidad.motivos, { calidad_original: calidad.metricas });
     const prep = await prepararEntrada(original);
-    const revision = await conReintento(() => revisor.revisar(prep.buffer), dormir);
-    if (!revision.apta) {
-      await mover(cliente, id, ESTADOS.ANALIZANDO, {
-        estado: ESTADOS.RECHAZADA, motivos: revision.problemas, calidad_original: calidad.metricas,
+    let revision;
+    try {
+      revision = await conReintento(() => revisor.revisar(prep.buffer, { modo: 'original' }), dormir);
+    } catch (err) {
+      if (err instanceof ErrorProveedor) return await fallar(codigoProveedor(err), err.message, { calidad_original: calidad.metricas });
+      throw err;
+    }
+    if (revision.irreparable) {
+      return await rechazar(revision.problemas.filter((p) => IRREPARABLES.has(p.codigo)), {
+        calidad_original: calidad.metricas,
         revision_ia: { modelo: revisor.modelo, resumen: revision.resumen, problemas: revision.problemas.map((p) => p.codigo) },
       });
-      return ESTADOS.RECHAZADA;
     }
+    // Lo que la IA debe corregir: métricas técnicas + lo que vio la revisión.
+    const problemasPrevios = [...new Set([...calidad.problemas, ...revision.problemas].map((p) => p.codigo))];
+    console.log('[IMAGEN_IA] %s original recuperable; a corregir con IA: [%s]', id, problemasPrevios.join(','));
 
-    // 2. Mejorar con IA.
+    // 2. Mejorar con IA (siempre que la original sea recuperable).
     if (!(await mover(cliente, id, ESTADOS.ANALIZANDO, {
       estado: ESTADOS.MEJORANDO, calidad_original: calidad.metricas,
-      revision_ia: { modelo: revisor.modelo, resumen: revision.resumen, apta: true },
+      revision_ia: { modelo: revisor.modelo, resumen: revision.resumen, apta: revision.apta, problemas_previos: problemasPrevios },
       proveedor: proveedor.nombre, modelo: proveedor.modelo || null,
     }))) return null;
     estadoActual = ESTADOS.MEJORANDO;
+    console.log('[IMAGEN_IA] %s mejorando con %s (%s)', id, proveedor.nombre, proveedor.modelo || '-');
     let urlEntrada = t.original_url;
     if (prep.requiereCopia && proveedor.necesitaUrl) {
       urlEntrada = await almacenamiento.subir(`preparadas/trabajos/${id}/${Date.now()}.jpg`, prep.buffer, prep.contentType);
     }
     let resultado;
     try {
-      resultado = await conReintento(() => proveedor.mejorar({ buffer: prep.buffer, urlEntrada, urlOriginal: t.original_url, contexto: { trabajo: id } }), dormir);
+      resultado = await conReintento(() => proveedor.mejorar({
+        buffer: prep.buffer, urlEntrada, urlOriginal: t.original_url, contexto: { trabajo: id, problemas: problemasPrevios },
+      }), dormir);
     } catch (err) {
-      return await fallar('proveedor', err.message);
+      return await fallar(codigoProveedor(err), err.message);
     }
 
-    // 3. Validar el resultado.
+    // 3. Validar el resultado y decidir.
     if (!(await mover(cliente, id, ESTADOS.MEJORANDO, { estado: ESTADOS.VALIDANDO }))) return null;
     estadoActual = ESTADOS.VALIDANDO;
-    let similitud;
+    console.log('[IMAGEN_IA] %s validando resultado', id);
+    let fallo = null; // por qué la mejorada no sirve
+    let similitud = null;
     try { similitud = await validarResultado(prep.buffer, resultado.buffer); } catch (err) {
-      if (err instanceof ErrorValidacion) return await fallar('validacion', err.message, { calidad_resultado: err.metricas || null });
+      if (!(err instanceof ErrorValidacion)) throw err;
+      fallo = { codigo: 'validacion', detalle: err.message, motivos: null, metricas: err.metricas || {} };
+    }
+    let calidadFinal = null;
+    if (!fallo) {
+      calidadFinal = await analizarCalidad(resultado.buffer, { nivel: 'publicable' });
+      if (!calidadFinal.ok) {
+        fallo = { codigo: 'calidad_resultado', detalle: calidadFinal.motivos.map((m) => m.codigo).join(','),
+          motivos: calidadFinal.motivos, metricas: { ...similitud, ...calidadFinal.metricas } };
+      }
+    }
+    if (fallo) {
+      console.warn('[IMAGEN_IA] %s la mejorada no pasó la validación (%s): %s', id, fallo.codigo, fallo.detalle);
+      // Fallback seguro: si la ORIGINAL ya cumplía todo (sin problemas en el
+      // análisis ni en la revisión), se publica la original tal cual.
+      if (!problemasPrevios.length && (await analizarCalidad(original, { nivel: 'publicable' })).ok) {
+        await mover(cliente, id, ESTADOS.VALIDANDO, {
+          estado: ESTADOS.LISTA, mejorada_url: t.original_url,
+          calidad_resultado: { ...fallo.metricas, fallback_original: true, motivo_fallback: fallo.detalle },
+        });
+        console.log('[IMAGEN_IA] %s LISTA con la original (ya cumplía la calidad) en %d ms', id, Date.now() - inicio);
+        return ESTADOS.LISTA;
+      }
+      return await fallar(fallo.codigo, fallo.detalle, { motivos: fallo.motivos, calidad_resultado: fallo.metricas });
+    }
+
+    const metricasFinales = { ...similitud, ...calidadFinal.metricas, meta_proveedor: resultado.meta || null };
+    let revisionFinal;
+    try {
+      revisionFinal = await conReintento(() => revisor.revisar(resultado.buffer, { modo: 'resultado' }), dormir);
+    } catch (err) {
+      if (err instanceof ErrorProveedor) return await fallar(codigoProveedor(err), err.message, { calidad_resultado: metricasFinales });
       throw err;
     }
-    const calidadFinal = await analizarCalidad(resultado.buffer, { nivel: 'publicable' });
-    if (!calidadFinal.ok) {
-      return await fallar('calidad_resultado', calidadFinal.motivos.map((m) => m.codigo).join(','), {
-        motivos: calidadFinal.motivos, calidad_resultado: { ...similitud, ...calidadFinal.metricas },
-      });
+    const revisionIA = {
+      modelo: revisor.modelo, resumen: revision.resumen, apta: revision.apta, problemas_previos: problemasPrevios,
+      resultado: { apta: revisionFinal.apta, resumen: revisionFinal.resumen, problemas: revisionFinal.problemas.map((p) => p.codigo) },
+    };
+    if (!revisionFinal.apta) {
+      return await rechazar(revisionFinal.problemas, { calidad_resultado: metricasFinales, revision_ia: revisionIA });
     }
+
     const ruta = `mejoradas/trabajos/${id}/${Date.now()}.webp`;
     const url = await almacenamiento.subir(ruta, resultado.buffer, resultado.contentType || 'image/webp');
     await mover(cliente, id, ESTADOS.VALIDANDO, {
-      estado: ESTADOS.LISTA, mejorada_url: url,
-      calidad_resultado: { ...similitud, ...calidadFinal.metricas, meta_proveedor: resultado.meta || null, ruta },
+      estado: ESTADOS.LISTA, mejorada_url: url, revision_ia: revisionIA,
+      calidad_resultado: { ...metricasFinales, ruta },
     });
-    console.log('[TRABAJOS_IMAGEN] %s lista (%s)', id, proveedor.nombre);
+    console.log('[IMAGEN_IA] %s LISTA para publicar (%s, similitud %s) en %d ms', id, proveedor.nombre, similitud.similitud, Date.now() - inicio);
     return ESTADOS.LISTA;
   } catch (err) {
-    return fallar(err instanceof ErrorProveedor ? 'proveedor' : 'interno', err.message);
+    return fallar(err instanceof ErrorProveedor ? codigoProveedor(err) : 'interno', err.message);
   }
 }
 
@@ -233,7 +324,7 @@ async function procesarTrabajo(id, {
 const enCurso = new Set();
 function programarTrabajo(id, opciones = {}) {
   const p = procesarTrabajo(id, opciones)
-    .catch((err) => console.warn('[TRABAJOS_IMAGEN] programarTrabajo:', err.message))
+    .catch((err) => console.error('[IMAGEN_IA] programarTrabajo:', err.message))
     .finally(() => enCurso.delete(p));
   enCurso.add(p);
   return p;
@@ -316,12 +407,15 @@ async function trabajoParaPublicar(trabajoId, { usuario, negocioId, bolsaId = nu
 }
 
 // Columnas de bolsas que fija una foto validada.
+// Con fallback a la original no hay mejorada que guardar: queda 'descartada'
+// (se muestra la original, que ya pasó el análisis y la revisión IA).
 function columnasImagenValidada(t) {
+  const usaOriginal = !!t.calidad_resultado?.fallback_original;
   return {
     imagen_url: t.mejorada_url,
     imagen_original_url: t.original_url,
-    imagen_mejorada_url: t.mejorada_url,
-    estado_procesamiento_imagen: 'completada',
+    imagen_mejorada_url: usaOriginal ? null : t.mejorada_url,
+    estado_procesamiento_imagen: usaOriginal ? 'descartada' : 'completada',
     proveedor_imagen_ia: t.proveedor || null,
     error_procesamiento_imagen: null,
     imagen_procesamiento_meta: {
@@ -347,7 +441,7 @@ async function marcarUsado(trabajoId, bolsaId, { cliente = db() } = {}) {
 
 module.exports = {
   ESTADOS, EN_CURSO, MENSAJES_FALLO, CODIGOS_PUBLICAR,
-  dependenciasIA, serializar, crearTrabajo, procesarTrabajo, programarTrabajo, esperarTrabajosEnCurso,
+  dependenciasIA, serializar, pasoError, codigoProveedor, crearTrabajo, procesarTrabajo, programarTrabajo, esperarTrabajosEnCurso,
   procesarTrabajosPendientes, leerTrabajoPropio, reintentarTrabajo,
   trabajoParaPublicar, columnasImagenValidada, bolsaTieneImagenValidada, marcarUsado,
 };
