@@ -5,12 +5,17 @@ import {
   Modal, TextInput, Alert, RefreshControl, Switch, Image, ActivityIndicator, Platform,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { bolsasAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
+import { bolsasAPI, negociosAPI, uploadsAPI, iaAPI, type EstadoIA } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { pickImage } from '@/src/utils/pickImage';
 import HoraPicker from '@/components/HoraPicker';
 import EstadoImagenIA from '@/components/EstadoImagenIA';
 import BotonDescripcionIA from '@/components/BotonDescripcionIA';
+import EstadoProcesoImagen from '@/components/EstadoProcesoImagen';
+import { useTrabajoImagen } from '@/hooks/use-trabajo-imagen';
+import {
+  bloqueoPorFoto, trabajoDeLaFoto, esFotoNueva, bolsaConImagenValidada, BLOQUEOS,
+} from '@/src/utils/procesoImagen';
 import { hayMejoraEnCurso } from '@/src/utils/estadoImagen';
 import CalendarioPicker from '@/components/CalendarioPicker';
 import type { Bolsa, TipoPublicacion, CrearBolsaPayload } from '@/src/types';
@@ -187,11 +192,17 @@ export default function BolsasRestauranteScreen() {
   // "Mejorar descripción con IA" en curso: el campo Descripción se bloquea
   // para que la propuesta no pise lo que el restaurante esté escribiendo.
   const [generandoDescripcion, setGenerandoDescripcion] = useState(false);
+  // Foto con IA antes de publicar: trabajo de la foto subida y su estado.
+  const procesoFoto = useTrabajoImagen();
+  // Diagnóstico del servidor (GET /api/ia/estado) para avisar si la IA no está configurada.
+  const [estadoIA, setEstadoIA] = useState<EstadoIA | null>(null);
   const fileInputRef = useRef<any>(null);
   // Scroll del formulario y posición del bloque de foto, para llevar al
   // usuario hasta ella si intenta guardar sin foto.
   const modalScrollRef = useRef<ScrollView>(null);
   const fotoY = useRef(0);
+  // Campo Descripción: "Editar sugerencia" lleva el cursor ahí.
+  const descripcionRef = useRef<TextInput>(null);
   // Publicación que se está editando y el payload que su formulario cargó.
   const edicionInicial = useRef<{ bolsa: BolsaRestaurante; payload: CrearBolsaPayload } | null>(null);
   const set = <K extends keyof BolsaForm>(k: K) => (v: BolsaForm[K]) => setForm(f => ({ ...f, [k]: v }));
@@ -208,7 +219,7 @@ export default function BolsasRestauranteScreen() {
         const ext = file.type.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(base64, path, file.type || 'image/jpeg');
-        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); }
+        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); procesoFoto.iniciar(data.publicUrl); }
       } catch (err: any) {
         setUploadFotoError(err.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -228,7 +239,7 @@ export default function BolsasRestauranteScreen() {
         const ext = picked.mimeType.split('/')[1] || 'jpg';
         const path = `bolsas/${negocioId}_${Date.now()}.${ext}`;
         const { data } = await uploadsAPI.uploadBase64(picked.base64, path, picked.mimeType);
-        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); }
+        if (data?.publicUrl) { setForm((f) => ({ ...f, imagen_url: data.publicUrl })); setFotoFaltante(false); procesoFoto.iniciar(data.publicUrl); }
       } catch (e: any) {
         setUploadFotoError(e.message || 'No se pudo subir la foto');
       } finally { setUploadingFoto(false); }
@@ -254,7 +265,7 @@ export default function BolsasRestauranteScreen() {
 
   // Mientras alguna foto se esté mejorando, refrescar cada 10 s para mostrar
   // el resultado sin que el restaurante tenga que recargar.
-  const mejoraEnCurso = hayMejoraEnCurso(items);
+  const mejoraEnCurso = hayMejoraEnCurso(items, { tipo: 'publicacion' });
   useEffect(() => {
     if (!mejoraEnCurso) return undefined;
     const t = setInterval(cargar, 10000);
@@ -291,6 +302,9 @@ export default function BolsasRestauranteScreen() {
     setUploadFotoError('');
     setFotoFaltante(false);
     setSaving(false);
+    procesoFoto.reiniciar();
+    // Informativo: si el servidor no responde (o es anterior a /ia/estado) no se muestra aviso.
+    Promise.resolve().then(() => iaAPI.estado()).then(setEstadoIA).catch(() => setEstadoIA(null));
     if (b) {
       setEditId(b.id);
       const cargado: BolsaForm = {
@@ -354,12 +368,29 @@ export default function BolsasRestauranteScreen() {
     alertar(MENSAJE_FOTO_PUBLICACION);
   }
 
+  // La foto bloquea Guardar mientras no esté lista (subiendo, procesando,
+  // rechazada o fallida). Se explica siempre: tocar Guardar lleva a la foto.
+  const fotoEsNueva = !editId || esFotoNueva(form.imagen_url, edicionInicial.current?.bolsa);
+  const trabajoFoto = trabajoDeLaFoto(procesoFoto.trabajo, form.imagen_url);
+  const bloqueoFoto = bloqueoPorFoto({
+    esEdicion: !!editId, url: form.imagen_url, bolsa: edicionInicial.current?.bolsa,
+    trabajo: procesoFoto.trabajo, subiendo: uploadingFoto, errorRed: procesoFoto.errorRed,
+  });
+  const fotoVisible = trabajoFoto?.estado === 'lista' && trabajoFoto.mejorada_url ? trabajoFoto.mejorada_url : form.imagen_url;
+
+  function marcarBloqueoFoto(motivo: string) {
+    setFotoFaltante(true);
+    modalScrollRef.current?.scrollTo({ y: Math.max(0, fotoY.current - 16), animated: true });
+    alertar(motivo);
+  }
+
   async function guardar() {
     if (saving) return;
     if (uploadingFoto) return alertar('Espera a que termine de subir la foto.');
     // Foto obligatoria al crear (Promoción y Tiempo limitado). Al editar se
     // revisa más abajo, cuando ya se sabe qué cambió.
     if (!editId && faltaFotoParaGuardar(form.imagen_url, null)) return marcarFotoFaltante();
+    if (bloqueoFoto) return marcarBloqueoFoto(bloqueoFoto);
     if (publicacionVencida(form)) return alertar('El horario de recogida ya venció. Corrígelo antes de publicar.');
     if (!form.nombre || !form.precio_original || form.precio_descuento === '')
       return alertar('Nombre, precio original y precio Bocara son requeridos');
@@ -428,6 +459,15 @@ export default function BolsasRestauranteScreen() {
     if (esEdicion && faltaFotoParaGuardar(form.imagen_url, { bolsa: edicionInicial.current?.bolsa, cambios })) {
       return marcarFotoFaltante();
     }
+    // Foto nueva: viaja con su trabajo 'lista' (el backend guarda la mejorada).
+    if (fotoEsNueva && trabajoFoto) cambios.imagen_trabajo_id = trabajoFoto.id;
+    // Sin foto nueva, una publicación cuya foto no pasó la IA solo admite
+    // ocultarla o ajustar unidades (mismo criterio que el backend).
+    if (esEdicion && !fotoEsNueva && !bolsaConImagenValidada(edicionInicial.current?.bolsa)) {
+      // El formulario no envía `activo` (eso es el switch de la tarjeta): solo unidades.
+      const soloOperativo = Object.keys(cambios).every((c) => c === 'cantidad_disponible');
+      if (!soloOperativo) return marcarBloqueoFoto(BLOQUEOS.sinValidar);
+    }
     setSaving(true);
 
     try {
@@ -435,7 +475,7 @@ export default function BolsasRestauranteScreen() {
       // una copia: corregir una rechazada la devuelve a Pendiente.
       const res = esEdicion
         ? await bolsasAPI.actualizar(editId, cambios)
-        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId });
+        : await bolsasAPI.crear({ ...payload, negocio_id: negocioId, imagen_trabajo_id: trabajoFoto?.id });
       // La tarjeta refleja al instante el estado que devolvió el backend (p. ej.
       // Rechazada → Pendiente), sin esperar a la recarga.
       const guardada: BolsaRestaurante | undefined = res.data?.id ? res.data : undefined;
@@ -650,15 +690,38 @@ export default function BolsasRestauranteScreen() {
               <Text style={s.cancelText}>Cancelar</Text>
             </TouchableOpacity>
             <Text style={s.modalTitle}>{editId ? 'Editar publicación' : 'Nueva publicación'}</Text>
-            <TouchableOpacity onPress={guardar} disabled={saving}>
+            <TouchableOpacity
+              onPress={guardar}
+              disabled={saving}
+              accessibilityState={{ disabled: saving || !!bloqueoFoto }}
+              accessibilityHint={bloqueoFoto || undefined}
+              testID="guardar-publicacion"
+            >
               {saving
                 ? <ActivityIndicator color={Colors.aqua} size="small" />
-                : <Text style={s.saveText}>Guardar</Text>
+                : <Text style={[s.saveText, !!bloqueoFoto && s.saveTextBloqueado]}>{bloqueoFoto ? '🔒 Guardar' : 'Guardar'}</Text>
               }
             </TouchableOpacity>
           </View>
+          {bloqueoFoto ? (
+            <TouchableOpacity onPress={() => marcarBloqueoFoto(bloqueoFoto)} style={s.bloqueoBanner} testID="motivo-bloqueo">
+              <Text style={s.bloqueoTexto}>{bloqueoFoto}</Text>
+            </TouchableOpacity>
+          ) : null}
 
           <ScrollView ref={modalScrollRef} contentContainerStyle={s.modalScroll} keyboardShouldPersistTaps="handled">
+            {/* IA no configurada en el servidor: se dice antes de que el restaurante pierda tiempo. */}
+            {estadoIA && (!estadoIA.imagen.operativa || !estadoIA.migraciones.ok) ? (
+              <View style={s.iaBanner} testID="ia-no-configurada">
+                <Text style={s.iaBannerTitulo}>⚠️ La mejora de imágenes con IA no está disponible en el servidor</Text>
+                <Text style={s.iaBannerTexto}>No se puede publicar hasta que esté configurada.</Text>
+                {__DEV__ ? (
+                  <Text style={s.iaBannerTexto}>
+                    {[!estadoIA.imagen.operativa ? estadoIA.imagen.mensaje : null, !estadoIA.migraciones.ok ? estadoIA.migraciones.mensaje : null].filter(Boolean).join(' ')}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
             {/* Qué pasará al guardar esta edición (reglas del backend). */}
             {editId && avisoAlEditar(edicionInicial.current?.bolsa) ? (
               <Text style={s.avisoEdicion}>{avisoAlEditar(edicionInicial.current?.bolsa)}</Text>
@@ -700,8 +763,8 @@ export default function BolsasRestauranteScreen() {
                 disabled={uploadingFoto}
                 activeOpacity={0.8}
               >
-                {form.imagen_url
-                  ? <Image source={{ uri: form.imagen_url }} style={s.fotoPreview} />
+                {fotoVisible
+                  ? <Image source={{ uri: fotoVisible }} style={s.fotoPreview} />
                   : <View style={s.fotoPlaceholder}>
                       <Text style={{ fontSize: 40 }}>{form.tipo_form === 'cupon' ? '🏷️' : '⏱️'}</Text>
                       <Text style={s.fotoPlaceholderText}>Toca para agregar foto</Text>
@@ -720,6 +783,18 @@ export default function BolsasRestauranteScreen() {
               {uploadFotoError ? (
                 <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {uploadFotoError}</Text></View>
               ) : null}
+              {/* Procesamiento con IA de la foto subida: pasos visibles + Reintentar / Cambiar foto. */}
+              <EstadoProcesoImagen
+                trabajo={trabajoFoto}
+                subiendo={uploadingFoto}
+                error={form.imagen_url && fotoEsNueva && !trabajoFoto ? procesoFoto.error : null}
+                errorRed={procesoFoto.errorRed}
+                onReintentar={procesoFoto.reintentar}
+                onCambiarFoto={seleccionarFotoBolsa}
+              />
+              {editId && !fotoEsNueva && !bolsaConImagenValidada(edicionInicial.current?.bolsa) && form.imagen_url ? (
+                <View style={s.uploadError}><Text style={s.uploadErrorText}>⚠️ {BLOQUEOS.sinValidar}</Text></View>
+              ) : null}
             </View>
 
             <Text style={s.sectionLabel}>📝 Información</Text>
@@ -731,6 +806,7 @@ export default function BolsasRestauranteScreen() {
               placeholder="Detalles adicionales..."
               multiline
               editable={!generandoDescripcion}
+              inputRef={descripcionRef}
             />
             {/* Mismo botón para Promoción y Tiempo limitado. key: estado limpio en cada apertura. */}
             <BotonDescripcionIA
@@ -738,6 +814,10 @@ export default function BolsasRestauranteScreen() {
               datos={form}
               onPropuesta={set('descripcion')}
               onProcesando={setGenerandoDescripcion}
+              onEditar={() => descripcionRef.current?.focus()}
+              aviso={estadoIA && !estadoIA.texto.operativa
+                ? (__DEV__ ? estadoIA.texto.mensaje : 'La mejora de descripción con IA no está configurada en el servidor.')
+                : null}
             />
 
             {/* Campos específicos por tipo */}
@@ -899,13 +979,14 @@ export default function BolsasRestauranteScreen() {
   );
 }
 
-function Field({ label, value, onChange, placeholder, multiline, keyboard, autoCapitalize, editable = true }: any) {
+function Field({ label, value, onChange, placeholder, multiline, keyboard, autoCapitalize, editable = true, inputRef }: any) {
   return (
     <View style={{ marginBottom: 4 }}>
       <Text style={sf.label}>{label}</Text>
       <TextInput
         style={[sf.input, multiline && { height: 72 }, !editable && { opacity: 0.6 }]}
         editable={editable}
+        ref={inputRef}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}
@@ -925,6 +1006,12 @@ const sf = StyleSheet.create({
 });
 
 const s = StyleSheet.create({
+  saveTextBloqueado: { opacity: 0.45 },
+  bloqueoBanner: { backgroundColor: '#FEF3C7', paddingVertical: 8, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#FCD34D' },
+  bloqueoTexto: { fontSize: 12, fontWeight: '700', color: '#92400E' },
+  iaBanner: { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5', borderWidth: 1, borderRadius: 12, padding: 12, gap: 4, marginBottom: 12 },
+  iaBannerTitulo: { fontSize: 13, fontWeight: '800', color: '#991B1B' },
+  iaBannerTexto: { fontSize: 12, color: '#7F1D1D' },
   root: { flex: 1, backgroundColor: Colors.background },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },

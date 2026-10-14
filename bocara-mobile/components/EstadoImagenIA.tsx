@@ -16,7 +16,7 @@ export default function EstadoImagenIA({ tipo, id, fila, onCambio }: {
   fila: FilaImagen;
   onCambio?: () => void;
 }) {
-  const estado = estadoImagenIA(fila);
+  const estado = estadoImagenIA(fila, { tipo });
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
   const [comparando, setComparando] = useState(false);
@@ -38,7 +38,7 @@ export default function EstadoImagenIA({ tipo, id, fila, onCambio }: {
   return (
     <View style={s.fila} accessibilityLabel={`Estado de la foto: ${estado.etiqueta}`}>
       {estado.enCurso ? <ActivityIndicator size="small" color={Colors.textSecondary} style={s.spinner} /> : null}
-      <Text style={[s.texto, estado.clave === 'fallida' && s.textoError]} numberOfLines={2}>{estado.etiqueta}</Text>
+      <Text style={[s.texto, (estado.clave === 'fallida' || estado.clave === 'sin_validar') && s.textoError]} numberOfLines={2}>{estado.etiqueta}</Text>
       {estado.accion ? (
         <TouchableOpacity onPress={ejecutar} disabled={enviando} accessibilityRole="button" style={s.boton}>
           {enviando ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={s.botonTexto}>{estado.textoAccion}</Text>}

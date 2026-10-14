@@ -35,8 +35,13 @@ export interface PayloadDescripcionIA {
 
 export const MENSAJE_FALLO_IA = 'No pudimos mejorar la descripción. Intenta nuevamente.';
 export const MENSAJE_FALTA_NOMBRE = 'Escribe al menos el nombre del producto para mejorar la descripción.';
-export const TEXTO_GENERANDO = 'Generando descripción…';
-export const TEXTO_LISTO = 'Propuesta lista. Revísala y edítala antes de guardar.';
+export const TEXTO_BOTON = '✨ Mejorar descripción con IA';
+export const TEXTO_GENERANDO = '✨ Mejorando descripción con IA…';
+export const TEXTO_LISTO = '✅ Descripción sugerida';
+export const TEXTO_LISTO_AYUDA = 'Revísala y edítala antes de guardar.';
+export const TEXTO_DESHACER = 'Deshacer';
+export const TEXTO_EDITAR = 'Editar sugerencia';
+export const MENSAJE_NO_CONFIGURADA = 'La mejora de descripción con IA no está configurada en el servidor.';
 const MAX_NOMBRE = 120;
 const MAX_DESCRIPCION = 600;
 const MAX_CONTENIDO = 400;
@@ -72,9 +77,15 @@ export function payloadDescripcionIA(d: DatosDescripcionIA): PayloadDescripcionI
 }
 
 // Mensaje para el restaurante según el error del backend: validación y
-// límites traen su propio texto; todo lo demás (502/503/504/red) el genérico.
-export function mensajeError(e: any): string {
+// límites traen su propio texto; IA sin configurar lo dice explícitamente
+// (en desarrollo, además, el detalle del servidor: qué variable falta); todo lo
+// demás (502/504/red) el genérico.
+export function mensajeError(e: any, { dev = false }: { dev?: boolean } = {}): string {
   const status = e?.status;
+  const datos = e?.responseData;
+  if (status === 503 && datos?.codigo === 'IA_TEXTO_NO_CONFIGURADA') {
+    return dev && datos.detalle ? `${MENSAJE_NO_CONFIGURADA} ${datos.detalle}` : MENSAJE_NO_CONFIGURADA;
+  }
   if ((status === 400 || status === 429 || status === 503) && typeof e?.message === 'string' && e.message) return e.message;
   return MENSAJE_FALLO_IA;
 }
@@ -87,7 +98,7 @@ export type ResultadoMejora =
 // Una sola petición a la vez por formulario: toques repetidos mientras hay una
 // en curso se ignoran. Ante cualquier fallo devuelve la descripción que había
 // (el formulario no se toca).
-export function crearMejorador(llamar: (p: PayloadDescripcionIA) => Promise<{ descripcion?: unknown }>) {
+export function crearMejorador(llamar: (p: PayloadDescripcionIA) => Promise<{ descripcion?: unknown }>, { dev = false }: { dev?: boolean } = {}) {
   let enCurso = false;
   return {
     get enCurso() { return enCurso; },
@@ -103,7 +114,7 @@ export function crearMejorador(llamar: (p: PayloadDescripcionIA) => Promise<{ de
         if (!texto) return { estado: 'error', error: MENSAJE_FALLO_IA, descripcion: anterior };
         return { estado: 'ok', descripcion: texto, anterior };
       } catch (e) {
-        return { estado: 'error', error: mensajeError(e), descripcion: anterior };
+        return { estado: 'error', error: mensajeError(e, { dev }), descripcion: anterior };
       } finally {
         enCurso = false;
       }

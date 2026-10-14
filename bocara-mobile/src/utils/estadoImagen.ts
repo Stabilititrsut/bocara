@@ -12,7 +12,7 @@ export interface FilaImagen {
 }
 
 export interface EstadoImagen {
-  clave: 'sin_procesar' | 'pendiente' | 'procesando' | 'completada' | 'fallida' | 'descartada';
+  clave: 'sin_procesar' | 'sin_validar' | 'pendiente' | 'procesando' | 'completada' | 'fallida' | 'descartada';
   etiqueta: string;
   accion: AccionImagen | null;
   textoAccion: string | null;
@@ -28,9 +28,18 @@ export function esMejoraConIA(fila: FilaImagen | null | undefined): boolean {
   return PROVEEDORES_IA.has(String(fila?.proveedor_imagen_ia || ''));
 }
 
-export function estadoImagenIA(fila: FilaImagen | null | undefined): EstadoImagen {
+// Publicaciones: su foto se valida ANTES de guardar (procesoImagen.ts). Una
+// publicación sin foto validada (heredada o del flujo anterior) no se
+// reprocesa desde la tarjeta: se cambia la foto al editar.
+export const ETIQUETA_SIN_VALIDAR = '⚠️ Foto sin validar por IA · cámbiala al editar para volver a publicar';
+
+export function estadoImagenIA(fila: FilaImagen | null | undefined, { tipo = 'negocio' }: { tipo?: 'publicacion' | 'negocio' } = {}): EstadoImagen {
   const puedeComparar = !!(fila?.imagen_original_url && fila?.imagen_mejorada_url);
-  return { ...estadoBase(fila), puedeComparar };
+  const base = estadoBase(fila);
+  if (tipo === 'publicacion' && !['completada', 'descartada'].includes(base.clave)) {
+    return { clave: 'sin_validar', etiqueta: ETIQUETA_SIN_VALIDAR, accion: null, textoAccion: null, enCurso: false, puedeComparar: false };
+  }
+  return { ...base, puedeComparar };
 }
 
 function estadoBase(fila: FilaImagen | null | undefined): Omit<EstadoImagen, 'puedeComparar'> {
@@ -62,8 +71,8 @@ function estadoBase(fila: FilaImagen | null | undefined): Omit<EstadoImagen, 'pu
 }
 
 // ¿Hay alguna foto en cola o procesándose? La pantalla refresca mientras tanto.
-export function hayMejoraEnCurso(filas: FilaImagen[] | null | undefined): boolean {
-  return (filas || []).some((f) => estadoImagenIA(f).enCurso);
+export function hayMejoraEnCurso(filas: FilaImagen[] | null | undefined, opciones: { tipo?: 'publicacion' | 'negocio' } = {}): boolean {
+  return (filas || []).some((f) => estadoImagenIA(f, opciones).enCurso);
 }
 
 // La foto que se ve siempre existe: imagen_url (mejor versión) y, si faltara,
