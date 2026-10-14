@@ -18,6 +18,8 @@ const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
+const { bolsaTieneImagenValidada } = require('../services/imagenes/trabajos');
+const MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA = 'No se puede aprobar: la foto de esta publicación no pasó la validación de calidad con IA. El restaurante debe cambiarla.';
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
@@ -1124,6 +1126,11 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
   // legible y el restaurante puede editarla para agregarla (PUT /bolsas/:id).
   if (!tieneFoto(bolsa.imagen_url)) {
     return res.status(409).json({ error: MENSAJE_APROBAR_PUBLICACION_SIN_FOTO });
+  }
+  // Tampoco sin una foto validada por IA (services/imagenes/trabajos.js): el
+  // restaurante debe cambiarla en el formulario para que pase el análisis.
+  if (!bolsaTieneImagenValidada(bolsa)) {
+    return res.status(409).json({ error: MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA, codigo: 'IMAGEN_SIN_VALIDAR' });
   }
 
   // Repetir "aprobar" sobre algo ya aprobado es idempotente: no vuelve a

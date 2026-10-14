@@ -219,10 +219,10 @@ test('PHOTO-LEGACY-1: publicación heredada sin foto se sigue leyendo y admite c
   assert.equal((await editar(id, { activo: false })).status, 200);
   assert.equal(fila('bolsas', id).estado_aprobacion, 'aprobado');
 
-  // Un cambio de contenido (vuelve a revisión) exige completar la foto.
+  // Un cambio de contenido (vuelve a revisión) exige una foto validada por IA.
   const sinFotoEd = await editar(id, { nombre: 'Heredada v2' });
-  assert.equal(sinFotoEd.status, 400);
-  assert.equal(sinFotoEd.body.error, MSG_PUB);
+  assert.equal(sinFotoEd.status, 409);
+  assert.equal(sinFotoEd.body.codigo, 'IMAGEN_SIN_VALIDAR');
   const conFotoEd = await editar(id, { nombre: 'Heredada v2', imagen_url: FOTO });
   assert.equal(conFotoEd.status, 200, JSON.stringify(conFotoEd.body));
   assert.equal(fila('bolsas', id).estado_aprobacion, 'pendiente');

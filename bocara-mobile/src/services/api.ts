@@ -3,6 +3,8 @@ import { Platform } from 'react-native';
 import { emitSessionInvalid } from './sessionEvents';
 import { getAuthToken } from './authTokenStorage';
 import type { CrearBolsaPayload, ActualizarBolsaPayload } from '../types';
+import type { PayloadDescripcionIA } from '../utils/descripcionIA';
+import type { TrabajoImagen } from '../utils/procesoImagen';
 
 // Puerto donde corre el backend local (ver docs/ENTORNO_LOCAL.md). Ajustable sin
 // tocar código si algún día el backend local cambia de puerto.
@@ -225,6 +227,34 @@ export const notificacionesAPI = {
   eliminarToken: (token: string) =>
     api.delete('/notificaciones/token', { data: { expo_push_token: token }, timeout: 5000 }),
 };
+
+// Mejora automática de fotos (backend/routes/imagenes.js).
+export const imagenesAPI = {
+  accion: (tipo: 'publicacion' | 'negocio', id: string, accion: 'reintentar' | 'usar-original' | 'usar-mejorada') =>
+    api.post(`/imagenes/${tipo}/${id}/${accion}`),
+  // Trabajo de imagen previo a publicar (backend/services/imagenes/trabajos.js).
+  crearTrabajo: (imagen_url: string) =>
+    api.post<{ trabajo: TrabajoImagen }>('/imagenes/trabajos', { imagen_url }).then((r) => r.data.trabajo),
+  obtenerTrabajo: (id: string) =>
+    api.get<{ trabajo: TrabajoImagen }>(`/imagenes/trabajos/${id}`).then((r) => r.data.trabajo),
+  reintentarTrabajo: (id: string) =>
+    api.post<{ trabajo: TrabajoImagen }>(`/imagenes/trabajos/${id}/reintentar`).then((r) => r.data.trabajo),
+};
+
+// Descripción propuesta con IA (backend/routes/ia.js). Solo devuelve el texto:
+// no guarda nada. 30 s: el backend corta al proveedor a los 10 s.
+export const iaAPI = {
+  mejorarDescripcion: (payload: PayloadDescripcionIA) =>
+    api.post<{ descripcion: string }>('/ia/descripcion', payload, { timeout: 30000 }).then((r) => r.data),
+  // Qué IA está operativa en el servidor y qué falta (claves, migraciones).
+  estado: () => api.get<EstadoIA>('/ia/estado').then((r) => r.data),
+};
+
+export interface EstadoIA {
+  texto: { operativa: boolean; proveedor: string | null; modelo: string | null; faltan: string[]; mensaje: string };
+  imagen: { operativa: boolean; proveedor: string | null; modelo: string | null; modelo_revision?: string; faltan: string[]; mensaje: string };
+  migraciones: { ok: boolean; pendientes: { archivo: string; detalle: string }[]; mensaje: string };
+}
 
 export const favoritosAPI = {
   listar:       () => api.get('/favoritos/negocios'),

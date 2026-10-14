@@ -92,6 +92,10 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     'expo-router': { useRouter: () => ({ push() {}, replace() {} }), useFocusEffect: cb => focos.push(cb), useLocalSearchParams: () => params },
     '@/constants/Colors': { Colors: {} },
     '@/src/utils/estadoPublicacion': estadoReal,
+    '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+    '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
+    ...require('./stubs-imagen-ia.cjs')(),
+    '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
     '@/src/utils/pickImage': { pickImage: async () => null },
     // Dobles de las pantallas del cliente (tienda, detalle): los mismos módulos
     // reales que usan scripts/test-cart.cjs y test-tipo-publicacion.cjs.
@@ -380,6 +384,10 @@ function pantallaDisponibles(lista, api = {}) {
     forcedStates: [lista, false, false, false],
     mocks: {
       '@/src/utils/hora': load('src/utils/hora.ts'),
+      '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
+      '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
+      ...require('./stubs-imagen-ia.cjs')(),
+      '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
       '@/src/utils/pickImage': {},
       '@/src/services/api': {
         bolsasAPI: { listar: () => new Promise(() => {}), ...api },
@@ -1035,6 +1043,7 @@ integracion('Admin (integración): aprobar algo vencido muestra que NO quedó vi
     id: 'vencida-1', negocio_id: backend.IDS.olaAzul, nombre: 'Promo vieja', imagen_url: 'https://cdn.bocara.test/foto.jpg', tipo: 'cupon', precio_original: 100, precio_descuento: 50,
     cantidad_disponible: 3, activo: true, estado_aprobacion: 'pendiente', fecha_caducidad: AYER,
     hora_recogida_inicio: '08:00', hora_recogida_fin: '20:00', created_at: new Date().toISOString(),
+    estado_procesamiento_imagen: 'completada', // foto validada por IA (requisito para aprobar)
   });
   const texto = await adminAprueba();
   assert.match(texto, /NO es visible para clientes: su horario o fecha ya venció/);
