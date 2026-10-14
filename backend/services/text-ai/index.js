@@ -13,7 +13,7 @@
 // Agregar un proveedor = un archivo en providers/ con { nombre, modelo,
 // generar({ sistema, usuario, temperatura, maxTokens, timeoutMs }) → { texto, finCorte, uso } }
 // y una línea en obtenerProveedorTexto.
-const { INSTRUCCION_SISTEMA, ETIQUETA_TIPO, mensajeUsuario } = require('./prompts');
+const { instruccionSistema, ETIQUETA_TIPO, mensajeUsuario } = require('./prompts');
 const { ErrorTextoIA } = require('./errores');
 const { crearProveedorGemini, MODELO_POR_DEFECTO: MODELO_GEMINI } = require('./providers/gemini');
 
@@ -32,7 +32,7 @@ const LIMITES = Object.freeze({
   categoriaNegocio: 60,
   precioMax: 100000,
 });
-const MAX_CARACTERES_SALIDA = 300;
+const MAX_CARACTERES_SALIDA = 360;
 // Emojis y el selector de variación que los acompaña (U+FE0F).
 const RE_EMOJI = new RegExp(`\\p{Extended_Pictographic}|${String.fromCharCode(0xfe0f)}`, 'gu');
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -47,7 +47,7 @@ function numeroEnv(nombre, porDefecto, min, max) {
 function configuracion() {
   return {
     timeoutMs: numeroEnv('TEXT_AI_TIMEOUT_MS', 20000, 2000, 30000),
-    maxTokens: numeroEnv('TEXT_AI_MAX_OUTPUT_TOKENS', 160, 32, 400),
+    maxTokens: numeroEnv('TEXT_AI_MAX_OUTPUT_TOKENS', 240, 32, 400),
     temperatura: numeroEnv('TEXT_AI_TEMPERATURE', 0.4, 0, 1),
   };
 }
@@ -246,6 +246,28 @@ function verificarCifras(texto, hechos) {
   return valoresNumericos(texto).filter((n) => !permitidas.has(n));
 }
 
+// Una publicación de Bocara nunca se anuncia como sobrante: si la propuesta
+// dice o insinúa que el producto sobró, no se vendió, es merma o está por
+// vencer, se descarta entera (el prompt ya lo prohíbe; esto es la garantía).
+// `\b` de JS no reconoce letras acentuadas ("sobró"): se usan límites Unicode.
+const I = '(?<!\\p{L})';
+const F = '(?!\\p{L})';
+const frase = (s) => new RegExp(s.replaceAll('<', I).replaceAll('>', F), 'iu');
+const FRASES_NEGATIVAS = Object.freeze([
+  ['sobrante', frase('<sobr(?:ó|o|aron|ante|antes|as|a)>')],
+  ['no vendido', frase('<no\\s+(?:se\\s+)?(?:vendi(?:ó|o|dos?|das?)|logr\\p{L}*\\s+vender|pudimos\\s+vender)>')],
+  ['nadie lo compró', frase('<nadie\\s+(?:lo|la|los|las)\\s+compr')],
+  ['desperdicio', frase('<desperdici')],
+  ['merma', frase('<mermas?>')],
+  ['excedente', frase('<excedentes?>')],
+  ['por vencer', frase('<(?:por|a\\s+punto\\s+de|antes\\s+de\\s+que)\\s+(?:vencer|venza|caducar|caduque|expirar|expire)>|<vencimiento>|<caduc')],
+  ['restos', frase('<restos>')],
+  ['deshacerse', frase('<deshacer(?:se|nos|lo|la)>')],
+]);
+function lenguajeNegativo(texto) {
+  return FRASES_NEGATIVAS.filter(([, re]) => re.test(texto)).map(([nombre]) => nombre);
+}
+
 // ── Servicio ────────────────────────────────────────────────────────────────
 // → { descripcion, meta }. Lanza ErrorTextoIA.
 async function generarDescripcion(datos, { proveedor = obtenerProveedorTexto(), categoriaNegocio = null, config = configuracion() } = {}) {
@@ -254,7 +276,7 @@ async function generarDescripcion(datos, { proveedor = obtenerProveedorTexto(), 
   const inicio = Date.now();
   console.log('[TEXTO_IA] llamando a %s (modelo %s) tipo=%s', proveedor.nombre, proveedor.modelo, datos.tipo);
   const r = await proveedor.generar({
-    sistema: INSTRUCCION_SISTEMA,
+    sistema: instruccionSistema(datos.tipo),
     usuario: mensajeUsuario(hechos),
     temperatura: config.temperatura,
     maxTokens: config.maxTokens,
@@ -264,11 +286,13 @@ async function generarDescripcion(datos, { proveedor = obtenerProveedorTexto(), 
   if (descripcion.length < 20) throw new ErrorTextoIA('salida vacía o incompleta', { codigo: 'salida_invalida' });
   const ajenas = verificarCifras(descripcion, hechos);
   if (ajenas.length) throw new ErrorTextoIA(`salida con ${ajenas.length} cifra(s) no presentes en los datos`, { codigo: 'salida_invalida' });
+  const negativo = lenguajeNegativo(descripcion);
+  if (negativo.length) throw new ErrorTextoIA(`salida con lenguaje de sobrante/merma (${negativo.join(', ')})`, { codigo: 'salida_invalida' });
   return { descripcion, meta: { proveedor: proveedor.nombre, modelo: r.modelo || proveedor.modelo, ms: Date.now() - inicio, uso: r.uso || null } };
 }
 
 module.exports = {
   MODELO_GEMINI, LIMITES, MAX_CARACTERES_SALIDA, CATEGORIAS_ALIMENTO,
   configuracion, obtenerProveedorTexto, sanear, validarEntrada, construirHechos,
-  limpiarSalida, verificarCifras, generarDescripcion, ErrorTextoIA,
+  limpiarSalida, verificarCifras, lenguajeNegativo, generarDescripcion, ErrorTextoIA,
 };

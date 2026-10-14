@@ -180,7 +180,7 @@ test('TXT-2: los parámetros de generación son acotados (temperatura baja, toke
   await pedir(BASICO);
   const g = f.llamadas[0].body.generationConfig;
   // Modelo por defecto (familia 3.x): razonamiento mínimo para responder rápido.
-  assert.deepEqual(g, { temperature: 0.4, maxOutputTokens: 160, candidateCount: 1, thinkingConfig: { thinkingLevel: 'minimal' } });
+  assert.deepEqual(g, { temperature: 0.4, maxOutputTokens: 240, candidateCount: 1, thinkingConfig: { thinkingLevel: 'minimal' } });
   // Un modelo 2.x no acepta thinkingLevel: no se manda.
   const f2 = fetchSimulado();
   await crearProveedorGemini({ apiKey: CLAVE_GEMINI, modelo: 'gemini-2.5-flash', fetchImpl: f2 })
@@ -491,3 +491,63 @@ function silenciarConsola(fn) {
   console.warn = () => {};
   return Promise.resolve().then(fn).finally(() => { console.warn = warn; });
 }
+
+// ── TXT-13 / TXT-14 / TXT-15: tono por tipo ─────────────────────────────────
+const { instruccionSistema } = require('../services/text-ai/prompts');
+
+test('TXT-13: Promoción (tipo=cupon) pide tono PROMOCIONAL: oferta, beneficio, precio especial, invitación a aprovecharla', async () => {
+  const f = montar();
+  await pedir({ ...BASICO, tipo: 'cupon' });
+  const sistema = f.llamadas[0].body.systemInstruction.parts[0].text;
+  assert.equal(sistema, instruccionSistema('cupon'));
+  assert.match(sistema, /Tono para una PROMOCIÓN/);
+  assert.match(sistema, /oferta comercial/);
+  assert.match(sistema, /beneficio, el precio especial en Bocara y el descuento/);
+  assert.match(sistema, /invitando a aprovechar la promoción/);
+  assert.doesNotMatch(sistema, /Tono para un producto por TIEMPO LIMITADO/);
+  assert.match(sistema, /dos o tres frases cortas/);
+});
+
+test('TXT-14: Tiempo limitado (tipo=bolsa) pide tono de OPORTUNIDAD y disponibilidad limitada, en positivo', async () => {
+  const f = montar();
+  await pedir({ ...BASICO, tipo: 'bolsa' });
+  const sistema = f.llamadas[0].body.systemInstruction.parts[0].text;
+  assert.equal(sistema, instruccionSistema('bolsa'));
+  assert.match(sistema, /Tono para un producto por TIEMPO LIMITADO/);
+  assert.match(sistema, /oportunidad especial disponible por poco tiempo/);
+  assert.match(sistema, /conviene aprovechar hoy/);
+  assert.match(sistema, /disponibilidad es limitada/);
+  assert.match(sistema, /PROHIBIDO .*sobró, no se vendió, es sobrante, excedente o desperdicio, que es merma, que está por vencer/);
+  assert.doesNotMatch(sistema, /Tono para una PROMOCIÓN/);
+  // Ninguno de los dos tipos permite inventar calidades.
+  for (const t of ['cupon', 'bolsa']) assert.match(instruccionSistema(t), /Use exclusively the supplied facts/);
+});
+
+test('TXT-15: una propuesta con lenguaje de sobrante/merma/vencimiento se descarta (502), nunca llega al formulario', async () => {
+  const negativas = [
+    'Disfruta la hamburguesa con papas que sobró hoy a precio Bocara. Aprovecha.',
+    'Hamburguesa con papas que no se vendió, ahora a precio Bocara. Llévatela hoy.',
+    'Ayúdanos a evitar el desperdicio con esta hamburguesa con papas a precio Bocara.',
+    'Hamburguesa con papas, reduce la merma del restaurante. Aprovecha a precio Bocara.',
+    'Hamburguesa con papas a precio Bocara antes de que caduque. Aprovecha hoy.',
+    'Hamburguesa con papas que nadie lo compró, a precio Bocara. Llévala ya.',
+    'Hamburguesa con papas sobrante del día a precio Bocara. Aprovecha hoy.',
+    'Necesitamos deshacernos de esta hamburguesa con papas. Precio Bocara hoy.',
+  ];
+  for (const texto of negativas) {
+    montar({ fetchImpl: fetchSimulado({ cuerpo: respuestaGemini(texto) }) });
+    const r = await pedir(BASICO);
+    assert.equal(r.status, 502, texto);
+    assert.equal(r.body.codigo, 'IA_TEXTO_SALIDA_INVALIDA');
+  }
+  // En positivo sí pasa, y palabras parecidas no son falsos positivos.
+  for (const texto of [
+    'Disfruta una rica hamburguesa con papas a precio especial Bocara. Una oportunidad por tiempo limitado para disfrutarla hoy antes de que termine su disponibilidad.',
+    'Hamburguesa con papas ideal para la sobremesa, servida sobre la mesa a precio Bocara. Aprovecha hoy.',
+  ]) {
+    montar({ fetchImpl: fetchSimulado({ cuerpo: respuestaGemini(texto) }) });
+    const r = await pedir(BASICO);
+    assert.equal(r.status, 200, `${texto} → ${JSON.stringify(r.body)}`);
+  }
+  assert.deepEqual(textoIA.lenguajeNegativo('Lo que sobró hoy'), ['sobrante']);
+});
