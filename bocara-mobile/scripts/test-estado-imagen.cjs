@@ -95,7 +95,7 @@ test('IMG-UI-8: panel del restaurante muestra el estado en publicaciones y en la
 
 // ── Render real del componente (harness de hooks, sin dispositivo) ──────────
 const React = require('react');
-function montarEstado(fila, { accionFalla = false } = {}) {
+function montarEstado(fila, { accionFalla = false, tipo = 'publicacion' } = {}) {
   const llamadas = { accion: [], cambios: 0 };
   const estados = [];
   let cursor = 0;
@@ -120,7 +120,7 @@ function montarEstado(fila, { accionFalla = false } = {}) {
     throw new Error('Import sin double: ' + nombre);
   } }, { filename: 'EstadoImagenIA.tsx' });
   const Componente = exportsObj.default;
-  const render = () => { cursor = 0; return Componente({ tipo: 'publicacion', id: 'b1', fila, onCambio: () => { llamadas.cambios += 1; } }); };
+  const render = () => { cursor = 0; return Componente({ tipo, id: 'b1', fila, onCambio: () => { llamadas.cambios += 1; } }); };
   return { render, llamadas };
 }
 const nodos = (n) => (!n || typeof n !== 'object') ? [] : [n, ...[n.props?.children].flat(Infinity).flatMap(nodos)];
@@ -130,19 +130,21 @@ const visibles = (n) => (!n || typeof n !== 'object') ? [] : n.type === 'Modal' 
 const botones = (arbol) => visibles(arbol).filter((n) => n.type === 'Button');
 const boton = (arbol, etiqueta) => botones(arbol).find((b) => texto(b).includes(etiqueta));
 
+// IMG-UI-9/10/13: cola en segundo plano — hoy solo fotos de NEGOCIO (las de
+// publicaciones se validan antes de guardar, ver IMG-UI-14).
 test('IMG-UI-9: render por estado — procesando muestra spinner y ningún botón', () => {
-  const arbol = montarEstado({ estado_procesamiento_imagen: 'procesando' }).render();
+  const arbol = montarEstado({ estado_procesamiento_imagen: 'procesando' }, { tipo: 'negocio' }).render();
   assert.match(texto(arbol), /Mejorando tu foto/);
   assert.ok(nodos(arbol).some((n) => n.type === 'Spinner'));
   assert.equal(botones(arbol).length, 0);
 });
 
 test('IMG-UI-10: fallida → "Reintentar" llama a la API correcta y refresca la lista', async () => {
-  const c = montarEstado({ estado_procesamiento_imagen: 'fallida', imagen_original_url: 'o' });
+  const c = montarEstado({ estado_procesamiento_imagen: 'fallida', imagen_original_url: 'o' }, { tipo: 'negocio' });
   const arbol = c.render();
   assert.match(texto(arbol), /No se pudo mejorar, se muestra tu original/);
   await boton(arbol, 'Reintentar').props.onPress();
-  assert.deepEqual(c.llamadas.accion, [['publicacion', 'b1', 'reintentar']]);
+  assert.deepEqual(c.llamadas.accion, [['negocio', 'b1', 'reintentar']]);
   assert.equal(c.llamadas.cambios, 1);
 });
 
@@ -170,6 +172,14 @@ test('IMG-UI-12: descartada → "Usar mejorada"; error de red se muestra sin rom
   assert.equal(c.llamadas.cambios, 0, 'no refresca si la acción falló');
 });
 
-test('IMG-UI-13: foto sin procesar (dato previo al pipeline) → el componente no renderiza nada', () => {
-  assert.equal(montarEstado({}).render(), null);
+test('IMG-UI-13: foto de negocio sin procesar (dato previo al pipeline) → el componente no renderiza nada', () => {
+  assert.equal(montarEstado({}, { tipo: 'negocio' }).render(), null);
+});
+
+test('IMG-UI-14: publicación sin foto validada (heredada, en cola vieja o fallida) → aviso "sin validar", sin Reintentar', () => {
+  for (const estado of [undefined, 'pendiente', 'procesando', 'fallida']) {
+    const arbol = montarEstado({ estado_procesamiento_imagen: estado, imagen_original_url: 'o' }).render();
+    assert.match(texto(arbol), /Foto sin validar por IA/, String(estado));
+    assert.equal(boton(arbol, 'Reintentar'), undefined, 'reprocesar desde la tarjeta saltaría el análisis de calidad');
+  }
 });

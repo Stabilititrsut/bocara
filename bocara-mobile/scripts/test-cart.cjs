@@ -510,6 +510,7 @@ test('Publicar desde ambos formularios bloquea horario vencido antes de API y pe
           negociosAPI: { miNegocio: async () => ({ data: { id: 'n' } }) } },
         '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
         '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
+        ...require('./stubs-imagen-ia.cjs')(),
         '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
         '@/src/utils/pickImage': {},
         '@/src/utils/hora': load('src/utils/hora.ts'),

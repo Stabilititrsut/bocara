@@ -19,7 +19,8 @@ function load(file) {
 }
 const {
   crearMejorador, payloadDescripcionIA, motivoNoMejorable, mensajeError,
-  MENSAJE_FALLO_IA, MENSAJE_FALTA_NOMBRE, TEXTO_GENERANDO,
+  MENSAJE_FALLO_IA, MENSAJE_FALTA_NOMBRE, TEXTO_GENERANDO, TEXTO_BOTON, TEXTO_LISTO, TEXTO_DESHACER, TEXTO_EDITAR,
+  MENSAJE_NO_CONFIGURADA,
 } = load('src/utils/descripcionIA.ts');
 
 // Formulario completo tal como lo tiene bolsas.tsx (incluye campos que NO deben salir).
@@ -152,13 +153,39 @@ test('DESC-UI-8: toques repetidos mientras procesa no duplican la petición', as
 
 test('DESC-UI-9: botón con loading, deshabilitado mientras procesa y descarte si se cierra el formulario', () => {
   const c = read('components/BotonDescripcionIA.tsx');
-  assert.match(c, /✨ Mejorar descripción con IA/);
-  assert.equal(TEXTO_GENERANDO, 'Generando descripción…');
-  assert.match(c, /procesando \? TEXTO_GENERANDO/);
+  assert.equal(TEXTO_BOTON, '✨ Mejorar descripción con IA');
+  assert.equal(TEXTO_GENERANDO, '✨ Mejorando descripción con IA…');
+  assert.match(c, /procesando \? TEXTO_GENERANDO : TEXTO_BOTON/);
   assert.match(c, /disabled=\{procesando\}/);
   assert.match(c, /if \(mejorador\.enCurso\) return;/);
   assert.match(c, /if \(!montado\.current\) return;/);
-  assert.match(c, /Deshacer/);
+});
+
+test('DESC-UI-12: tras la propuesta: "✅ Descripción sugerida", "Editar sugerencia" y "Deshacer" solo si había descripción', () => {
+  assert.equal(TEXTO_LISTO, '✅ Descripción sugerida');
+  assert.equal(TEXTO_EDITAR, 'Editar sugerencia');
+  assert.equal(TEXTO_DESHACER, 'Deshacer');
+  const c = read('components/BotonDescripcionIA.tsx');
+  assert.match(c, /setAnterior\(r\.anterior\.trim\(\) \? r\.anterior : null\)/, 'sin descripción previa no hay nada que deshacer');
+  assert.match(c, /anterior !== null \? \(/);
+  assert.match(c, /onPress=\{onEditar\}/);
+  const pantalla = read('app/restaurante/bolsas.tsx');
+  assert.match(pantalla, /onEditar=\{\(\) => descripcionRef\.current\?\.focus\(\)\}/, '"Editar sugerencia" lleva el cursor al campo');
+  assert.match(pantalla, /inputRef=\{descripcionRef\}/);
+});
+
+test('DESC-UI-13: IA de texto sin configurar → mensaje explícito; en desarrollo, además, el detalle de qué falta', async () => {
+  const e = Object.assign(new Error('La mejora de descripción con IA no está configurada en el servidor.'), {
+    status: 503, responseData: { codigo: 'IA_TEXTO_NO_CONFIGURADA', detalle: 'IA de texto no configurada: falta la clave en backend/.env.' },
+  });
+  assert.equal(mensajeError(e), MENSAJE_NO_CONFIGURADA);
+  assert.equal(mensajeError(e, { dev: true }), `${MENSAJE_NO_CONFIGURADA} IA de texto no configurada: falta la clave en backend/.env.`);
+  const r = await crearMejorador(async () => { throw e; }, { dev: true }).mejorar(FORM);
+  assert.equal(r.estado, 'error');
+  assert.match(r.error, /falta la clave/);
+  assert.equal(r.descripcion, 'Hamburguesa con papas', 'la descripción no se toca');
+  // El aviso previo (GET /api/ia/estado) llega al botón.
+  assert.match(read('app/restaurante/bolsas.tsx'), /aviso=\{estadoIA && !estadoIA\.texto\.operativa/);
 });
 
 test('DESC-UI-10: un solo componente para Promoción y Tiempo limitado, fuera de la rama por tipo', () => {

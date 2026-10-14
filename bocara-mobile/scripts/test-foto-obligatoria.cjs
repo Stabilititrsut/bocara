@@ -74,6 +74,7 @@ function montar(file, { forzados = {}, mocks = {} } = {}) {
     '@/src/utils/backNavigation': { volver() {} },
     '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
     '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
+    ...require('./stubs-imagen-ia.cjs')(),
     '@/src/utils/estadoImagen': { hayMejoraEnCurso: () => false },
     '@/src/utils/pickImage': { pickImage: async () => null },
     '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
