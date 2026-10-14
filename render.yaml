@@ -75,6 +75,14 @@ services:
       - key: REPLICATE_API_TOKEN
         sync: false
 
+      # IA de texto: descripción propuesta (docs/IA_DESCRIPCIONES.md)
+      - key: TEXT_AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_TEXT_MODEL
+        value: gemini-2.5-flash-lite
+
       # Delivery (opcional)
       - key: DELIVERY_BASE_FEE_GTM_CITY
         value: "15"

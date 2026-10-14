@@ -81,6 +81,8 @@ app.use(morgan(
 
 // PayU webhook envía application/x-www-form-urlencoded
 app.use('/api/pagos/webhook', express.urlencoded({ extended: false }));
+// IA de texto: body propio de 8 KB, por eso va antes del express.json global.
+app.use('/api/ia',             require('./routes/ia'));
 app.use(express.json({ limit: '15mb' }));
 app.use('/api/webhooks',      require('./routes/webhooks'));
 
