@@ -15,7 +15,7 @@ const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
 const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
-const { trabajoParaNegocio, columnasImagenValidada, CODIGOS_NEGOCIO } = require('../services/imagenes/trabajos');
+const { trabajoParaNegocio, columnasImagenValidada, urlOriginalGuardable, CODIGOS_NEGOCIO } = require('../services/imagenes/trabajos');
 const router = express.Router();
 
 const RE_COLUMNA_IMAGEN = /imagen_original_url|imagen_mejorada_url|estado_procesamiento_imagen|proveedor_imagen_ia|imagen_procesamiento_meta|imagen_procesada_at|error_procesamiento_imagen|logo_url/;
@@ -627,7 +627,8 @@ router.put('/:id/imagen', authMiddleware, async (req, res) => {
   if (!r.ok) return res.status(r.status || 400).json({ error: r.error, ...(r.codigo ? { codigo: r.codigo } : {}) });
 
   const updates = tipo === 'perfil'
-    ? { logo_url: r.usarOriginal ? r.trabajo.original_url : r.trabajo.mejorada_url }
+    // Original de un logo no cuadrado = su copia cuadrada con relleno técnico.
+    ? { logo_url: r.usarOriginal ? urlOriginalGuardable(r.trabajo) : r.trabajo.mejorada_url }
     : columnasImagenValidada(r.trabajo, { usarOriginal: r.usarOriginal });
   const { data, error } = await supabase.from('negocios').update(updates).eq('id', negocio.id).select().single();
   if (error && RE_COLUMNA_IMAGEN.test(error.message || '')) {

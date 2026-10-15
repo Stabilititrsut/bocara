@@ -8,6 +8,7 @@
 //   NREV-*  revisión con visión según el uso (logo con letras es válido; marca alterada = infiel)
 //   NFLU-*  flujo subida → analizando → mejorando → validando → lista | rechazada | fallida
 //   NAPI-*  /api/imagenes/trabajos con uso y PUT /api/negocios/:id/imagen (el backend valida)
+//   NCUA-*  logo no cuadrado → copia cuadrada con relleno técnico (sin IA), píxeles intactos
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,6 +26,7 @@ const { promptMejora, PROMPT_PERFIL, PROMPT_PORTADA, PROMPT_COMERCIAL } = requir
 const { prepararLienzo, crearProveedorOpenAI, TAMANO_FIJO } = require('../services/imagenes/proveedorOpenAI');
 const { crearRevisorIA, PROBLEMAS, INFIDELIDAD, irreparablesDe } = require('../services/imagenes/revisionIA');
 const trabajos = require('../services/imagenes/trabajos');
+const { cuadrarConRelleno, opaca } = require('../services/imagenes/cuadrar');
 
 const HOST = 'proyecto.supabase.co';
 const hosts = new Set([HOST]);
@@ -41,7 +43,7 @@ function silenciar(fn) {
 
 // "Logo" sintético: fondo blanco liso con formas de color nítidas (como un
 // logo real), un poco de ruido de cámara para que no sea un vector perfecto.
-async function logo({ lado = 800, ancho = lado, alto = lado, rojo = [200, 40, 40], periodo = 9 } = {}) {
+async function logo({ lado = 800, ancho = lado, alto = lado, rojo = [200, 40, 40], periodo = 9, fondo = [252, 252, 250] } = {}) {
   const raw = Buffer.alloc(ancho * alto * 3);
   let s = 7;
   const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
@@ -55,7 +57,7 @@ async function logo({ lado = 800, ancho = lado, alto = lado, rojo = [200, 40, 40
     for (let x = 0; x < ancho; x++) {
       const i = (y * ancho + x) * 3;
       const n = (rnd() - 0.5) * 10;
-      let c = [252, 252, 250];
+      let c = fondo;
       for (const f of formas) { const dx = x - f.x, dy = y - f.y; if (dx * dx + dy * dy < f.r * f.r) c = f.c; }
       // Franja de "letras": barras verticales finas (bordes duros como texto).
       if (y > alto * 0.62 && y < alto * 0.7 && x > ancho * 0.2 && x < ancho * 0.8 && Math.floor(x / periodo) % 2 === 0) c = [30, 30, 30];
@@ -76,6 +78,8 @@ test.before(async () => {
     // "Mejoras" que la IA NO puede hacer: recolorear la marca, redibujar las letras.
     logoRecoloreado: await logo({ rojo: [40, 80, 200] }),
     logoRojoANaranja: await logo({ rojo: [220, 110, 40] }),
+    logoVerdeAncho: await logo({ ancho: 1000, alto: 600, fondo: [20, 110, 60] }),
+    logoVertical: await logo({ ancho: 500, alto: 900 }),
     logoOtrasLetras: await logo({ periodo: 16 }),
     // Restauración técnica válida: más contraste y nitidez + corrección de una dominante global.
     logoRestaurado: await sharp(await logo()).linear(1.08, -10).recomb([[1.02, 0, 0], [0, 1, 0], [0, 0, 0.97]]).sharpen().jpeg({ quality: 95 }).toBuffer(),
@@ -224,6 +228,7 @@ function proveedorRealista(llamadas, { cambia = null } = {}) {
     nombre: 'openai', ia: true, modelo: 'gpt-image-1-mini', necesitaUrl: false, encuadres: new Set(['comercial', 'perfil', 'portada']),
     mejorar: async ({ buffer, contexto }) => {
       llamadas.proveedor += 1; llamadas.contextos.push(contexto);
+      llamadas.entrada = await sharp(buffer).metadata();
       const { lienzo, tamano, rect } = await prepararLienzo(buffer, { tamano: TAMANO_FIJO[contexto.encuadre] });
       const salida = await sharp(cambia || lienzo).resize(tamano.ancho, tamano.alto, { fit: 'fill' })
         .modulate({ saturation: 1.08 }).linear(1.12, -14).sharpen().webp({ quality: 92 }).toBuffer();
@@ -405,6 +410,94 @@ test('NFLU-6: el uso sale de la ruta en Storage; las publicaciones siguen igual'
   assert.equal(trabajos.usoDeUrl('no es url'), 'publicacion');
 });
 
+
+// ── NCUA ────────────────────────────────────────────────────────────────────
+
+// Píxeles de la región del logo dentro del cuadrado vs. la original.
+async function pixelesIguales(original, cuadrada, region) {
+  const meta = await sharp(original).metadata();
+  const quitarAlfa = (img) => (meta.hasAlpha ? img : img.removeAlpha());
+  const a = await quitarAlfa(sharp(original).rotate()).raw().toBuffer();
+  const b = await quitarAlfa(sharp(cuadrada).extract(region)).raw().toBuffer();
+  return Buffer.compare(a, b) === 0;
+}
+
+test('NCUA-1: logo ancho sobre fondo claro → cuadrado, centrado, completo, relleno = color de fondo dominante y píxeles del logo idénticos', async () => {
+  const r = await cuadrarConRelleno(img.logoAncho);
+  assert.equal(r.aplicado, true);
+  assert.deepEqual([r.ancho, r.alto], [1200, 1200]);
+  const meta = await sharp(r.buffer).metadata();
+  assert.deepEqual([meta.width, meta.height, meta.format], [1200, 1200, 'webp']);
+  assert.deepEqual(r.region, { left: 0, top: 350, width: 1200, height: 500 }, 'centrado, sin recorte ni reescalado');
+  assert.equal(r.relleno.tipo, 'dominante');
+  assert.ok(r.relleno.color.every((c, i) => Math.abs(c - [252, 252, 250][i]) <= 6), JSON.stringify(r.relleno));
+  assert.equal(await pixelesIguales(img.logoAncho, r.buffer, r.region), true, 'letras, colores y formas sin cambio (WebP sin pérdida)');
+});
+
+test('NCUA-2: fondo de color → relleno de ese color; vertical → relleno a los lados; ya cuadrado → no se toca', async () => {
+  const verde = await cuadrarConRelleno(img.logoVerdeAncho);
+  assert.equal(verde.relleno.tipo, 'dominante');
+  assert.ok(Math.abs(verde.relleno.color[1] - 110) <= 8 && verde.relleno.color[0] < 40, JSON.stringify(verde.relleno));
+  assert.equal(await pixelesIguales(img.logoVerdeAncho, verde.buffer, verde.region), true);
+  const vertical = await cuadrarConRelleno(img.logoVertical);
+  assert.deepEqual(vertical.region, { left: 200, top: 0, width: 500, height: 900 });
+  assert.equal(await pixelesIguales(img.logoVertical, vertical.buffer, vertical.region), true);
+  const cuadrado = await cuadrarConRelleno(img.logo);
+  assert.equal(cuadrado.aplicado, false);
+  assert.equal(cuadrado.buffer, img.logo, 'la misma imagen, sin recomprimir');
+});
+
+test('NCUA-3: logo PNG con fondo transparente → relleno transparente (la versión para la IA se ve sobre blanco)', async () => {
+  const w = 900, h = 400, raw = Buffer.alloc(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4; const dentro = (x - 450) ** 2 + (y - 200) ** 2 < 150 ** 2;
+    if (dentro) { raw[i] = 200; raw[i + 1] = 40; raw[i + 2] = 40; raw[i + 3] = 255; }
+  }
+  const png = await sharp(raw, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+  const r = await cuadrarConRelleno(png);
+  assert.equal(r.relleno.tipo, 'transparente');
+  const esquina = await sharp(r.buffer).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+  assert.equal(esquina[3], 0, 'esquina transparente');
+  assert.equal(await pixelesIguales(png, r.buffer, r.region), true);
+  const paraIA = await sharp(await opaca(r.buffer)).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+  assert.deepEqual([...paraIA.slice(0, 3)], [255, 255, 255]);
+});
+
+test('NCUA-4: borde variado (una foto) → relleno blanco: nunca se estira ni se copia contenido', async () => {
+  const r = await cuadrarConRelleno(img.local);
+  assert.equal(r.relleno.tipo, 'blanco');
+  const esquina = await sharp(r.buffer).extract({ left: 0, top: 0, width: 1, height: 1 }).raw().toBuffer();
+  assert.deepEqual([...esquina.slice(0, 3)], [255, 255, 255]);
+  assert.equal(await pixelesIguales(img.local, r.buffer, r.region), true);
+});
+
+test('NCUA-5: pipeline — logo ancho válido: no se rechaza por proporción, la IA recibe el cuadrado ya hecho y, si falla, se guarda la copia cuadrada (original intacta)', async () => {
+  const env = entorno({ uso: 'perfil', foto: 'logoAncho', revisionFinal: { problemas: ['marca_alterada'] } });
+  assert.equal(await procesar(env), 'lista');
+  assert.ok(!env.llamadas.contextos[0].problemas.includes('no_cuadrada'), 'no se le pide a la IA completar el formato');
+  assert.equal(env.llamadas.entrada.width, env.llamadas.entrada.height, 'la IA recibe la imagen ya cuadrada');
+  const t = env.fila();
+  assert.equal(t.original_url, env.url, 'la original no se toca');
+  assert.match(t.mejorada_url, /\/cuadradas\/trabajos\/t1\/\d+\.webp$/, 'se guarda la copia cuadrada, no el resultado alterado');
+  assert.equal(t.calidad_original.relleno.tipo, 'dominante');
+  assert.deepEqual(env.llamadas.subidas.filter((r) => r.startsWith('mejoradas/')), [], 'el resultado alterado no se sube');
+  const s = trabajos.serializar(t);
+  assert.equal(s.usa_original, true);
+  assert.equal(s.original_guardable_url, t.calidad_original.cuadrada_url);
+});
+
+test('NCUA-6: pipeline — logo ya cuadrado no genera copia; original no válida tampoco; portada nunca', async () => {
+  const cuadrado = entorno({ uso: 'perfil', foto: 'logo' });
+  assert.equal(await procesar(cuadrado), 'lista');
+  assert.ok(!cuadrado.llamadas.subidas.some((r) => r.startsWith('cuadradas/')));
+  const invalido = entorno({ uso: 'perfil', foto: 'logoAncho', revision: { problemas: ['borrosa'] }, revisionFinal: { problemas: ['marca_alterada'] } });
+  assert.equal(await procesar(invalido), 'fallida');
+  assert.ok(!invalido.llamadas.subidas.some((r) => r.startsWith('cuadradas/')));
+  const portada = entorno({ uso: 'portada', foto: 'localVertical' });
+  await procesar(portada);
+  assert.ok(!portada.llamadas.subidas.some((r) => r.startsWith('cuadradas/')));
+});
+
 // ── NAPI ────────────────────────────────────────────────────────────────────
 
 let servidor, base;
@@ -532,6 +625,13 @@ test('NAPI-6: "usar mi original" solo si cumple la calidad mínima (lo decide el
   assert.equal(negocio().imagen_url, urlPortada());
   assert.equal(negocio().estado_procesamiento_imagen, 'descartada');
   assert.equal(negocio().imagen_mejorada_url, null);
+
+  // Logo no cuadrado: "usar original" guarda su copia cuadrada con relleno técnico.
+  const cuadrada = `${STORAGE}/cuadradas/trabajos/x/1.webp`;
+  const ancho = sembrar('fallida', urlPerfil(4), { calidad_original: { original_aceptable: true, cuadrada_url: cuadrada } });
+  assert.equal((await guardar({ tipo: 'perfil', imagen_trabajo_id: ancho, usar_original: true })).status, 200);
+  assert.equal(negocio().logo_url, cuadrada);
+  negocio().logo_url = urlPerfil();
 
   for (const extra of [{ calidad_original: { original_aceptable: false } }, { calidad_original: { brillo: 10 } }, {}]) {
     const id = sembrar('fallida', urlPerfil(2), extra);

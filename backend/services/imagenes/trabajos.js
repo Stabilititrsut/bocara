@@ -43,10 +43,15 @@
 // análisis con IA y cumple la calidad mínima de su uso:
 // calidad_original.original_aceptable), queda 'lista' con la ORIGINAL. Si
 // la original tampoco es válida: fallida (reintentable) o rechazada.
+// Perfil no cuadrado: SIN IA se crea una copia cuadrada con relleno técnico
+// (cuadrar.js: logo completo, centrado, píxeles intactos). Esa copia es la que
+// se analiza, se mejora y, si la IA falla, la "original" que se guarda
+// (calidad_original.cuadrada_url). El archivo original no se toca.
 const { ErrorProveedor } = require('./errores');
 const { prepararEntrada, validarResultado, ErrorValidacion } = require('./validacion');
 const { analizarCalidad, analizarRecuperable } = require('./calidad');
 const { crearRevisorIA, INFIDELIDAD, irreparablesDe } = require('./revisionIA');
+const { cuadrarConRelleno, opaca } = require('./cuadrar');
 const { obtenerProveedor } = require('./proveedores');
 const pipeline = require('./pipeline');
 const { estadoIAImagen } = require('../iaEstado');
@@ -138,6 +143,7 @@ function serializar(t, { expone = process.env.NODE_ENV !== 'production' } = {}) 
     // Perfil / portada: la original pasó el análisis y cumple la calidad mínima.
     puede_usar_original: puedeUsarOriginal(t, uso),
     original_url: t.original_url,
+    original_guardable_url: urlOriginalGuardable(t),
     mejorada_url: t.estado === ESTADOS.LISTA ? t.mejorada_url : null,
     // Lista con la foto original (la mejorada no pasó y la original ya cumplía).
     usa_original: t.estado === ESTADOS.LISTA && !!t.calidad_resultado?.fallback_original,
@@ -153,6 +159,12 @@ function serializar(t, { expone = process.env.NODE_ENV !== 'production' } = {}) 
     modelo: t.modelo || null,
     usada: !!t.bolsa_id,
   };
+}
+
+// La "original" que se guarda: la copia cuadrada con relleno técnico (perfil
+// no cuadrado) o el archivo original tal cual.
+function urlOriginalGuardable(t) {
+  return t?.calidad_original?.cuadrada_url || t?.original_url || null;
 }
 
 function puedeUsarOriginal(t, uso = usoDeUrl(t?.original_url)) {
@@ -268,10 +280,22 @@ async function procesarTrabajo(id, {
     try { original = (await descargar(t.original_url)).buffer; } catch (err) { return await fallar('descarga', err.message); }
     if (!original?.length || original.length > pipeline.MAX_BYTES_ORIGINAL) return await fallar('descarga', 'imagen vacía o demasiado grande');
 
-    const calidad = await analizarRecuperable(original, { nivel: uso === 'publicacion' ? 'original' : cfg.nivel });
+    // Perfil: copia cuadrada con relleno técnico si hace falta, y opaca para la
+    // IA (un relleno transparente se ve blanco). La proporción ya no es problema.
+    let base = original;
+    let cuadrada = null;
+    if (uso === 'perfil') {
+      try {
+        const c = await cuadrarConRelleno(original);
+        if (c.aplicado) cuadrada = c;
+        base = await opaca(c.buffer);
+      } catch { /* ilegible: lo rechaza el análisis */ }
+      if (cuadrada) console.log('[IMAGEN_IA] %s perfil no cuadrado: relleno técnico (%s) a %dx%d', id, cuadrada.relleno.tipo, cuadrada.ancho, cuadrada.alto);
+    }
+    const calidad = await analizarRecuperable(base, { nivel: uso === 'publicacion' ? 'original' : cfg.nivel });
     console.log('[IMAGEN_IA] %s calidad original: %s', id, JSON.stringify(calidad.metricas));
     if (!calidad.ok) return await rechazar(calidad.motivos, { calidad_original: calidad.metricas });
-    const prep = await prepararEntrada(original);
+    const prep = await prepararEntrada(base);
     let revision;
     try {
       revision = await conReintento(() => revisor.revisar(prep.buffer, { modo: 'original', uso }), dormir);
@@ -295,6 +319,11 @@ async function procesarTrabajo(id, {
     if (uso !== 'publicacion') {
       const aceptable = !calidad.problemas.length && !revision.problemas.some((p) => BLOQUEAN_ORIGINAL.has(p.codigo));
       calidadOriginal = { ...calidad.metricas, original_aceptable: aceptable };
+      // La copia cuadrada solo hace falta si la original se puede usar.
+      if (cuadrada && aceptable) {
+        const url = await almacenamiento.subir(`cuadradas/trabajos/${id}/${Date.now()}.webp`, cuadrada.buffer, cuadrada.contentType);
+        calidadOriginal = { ...calidadOriginal, cuadrada_url: url, relleno: cuadrada.relleno };
+      }
     }
 
     // 2. Mejorar con IA (siempre que la original sea recuperable).
@@ -382,7 +411,7 @@ async function procesarTrabajo(id, {
         : !problemasPrevios.length && (await analizarCalidad(original, { nivel: cfg.nivel })).ok;
       if (originalValida) {
         await mover(cliente, id, ESTADOS.VALIDANDO, {
-          estado: ESTADOS.LISTA, mejorada_url: t.original_url, revision_ia: revisionIA,
+          estado: ESTADOS.LISTA, mejorada_url: calidadOriginal.cuadrada_url || t.original_url, revision_ia: revisionIA,
           calidad_resultado: { ...fallo.metricas, fallback_original: true, motivo_fallback: fallo.detalle },
         });
         console.log('[IMAGEN_IA] %s LISTA con la original (ya cumplía la calidad) en %d ms', id, Date.now() - inicio);
@@ -564,7 +593,7 @@ async function marcarUsado(trabajoId, bolsaId, { cliente = db() } = {}) {
 
 module.exports = {
   ESTADOS, EN_CURSO, USOS, MENSAJES_FALLO, CODIGOS_PUBLICAR, CODIGOS_NEGOCIO,
-  dependenciasIA, serializar, pasoError, codigoProveedor, usoDeUrl, puedeUsarOriginal,
+  dependenciasIA, serializar, pasoError, codigoProveedor, usoDeUrl, puedeUsarOriginal, urlOriginalGuardable,
   crearTrabajo, procesarTrabajo, programarTrabajo, esperarTrabajosEnCurso,
   procesarTrabajosPendientes, leerTrabajoPropio, reintentarTrabajo,
   trabajoParaPublicar, trabajoParaNegocio, columnasImagenValidada, bolsaTieneImagenValidada, marcarUsado,

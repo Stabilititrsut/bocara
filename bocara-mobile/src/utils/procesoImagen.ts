@@ -37,6 +37,9 @@ export interface TrabajoImagen {
   // Perfil / portada: la original pasó el análisis con IA y cumple la calidad
   // mínima, así que se puede guardar tal cual (el backend lo vuelve a validar).
   puede_usar_original?: boolean;
+  // La original que se guardaría: en un logo no cuadrado, su copia cuadrada
+  // con relleno técnico (sin IA); si no, la original tal cual.
+  original_guardable_url?: string | null;
   // Paso donde terminó una rechazada/fallida (lo calcula el backend).
   paso_error?: 'analizando' | 'mejorando' | 'validando' | null;
 }
@@ -266,7 +269,7 @@ export function bloqueoImagenNegocio({ trabajo, subiendo, errorRed, usarOriginal
 // Imagen que quedará guardada (vista previa antes de Guardar).
 export function imagenAGuardar(trabajo: TrabajoImagen | null, { usarOriginal = false }: { usarOriginal?: boolean } = {}): string | null {
   if (!trabajo) return null;
-  if (usarOriginal) return trabajo.original_url;
+  if (usarOriginal) return trabajo.original_guardable_url || trabajo.original_url;
   return trabajo.estado === 'lista' ? trabajo.mejorada_url || trabajo.original_url : null;
 }
 

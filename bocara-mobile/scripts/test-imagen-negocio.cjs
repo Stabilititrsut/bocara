@@ -89,6 +89,9 @@ test('NEG-FE-3: vista previa de lo que se guardará — mejorada si está lista,
   assert.equal(P.imagenAGuardar(trabajo('fallida', { puede_usar_original: true }), { usarOriginal: true }), ORIGINAL);
   assert.equal(P.imagenAGuardar(trabajo('mejorando')), null);
   assert.equal(P.imagenAGuardar(null), null);
+  // Logo no cuadrado: "usar original" muestra su copia cuadrada con relleno técnico.
+  const CUADRADA = 'https://proyecto.supabase.co/storage/v1/object/public/bocara-images/cuadradas/trabajos/t1/1.webp';
+  assert.equal(P.imagenAGuardar(trabajo('fallida', { puede_usar_original: true, original_guardable_url: CUADRADA }), { usarOriginal: true }), CUADRADA);
 });
 
 // ── Componente real ─────────────────────────────────────────────────────────
