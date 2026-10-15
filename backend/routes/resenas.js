@@ -2,6 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const { validarCalificacion, validarComentario, validarRespuesta, esDuplicado } = require('../services/resenas');
+const { resolverPeriodoFinanciero, aplicarRango } = require('../services/desgloseFinanciero');
 const router = express.Router();
 
 const MENSAJE_DUPLICADA = 'Ya calificaste este pedido';
@@ -36,10 +37,17 @@ router.get('/restaurante', authMiddleware, async (req, res) => {
     return res.status(403).json({ error: 'No autorizado' });
   }
 
-  const { data, error } = await supabase
-    .from('resenas')
-    .select('*, usuarios(nombre)')
-    .eq('negocio_id', negocioId)
+  // ?mes=AAAA-MM (hora de Guatemala) limita al mes; sin él, las 100 más recientes.
+  let rango = { desde: null, hasta: null };
+  if (req.query.mes) {
+    rango = resolverPeriodoFinanciero({ periodo: 'mes_especifico', mes: req.query.mes });
+    if (rango.error) return res.status(400).json({ error: rango.error });
+  }
+
+  const { data, error } = await aplicarRango(
+    supabase.from('resenas').select('*, usuarios(nombre)').eq('negocio_id', negocioId),
+    rango,
+  )
     .order('created_at', { ascending: false })
     .limit(100);
   if (error) return res.status(500).json({ error: error.message });
@@ -52,7 +60,7 @@ router.get('/:negocio_id', async (req, res) => {
     .from('resenas')
     .select('id,negocio_id,calificacion,comentario,respuesta_restaurante,respondida_en,created_at,usuarios(nombre)')
     .eq('negocio_id', req.params.negocio_id)
-    .eq('visible', true)
+    .not('visible', 'is', false)
     .order('created_at', { ascending: false })
     .limit(50);
   if (error) return res.status(500).json({ error: error.message });

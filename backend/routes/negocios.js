@@ -1,7 +1,8 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { geocodeAddress } = require('../utils/geo');
+const { geocodeAddress, validarCoordenadasEntrada } = require('../utils/geo');
+const { armarFeedNegocios } = require('../services/feedNegocios');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { hoyGuatemala } = require('../services/horarioGuatemala');
@@ -14,6 +15,7 @@ const { esMesValido, urlFirmadaComprobante, consolidarPagosPorMes } = require('.
 const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
+const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -83,7 +85,8 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
+// GET /api/negocios/feed[?lat=&lng=] — TODOS los negocios activos y verificados
+// (con o sin publicaciones) + stats de descuento; lat/lng solo ordenan
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
   // Estado, horario, unidades y vigencia se seleccionan aunque no se devuelvan:
@@ -109,29 +112,41 @@ router.get('/feed', async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Excluir lo que el cliente no ve ANTES de agrupar: si no, un negocio cuyas
+  // Excluir lo que el cliente no ve ANTES de contar: si no, un negocio cuyas
   // publicaciones ya cerraron (o cuyo fallback relajó filtros) seguiría
-  // apareciendo en el feed con cantidad_bolsas > 0.
+  // mostrando cantidad_bolsas > 0.
   bolsas = filtrarVisiblesParaCliente(bolsas);
 
-  const map = new Map();
-  for (const b of (bolsas || [])) {
-    const n = b.negocios;
-    if (!n) continue;
-    // Restaurantes suspendidos o aún no aprobados no deben aportar al feed del cliente.
-    if (!negocioDisponiblePublico(n)) continue;
-    if (zona && String(n.zona) !== String(zona)) continue;
-    if (categoria && n.categoria !== categoria) continue;
-    const disc = b.precio_original > 0
-      ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
-    if (!map.has(n.id)) map.set(n.id, { ...n, cantidad_bolsas: 0, max_descuento: 0 });
-    const e = map.get(n.id);
-    e.cantidad_bolsas++;
-    if (disc > e.max_descuento) e.max_descuento = disc;
+  // TODOS los restaurantes activos y verificados, tengan o no publicaciones
+  // hoy (regla de negocio: el cliente siempre ve el catálogo completo). Antes
+  // el feed salía de las publicaciones disponibles y un restaurante sin bolsas
+  // vigentes desaparecía de Inicio/Tiendas.
+  const CAMPOS_NEGOCIO_FEED = 'id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,' +
+    'latitud,longitud,activo,estado_verificacion';
+  let { data: negocios, error: nErr } = await supabase
+    .from('negocios')
+    .select(CAMPOS_NEGOCIO_FEED)
+    .eq('activo', true)
+    .or('estado_verificacion.eq.aprobado,estado_verificacion.is.null');
+  if (nErr) {
+    const r = await supabase.from('negocios').select(CAMPOS_NEGOCIO_FEED).eq('activo', true);
+    negocios = r.data; nErr = r.error;
   }
+  if (nErr) return res.status(500).json({ error: nErr.message });
 
-  const resultado = Array.from(map.values()).map(({ activo, estado_verificacion, ...pub }) => pub);
-  res.json(resultado.sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
+  negocios = (negocios || []).filter((n) =>
+    negocioDisponiblePublico(n) &&
+    (!zona || String(n.zona) === String(zona)) &&
+    (!categoria || n.categoria === categoria));
+
+  // lat/lng del cliente: SOLO para ordenar (cercanos primero). Si faltan o son
+  // inválidas no se responde error: el feed sale completo sin ese orden.
+  const ubic = validarCoordenadasEntrada(req.query.lat, req.query.lng);
+  const coords = ubic.ok ? { lat: ubic.lat, lng: ubic.lng } : null;
+
+  const resultado = armarFeedNegocios(negocios, bolsas, coords)
+    .map(({ activo, estado_verificacion, ...pub }) => pub);
+  res.json(resultado);
 });
 
 // GET /api/negocios/:id/detalle — detalle con bolsas agrupadas + veces_pedido
@@ -338,6 +353,7 @@ router.post('/', authMiddleware, async (req, res) => {
     .select()
     .single();
   if (error) return res.status(400).json({ error: error.message });
+  programarMejora('negocios', data.id, data.imagen_url);
   res.status(201).json(data);
 });
 
@@ -554,6 +570,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // quedar activo por esta vía.
   const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
   if (errorFoto) return res.status(400).json({ error: errorFoto });
+  // Pipeline de imágenes: la original/mejorada de la foto actual no es una
+  // foto nueva. Lectura aparte y tolerante: sin la migración aplicada, las
+  // columnas no existen y se compara solo contra imagen_url.
+  let fotoNueva = false;
+  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url) {
+    const { data: img } = await supabase.from('negocios')
+      .select('imagen_original_url, imagen_mejorada_url').eq('id', req.params.id).maybeSingle();
+    fotoNueva = esFotoNueva(updates.imagen_url, { ...negocio, ...(img || {}) });
+    if (!fotoNueva) delete updates.imagen_url;
+  }
   const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
   if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
     return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
@@ -578,6 +604,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
 
   if (error) return res.status(400).json({ error: error.message });
+  if (fotoNueva) programarMejora('negocios', req.params.id, data.imagen_url);
   res.json(data);
 });
 

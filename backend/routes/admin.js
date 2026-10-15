@@ -12,12 +12,14 @@ const {
   planParaNegocio, crearLiquidacionMensual, guardarComprobanteSeguro, urlFirmadaComprobante,
   ventanaLiquidacion, puedeForzarVentana, MENSAJE_FUERA_DE_VENTANA,
 } = require('../services/liquidaciones');
-const { validarModeracion, resumirCalificacionesPorNegocio } = require('../services/resenas');
+const { validarModeracion, resumirCalificacionesPorNegocio, agruparResenasPorNegocio } = require('../services/resenas');
 const { ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
+const { bolsaTieneImagenValidada } = require('../services/imagenes/trabajos');
+const MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA = 'No se puede aprobar: la foto de esta publicación no pasó la validación de calidad con IA. El restaurante debe cambiarla.';
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
@@ -963,6 +965,9 @@ router.get('/resenas', authMiddleware, adminOnly, async (req, res) => {
 // GET /api/admin/resenas/resumen[?mes=AAAA-MM] — promedio y total de reseñas
 // visibles por negocio. Con `mes`, solo las reseñas creadas ese mes (hora de
 // Guatemala); sin él, el histórico completo. Para /admin/negocios.
+// `comentarios` trae las reseñas del mismo rango por negocio (texto, estrellas,
+// fecha y cliente), más recientes primero, para leer lo que escribieron.
+// `visible IS NOT FALSE`: una reseña recién creada con visible aún NULL cuenta.
 const PAGINA_RESENAS = 1000;
 router.get('/resenas/resumen', authMiddleware, adminOnly, async (req, res) => {
   let rango = { desde: null, hasta: null };
@@ -974,14 +979,20 @@ router.get('/resenas/resumen', authMiddleware, adminOnly, async (req, res) => {
   const resenas = [];
   for (let desde = 0; ; desde += PAGINA_RESENAS) {
     const { data, error } = await aplicarRango(
-      supabase.from('resenas').select('negocio_id,calificacion,visible,created_at').eq('visible', true),
+      supabase.from('resenas')
+        .select('id,negocio_id,calificacion,comentario,respuesta_restaurante,visible,created_at,usuarios(nombre)')
+        .not('visible', 'is', false),
       rango,
     ).order('created_at', { ascending: true }).range(desde, desde + PAGINA_RESENAS - 1);
     if (error) return res.status(500).json({ error: error.message });
     resenas.push(...(data || []));
     if (!data || data.length < PAGINA_RESENAS) break;
   }
-  res.json({ mes: rango.mes || null, negocios: resumirCalificacionesPorNegocio(resenas) });
+  res.json({
+    mes: rango.mes || null,
+    negocios: resumirCalificacionesPorNegocio(resenas),
+    comentarios: agruparResenasPorNegocio(resenas),
+  });
 });
 
 // PATCH /api/admin/resenas/:id/moderar — { visible: boolean, motivo }
@@ -1124,6 +1135,11 @@ router.put('/bolsas/:id/aprobar', authMiddleware, adminOnly, async (req, res) =>
   // legible y el restaurante puede editarla para agregarla (PUT /bolsas/:id).
   if (!tieneFoto(bolsa.imagen_url)) {
     return res.status(409).json({ error: MENSAJE_APROBAR_PUBLICACION_SIN_FOTO });
+  }
+  // Tampoco sin una foto validada por IA (services/imagenes/trabajos.js): el
+  // restaurante debe cambiarla en el formulario para que pase el análisis.
+  if (!bolsaTieneImagenValidada(bolsa)) {
+    return res.status(409).json({ error: MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA, codigo: 'IMAGEN_SIN_VALIDAR' });
   }
 
   // Repetir "aprobar" sobre algo ya aprobado es idempotente: no vuelve a

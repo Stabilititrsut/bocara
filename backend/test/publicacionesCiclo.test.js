@@ -131,7 +131,8 @@ test('nueva: crear → pendiente, no visible; aprobar → visible en todas las s
 test('nueva: el feed de negocios (Home) cuenta solo las publicaciones visibles', async () => {
   const p = await crear(promo());
   let home = (await pedir('GET', '/api/negocios/feed')).body;
-  assert.equal(home.find(n => n.id === IDS.olaAzul), undefined, 'sin aprobadas el negocio no sale en el Home');
+  assert.equal(home.find(n => n.id === IDS.olaAzul)?.cantidad_bolsas, 0,
+    'sin aprobadas el negocio sigue en el Home (regla: siempre todos) pero sin publicaciones contadas');
   await aprobar(p.id);
   home = (await pedir('GET', '/api/negocios/feed')).body;
   assert.equal(home.find(n => n.id === IDS.olaAzul)?.cantidad_bolsas, 1);
@@ -431,7 +432,8 @@ function sembrar(extra) {
     id: `seed-${Math.random().toString(16).slice(2)}`, negocio_id: IDS.olaAzul, nombre: 'Semilla',
     tipo: 'cupon', precio_original: 100, precio_descuento: 50, cantidad_disponible: 4,
     activo: true, estado_aprobacion: 'aprobado', motivo_rechazo: null,
-    imagen_url: FOTO, created_at: new Date().toISOString(), ...HORARIO_VIGENTE, ...extra,
+    imagen_url: FOTO, estado_procesamiento_imagen: 'completada', imagen_original_url: FOTO, imagen_mejorada_url: FOTO,
+    created_at: new Date().toISOString(), ...HORARIO_VIGENTE, ...extra,
   };
   fake._db.tablas.bolsas.push(b);
   return b.id;

@@ -63,7 +63,12 @@ export interface Bolsa {
   cantidad_disponible_real?: number;
   tipo: TipoPublicacion;
   categoria?: string;
+  // imagen_url = la mejor versión disponible (mejorada si existe). Pipeline de imágenes:
   imagen_url?: string;
+  imagen_original_url?: string | null;
+  imagen_mejorada_url?: string | null;
+  estado_procesamiento_imagen?: 'pendiente' | 'procesando' | 'completada' | 'fallida' | 'descartada' | null;
+  proveedor_imagen_ia?: string | null;
   hora_recogida_inicio: string;
   hora_recogida_fin: string;
   fecha_disponible?: string;
@@ -105,6 +110,9 @@ export interface CrearBolsaPayload {
   hora_recogida_fin?: string;
   permite_envio?: boolean;
   imagen_url?: string | null;
+  // Trabajo de imagen 'lista' de la foto nueva (backend/services/imagenes/trabajos.js):
+  // sin él el backend no acepta una foto nueva.
+  imagen_trabajo_id?: string;
   peso_estimado_kg?: number;
   // Fecha de publicación/inicio de vigencia (Promoción y Tiempo limitado).
   // fecha_caducidad es la fecha fin — solo aplica a Tiempo limitado; una
