@@ -4,7 +4,7 @@ import { emitSessionInvalid } from './sessionEvents';
 import { getAuthToken } from './authTokenStorage';
 import type { CrearBolsaPayload, ActualizarBolsaPayload } from '../types';
 import type { PayloadDescripcionIA } from '../utils/descripcionIA';
-import type { TrabajoImagen, UsoImagen } from '../utils/procesoImagen';
+import type { TrabajoImagen } from '../utils/procesoImagen';
 
 // Puerto donde corre el backend local (ver docs/ENTORNO_LOCAL.md). Ajustable sin
 // tocar código si algún día el backend local cambia de puerto.
@@ -151,9 +151,6 @@ export const negociosAPI = {
   bolsas: (id: string) => api.get(`/negocios/${id}/bolsas`),
   miNegocio: () => api.get('/negocios/mi-negocio'),
   actualizar: (id: string, data: any) => api.put(`/negocios/${id}`, data),
-  // Foto de perfil o portada validada con IA (trabajo 'lista' u original aceptable).
-  guardarImagen: (id: string, data: { tipo: 'perfil' | 'portada'; imagen_trabajo_id: string; usar_original?: boolean }) =>
-    api.put(`/negocios/${id}/imagen`, data),
   // rechazado → pendiente. El backend controla la transición (exige foto y
   // deja el negocio inactivo); PUT /negocios/:id no acepta estados.
   reenviarSolicitud: () => api.post('/negocios/mi-negocio/reenviar'),
@@ -236,9 +233,8 @@ export const imagenesAPI = {
   accion: (tipo: 'publicacion' | 'negocio', id: string, accion: 'reintentar' | 'usar-original' | 'usar-mejorada') =>
     api.post(`/imagenes/${tipo}/${id}/${accion}`),
   // Trabajo de imagen previo a publicar (backend/services/imagenes/trabajos.js).
-  // uso: 'publicacion' (por defecto) | 'perfil' | 'portada' del restaurante.
-  crearTrabajo: (imagen_url: string, uso: UsoImagen = 'publicacion') =>
-    api.post<{ trabajo: TrabajoImagen }>('/imagenes/trabajos', { imagen_url, uso }).then((r) => r.data.trabajo),
+  crearTrabajo: (imagen_url: string) =>
+    api.post<{ trabajo: TrabajoImagen }>('/imagenes/trabajos', { imagen_url }).then((r) => r.data.trabajo),
   obtenerTrabajo: (id: string) =>
     api.get<{ trabajo: TrabajoImagen }>(`/imagenes/trabajos/${id}`).then((r) => r.data.trabajo),
   reintentarTrabajo: (id: string) =>

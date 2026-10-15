@@ -79,70 +79,6 @@ const PROMPT_COMERCIAL = [OBJETIVO, PRESERVAR_COMERCIAL, MEJORAR, ENCUADRE_COMER
   .map((seccion) => seccion.join(' '))
   .join('\n');
 
-// Imágenes del RESTAURANTE (no de un producto): foto de perfil y portada.
-// Aquí la IA es SOLO restauración técnica (resolución, nitidez, ruido, luz,
-// contraste, balance de blancos, artefactos) y adaptación del formato
-// extendiendo el fondo existente. Nada creativo: la prioridad es la
-// FIDELIDAD a la marca. Si el resultado cambia letras, logo, colores o
-// elementos, la validación lo rechaza y se conserva la original (trabajos.js).
-const TECNICO_NEGOCIO = [
-  'This is the real image of a restaurant or food business. Treat it as a technical photo restoration job, not a creative edit.',
-  'The output must be the SAME image, pixel-faithful in content, only technically cleaner.',
-];
-const PRESERVAR_NEGOCIO = [
-  'Preserve exactly: every letter, word, number and the business name (same font, spelling, size, spacing and position);',
-  'every logo and symbol (same shapes, internal proportions, line weights and positions);',
-  'the brand colors (same hues and saturation; do not recolor, shift, enrich or replace them);',
-  'every product, dish, person, object and decoration, in the same place, size and appearance;',
-  'the composition and the identity of the business.',
-];
-const PROHIBIDO_NEGOCIO = [
-  'Strictly forbidden: redrawing, redesigning, vectorizing, retyping, restyling, simplifying, "cleaning up" or reinterpreting a logo, symbol or text;',
-  'inventing or adding text, logos, signs, products, food, people, props or decorations;',
-  'removing any element; changing colors other than correcting a global color cast; stretching, warping or changing proportions;',
-  'beautifying, stylizing, adding effects, bokeh, glow, gradients or a new background design.',
-  'If an improvement would require changing any of the above, do not make it: leave that part exactly as in the original.',
-];
-const ESTILO_NEGOCIO = [
-  'Natural, true-to-original look: no HDR effect, no oversaturation, no plastic or AI-smooth texture, no illustration or 3D look.',
-];
-
-// Perfil (avatar): lienzo cuadrado; el logo completo, sin recortar nada.
-const ENCUADRE_PERFIL = [
-  'Allowed technical fixes only: increase resolution, sharpen existing edges, reduce noise, correct exposure and contrast, correct white balance of a global color cast, remove compression artifacts.',
-  'Square format: the original image occupies a centered rectangle of this square canvas and must stay exactly there, at the same size, fully visible, never cropped.',
-  'The soft blurred area around it is only padding: fill it with a plain, seamless continuation of the image’s own background color or texture, with nothing in it.',
-];
-// Portada (banner): lienzo horizontal; solo se extiende fondo o superficie.
-const ENCUADRE_PORTADA = [
-  'Allowed technical fixes only: increase resolution, sharpen, reduce noise, correct lighting, exposure and contrast, correct white balance of a global color cast.',
-  'Horizontal format: the original image occupies a rectangle of this wide canvas and must stay exactly there, at the same size.',
-  'The soft blurred area around it is only padding: fill it only with a plain, seamless continuation of the existing background, wall, sky, floor or surface, with no new objects, products, people, text or decorations.',
-];
-
-const PROMPT_PERFIL = [TECNICO_NEGOCIO, PRESERVAR_NEGOCIO, ENCUADRE_PERFIL, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
-  .map((seccion) => seccion.join(' '))
-  .join('\n');
-const PROMPT_PORTADA = [TECNICO_NEGOCIO, PRESERVAR_NEGOCIO, ENCUADRE_PORTADA, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
-  .map((seccion) => seccion.join(' '))
-  .join('\n');
-
-// Igual que CORRECCIONES, sin suponer que la imagen es comida y solo con
-// correcciones técnicas (sin "ordenar" ni recomponer el contenido).
-const CORRECCIONES_NEGOCIO = Object.freeze({
-  oscura: 'The image is underexposed: raise the exposure and open the shadows.',
-  muy_oscura: 'The image is underexposed: raise the exposure and open the shadows.',
-  quemada: 'The image is overexposed: recover the blown highlights where detail exists.',
-  sin_contraste: 'The image looks flat: restore natural contrast without changing any color.',
-  borrosa: 'The image is soft: sharpen the existing edges only, without redrawing shapes or letters.',
-  resolucion: 'The image is low resolution: upscale it faithfully, keeping every shape and letter identical.',
-  baja_calidad: 'The image has noise and compression artifacts: remove them without altering any detail.',
-  proporcion: 'Fill the canvas only by extending the existing background.',
-  no_cuadrada: 'The original is not square: fill the square canvas only with the existing background color or texture.',
-  no_horizontal: 'The original is not horizontal: fill the sides only with the existing background or surface.',
-  recortada: 'The subject is tightly framed: leave the subject untouched and extend only the background around it.',
-});
-
 // Problemas detectados en el análisis de la original (calidad.js y
 // revisionIA.js) → indicación concreta para el modelo. Sin entrada aquí, el
 // problema no se menciona (el prompt base ya cubre la mejora general).
@@ -160,21 +96,16 @@ const CORRECCIONES = Object.freeze({
   manos_o_personas: 'Hands or people are visible: keep the food as the clear protagonist and make them less prominent without altering the food.',
 });
 
-// encuadre: 'original' (fotos de negocio: mismo encuadre y proporción),
-// 'comercial' (publicaciones: lienzo estándar con el fondo extendido),
-// 'perfil' (avatar cuadrado) o 'portada' (banner horizontal) del restaurante.
-// IMAGE_AI_PROMPT solo reemplaza el prompt de comida: perfil y portada nunca
-// deben recibir instrucciones pensadas para un plato.
+// encuadre: 'original' (fotos de negocio: mismo encuadre y proporción) o
+// 'comercial' (publicaciones: lienzo estándar con el fondo extendido).
 function promptMejora({ problemas = [], encuadre = 'original' } = {}) {
-  const negocio = encuadre === 'perfil' || encuadre === 'portada';
-  if (process.env.IMAGE_AI_PROMPT && !negocio) return process.env.IMAGE_AI_PROMPT;
-  const base = { comercial: PROMPT_COMERCIAL, perfil: PROMPT_PERFIL, portada: PROMPT_PORTADA }[encuadre] || PROMPT_FOTO_COMIDA;
-  const tabla = negocio ? CORRECCIONES_NEGOCIO : CORRECCIONES;
-  const extra = [...new Set(problemas.map((c) => tabla[c]).filter(Boolean))];
+  if (process.env.IMAGE_AI_PROMPT) return process.env.IMAGE_AI_PROMPT;
+  const base = encuadre === 'comercial' ? PROMPT_COMERCIAL : PROMPT_FOTO_COMIDA;
+  const extra = [...new Set(problemas.map((c) => CORRECCIONES[c]).filter(Boolean))];
   return extra.length ? `${base}\nSpecific fixes for this photo: ${extra.join(' ')}` : base;
 }
 
 module.exports = {
-  PROMPT_FOTO_COMIDA, PROMPT_COMERCIAL, PROMPT_PERFIL, PROMPT_PORTADA, CORRECCIONES, CORRECCIONES_NEGOCIO, promptMejora,
-  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL, ENCUADRE_PERFIL, ENCUADRE_PORTADA, PRESERVAR_NEGOCIO, PROHIBIDO_NEGOCIO },
+  PROMPT_FOTO_COMIDA, PROMPT_COMERCIAL, CORRECCIONES, promptMejora,
+  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL },
 };

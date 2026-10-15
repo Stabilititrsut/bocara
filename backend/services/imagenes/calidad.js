@@ -11,9 +11,6 @@
 //                   un formato comercial estándar (≥ 1024 px).
 //   · 'publicable'→ ¿el RESULTADO mejorado es presentable? Umbrales más
 //                   exigentes de brillo, contraste y nitidez. Este sí bloquea.
-//   · 'perfil' / 'portada' → mínimo de la foto de perfil (cuadrada) y de la
-//                   portada (horizontal) del restaurante. Lo cumplen el
-//                   resultado con IA y, para "usar mi original", la original.
 // La IA de revisión (revisionIA.js) cubre lo que estas métricas no ven
 // (no es comida, producto cortado, presentación descuidada).
 //
@@ -58,31 +55,6 @@ function umbralesCalidad() {
       oscurosMax: 0.35,
       quemadosMax: 0.25,
     },
-    // Foto de perfil del restaurante (avatar): cuadrada. Un logo sobre fondo
-    // blanco o negro es normal, así que no se miden oscuros/quemados ni el brillo medio.
-    perfil: {
-      ladoMin: num('IMAGE_QUALITY_PERFIL_MIN_LADO', 400),
-      proporcionMax: num('IMAGE_QUALITY_PERFIL_MAX_PROPORCION', 1.15),
-      brilloMin: 0,
-      brilloMax: 255,
-      contrasteMin: num('IMAGE_QUALITY_PERFIL_MIN_CONTRASTE', 20),
-      nitidezMin: num('IMAGE_QUALITY_PERFIL_MIN_NITIDEZ', 30),
-      oscurosMax: 1,
-      quemadosMax: 1,
-    },
-    // Portada (banner): horizontal, mismos umbrales de luz que una publicación.
-    portada: {
-      ladoMin: num('IMAGE_QUALITY_PORTADA_MIN_LADO', 720),
-      proporcionMax: num('IMAGE_QUALITY_MAX_PROPORCION', 2.0),
-      proporcionMin: num('IMAGE_QUALITY_PORTADA_MIN_PROPORCION', 1.2),
-      horizontal: true,
-      brilloMin: num('IMAGE_QUALITY_PUBLICABLE_MIN_BRILLO', 70),
-      brilloMax: num('IMAGE_QUALITY_PUBLICABLE_MAX_BRILLO', 225),
-      contrasteMin: num('IMAGE_QUALITY_PUBLICABLE_MIN_CONTRASTE', 28),
-      nitidezMin: num('IMAGE_QUALITY_PUBLICABLE_MIN_NITIDEZ', 45),
-      oscurosMax: 0.35,
-      quemadosMax: 0.25,
-    },
   };
 }
 
@@ -96,8 +68,6 @@ const MENSAJES = Object.freeze({
   quemada: 'La foto está sobreexpuesta (demasiado clara). Evita el flash directo o la luz de frente.',
   sin_contraste: 'La foto está muy lavada o sin contraste. Tómala con mejor luz.',
   borrosa: 'La foto está borrosa o movida. Enfoca el producto y mantén el teléfono firme.',
-  no_cuadrada: 'La foto de perfil debe ser cuadrada (o casi) para verse bien en el círculo del perfil.',
-  no_horizontal: 'La portada debe ser horizontal (más ancha que alta), por ejemplo 3:2 o 16:9.',
 });
 
 function luminancia(raw, canales) {
@@ -165,9 +135,7 @@ async function analizarCalidad(buffer, { nivel = 'original' } = {}) {
   const motivos = [];
   const agregar = (codigo) => motivos.push({ codigo, mensaje: MENSAJES[codigo] });
   if (Math.min(m.ancho, m.alto) < u.ladoMin) agregar('resolucion');
-  if (u.horizontal && (m.ancho <= m.alto || m.proporcion < u.proporcionMin)) agregar('no_horizontal');
-  else if (nivel === 'perfil' && m.proporcion > u.proporcionMax) agregar('no_cuadrada');
-  else if (m.proporcion > u.proporcionMax) agregar('proporcion');
+  if (m.proporcion > u.proporcionMax) agregar('proporcion');
   if (m.brillo < u.brilloMin || m.oscuros > u.oscurosMax) agregar('oscura');
   else if (m.brillo > u.brilloMax || m.quemados > u.quemadosMax) agregar('quemada');
   else if (m.contraste < u.contrasteMin) agregar('sin_contraste');
@@ -186,11 +154,8 @@ function umbralesIrreparables() {
 // ¿Vale la pena intentar la mejora? → { ok, metricas, motivos, problemas }
 //   motivos   lo irreparable (si hay alguno, ok=false: cambiar la foto)
 //   problemas lo que la IA debe intentar corregir. Nunca lanza.
-// `nivel`: con qué umbrales se diagnostica ('original' para comida; 'perfil'
-// o 'portada' para las imágenes del restaurante: un logo sobre fondo blanco
-// no es una foto "quemada" que haya que corregir).
-async function analizarRecuperable(buffer, { nivel = 'original' } = {}) {
-  const r = await analizarCalidad(buffer, { nivel });
+async function analizarRecuperable(buffer) {
+  const r = await analizarCalidad(buffer, { nivel: 'original' });
   if (!r.metricas) return { ok: false, metricas: null, motivos: r.motivos, problemas: [] };
   const u = umbralesIrreparables();
   const motivos = [];

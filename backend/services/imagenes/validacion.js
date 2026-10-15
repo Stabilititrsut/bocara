@@ -32,45 +32,6 @@ function umbrales() {
   };
 }
 
-// Fidelidad ESTRICTA (foto de perfil / portada del restaurante): la IA solo
-// puede restaurar, así que el resultado tiene que ser casi la misma imagen.
-//   similitudDetalleMin  correlación de luminancia a 96×96 (formas del logo).
-//   similitudZonaMin     la PEOR correlación entre zonas con contenido
-//                        (cuadrícula 8×8 sobre 128×128): un cambio pequeño
-//                        (letras redibujadas, un símbolo) apenas mueve la
-//                        similitud global pero hunde la de su zona.
-//   derivaTonoLocalMax   cambio de TONO (grados) de los píxeles con color,
-//                        DESCONTANDO el cambio global: corregir una dominante
-//                        (balance de blancos) mueve todo igual y no cuenta;
-//                        recolorear el logo o un elemento sí. Contraste y
-//                        exposición no cambian el tono.
-//   derivaTonoGlobalMax  cuánto puede girar el tono de toda la imagen.
-//   cambioSaturacionMax  cambio relativo de la saturación de esos píxeles.
-function umbralesEstrictos(uso) {
-  const n = (v, d) => (Number.isFinite(Number(process.env[v])) && process.env[v] ? Number(process.env[v]) : d);
-  if (uso === 'perfil') {
-    return {
-      similitudMin: n('IMAGE_AI_PERFIL_MIN_SIMILITUD', 0.85),
-      similitudDetalleMin: n('IMAGE_AI_PERFIL_MIN_SIMILITUD_DETALLE', 0.8),
-      similitudZonaMin: n('IMAGE_AI_PERFIL_MIN_SIMILITUD_ZONA', 0.6),
-      derivaTonoLocalMax: n('IMAGE_AI_PERFIL_MAX_DERIVA_TONO', 8),
-      derivaTonoGlobalMax: n('IMAGE_AI_PERFIL_MAX_DERIVA_TONO_GLOBAL', 8),
-      cambioSaturacionMax: n('IMAGE_AI_PERFIL_MAX_CAMBIO_SATURACION', 0.25),
-    };
-  }
-  if (uso === 'portada') {
-    return {
-      similitudMin: n('IMAGE_AI_PORTADA_MIN_SIMILITUD', 0.75),
-      similitudDetalleMin: n('IMAGE_AI_PORTADA_MIN_SIMILITUD_DETALLE', 0.7),
-      similitudZonaMin: n('IMAGE_AI_PORTADA_MIN_SIMILITUD_ZONA', 0.45),
-      derivaTonoLocalMax: n('IMAGE_AI_PORTADA_MAX_DERIVA_TONO', 12),
-      derivaTonoGlobalMax: n('IMAGE_AI_PORTADA_MAX_DERIVA_TONO_GLOBAL', 15),
-      cambioSaturacionMax: n('IMAGE_AI_PORTADA_MAX_CAMBIO_SATURACION', 0.35),
-    };
-  }
-  return null;
-}
-
 class ErrorValidacion extends Error {}
 
 // ¿La IA puede usar el original tal cual, o hay que mandarle una copia
@@ -133,58 +94,6 @@ function saturacionMedia(rgb) {
   return s / n;
 }
 
-// Tono (0–360) y saturación HSV de un píxel RGB.
-function tonoSat(r, g, b) {
-  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
-  if (!d) return { h: 0, s: 0, v: max };
-  let h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  h *= 60; if (h < 0) h += 360;
-  return { h, s: d / max, v: max };
-}
-const difTono = (x, y) => { const d = ((y - x + 540) % 360) - 180; return d; };
-
-// Cambio de color de los píxeles CON color (saturación ≥ 0.25 y no oscuros)
-// en la original: giro de tono global, giro por píxel descontando el global
-// (grados) y cambio relativo de saturación. Blancos, grises y negros no tienen
-// tono fiable y se ignoran (su corrección es balance de blancos).
-function derivaColor(a, b) {
-  const n = a.length / 3;
-  const pares = [];
-  for (let i = 0; i < n; i++) {
-    const o = tonoSat(a[i * 3], a[i * 3 + 1], a[i * 3 + 2]);
-    if (o.s < 0.25 || o.v < 50) continue;
-    pares.push([o, tonoSat(b[i * 3], b[i * 3 + 1], b[i * 3 + 2])]);
-  }
-  if (!pares.length) return { global: 0, local: 0, saturacion: 0, pixeles: 0 };
-  // Media circular del giro de tono.
-  let sx = 0, sy = 0, so = 0, sr = 0;
-  for (const [o, r] of pares) {
-    const d = (difTono(o.h, r.h) * Math.PI) / 180;
-    sx += Math.cos(d); sy += Math.sin(d); so += o.s; sr += r.s;
-  }
-  const global = (Math.atan2(sy, sx) * 180) / Math.PI;
-  let local = 0;
-  for (const [o, r] of pares) local += Math.abs(difTono(global, difTono(o.h, r.h)));
-  return { global: Math.abs(global), local: local / pares.length, saturacion: Math.abs(sr - so) / so, pixeles: pares.length };
-}
-
-// Peor correlación de luminancia entre zonas (lado×lado en una imagen
-// tamaño×tamaño) donde la original tiene estructura (desviación > 8).
-function similitudPorZonas(a, b, tamano, lado) {
-  let peor = 1;
-  for (let y0 = 0; y0 < tamano; y0 += lado) {
-    for (let x0 = 0; x0 < tamano; x0 += lado) {
-      const za = [], zb = [];
-      for (let y = y0; y < y0 + lado; y++) for (let x = x0; x < x0 + lado; x++) { za.push(a[y * tamano + x]); zb.push(b[y * tamano + x]); }
-      let m = 0; for (const v of za) m += v; m /= za.length;
-      let d = 0; for (const v of za) d += (v - m) ** 2;
-      if (Math.sqrt(d / za.length) <= 8) continue;
-      peor = Math.min(peor, correlacion(za, zb));
-    }
-  }
-  return peor;
-}
-
 function diferenciaMedia(a, b) {
   let d = 0;
   for (let i = 0; i < a.length; i++) d += Math.abs(a[i] - b[i]);
@@ -195,10 +104,8 @@ function diferenciaMedia(a, b) {
 // `region` (fracciones 0–1, encuadre comercial): dónde quedó la foto original
 // dentro del resultado. La comparación se hace SOLO ahí: el fondo extendido
 // por la IA no cuenta, la comida tiene que seguir siendo la misma.
-// `uso` 'perfil' | 'portada' agrega la fidelidad estricta (umbralesEstrictos).
-async function validarResultado(entrada, resultadoCompleto, { region = null, uso = null } = {}) {
+async function validarResultado(entrada, resultadoCompleto, { region = null } = {}) {
   const u = umbrales();
-  const estricta = umbralesEstrictos(uso);
   const mCompleto = await sharp()(resultadoCompleto, { failOn: 'none' }).metadata().catch(() => ({}));
   if (!mCompleto.width || !mCompleto.height) throw new ErrorValidacion('el resultado no es una imagen válida');
   if (Math.min(mCompleto.width, mCompleto.height) < LADO_MIN_RESULTADO) throw new ErrorValidacion('resultado demasiado pequeño');
@@ -241,24 +148,6 @@ async function validarResultado(entrada, resultadoCompleto, { region = null, uso
   if (satR - satE > u.subidaSaturacionMax) {
     throw Object.assign(new ErrorValidacion(`resultado sobresaturado (${metricas.saturacion_original} → ${metricas.saturacion_resultado})`), { metricas });
   }
-  if (estricta) {
-    const [e96, r96, e128, r128] = await Promise.all([miniatura(entrada, 96), miniatura(resultado, 96), miniatura(entrada, 128), miniatura(resultado, 128)]);
-    const detalle = correlacion(luminancia(e96), luminancia(r96));
-    const zona = similitudPorZonas(luminancia(e128), luminancia(r128), 128, 16);
-    const color = derivaColor(e64, r64);
-    Object.assign(metricas, {
-      similitud_detalle: Number(detalle.toFixed(3)), similitud_zona_min: Number(zona.toFixed(3)),
-      deriva_tono_local: Number(color.local.toFixed(2)), deriva_tono_global: Number(color.global.toFixed(2)),
-      cambio_saturacion: Number(color.saturacion.toFixed(3)),
-    });
-    const fallo = (motivo) => Object.assign(new ErrorValidacion(motivo), { metricas, fidelidad: true });
-    if (similitud < estricta.similitudMin || detalle < estricta.similitudDetalleMin || zona < estricta.similitudZonaMin) {
-      throw fallo(`el resultado cambió formas, letras o elementos de la imagen (similitud ${metricas.similitud}, detalle ${metricas.similitud_detalle}, peor zona ${metricas.similitud_zona_min})`);
-    }
-    if (color.local > estricta.derivaTonoLocalMax || color.global > estricta.derivaTonoGlobalMax || color.saturacion > estricta.cambioSaturacionMax) {
-      throw fallo(`el resultado cambió los colores de la imagen (tono local ${metricas.deriva_tono_local}°, global ${metricas.deriva_tono_global}°, saturación ${metricas.cambio_saturacion})`);
-    }
-  }
   if (diferencia < u.diferenciaMin) {
     throw Object.assign(new ErrorValidacion('el resultado no tiene una mejora visible'), { metricas });
   }
@@ -267,5 +156,5 @@ async function validarResultado(entrada, resultadoCompleto, { region = null, uso
 
 module.exports = {
   LADO_MAX_ENTRADA, TOLERANCIA_PROPORCION, ErrorValidacion,
-  prepararEntrada, validarResultado, correlacion, derivaColor, umbrales, umbralesEstrictos,
+  prepararEntrada, validarResultado, correlacion, umbrales,
 };

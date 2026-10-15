@@ -6,10 +6,6 @@
 //                   cualquier problema bloquea la publicación (con su motivo).
 // Cubre lo que las métricas técnicas (calidad.js) no ven: que no sea
 // comida/producto, producto cortado, presentación descuidada, capturas, etc.
-// `uso` 'perfil' / 'portada' (imágenes del restaurante) cambia las
-// instrucciones: un logo con letras es válido, lo irreparable es que no tenga
-// relación con el negocio o sea una captura, y en el resultado la fidelidad
-// es a la MARCA (logo, textos, colores) y a no inventar elementos.
 //
 // OpenAI Responses API con entrada de imagen y Structured Outputs (json_schema
 // estricto). Modelo: OPENAI_VISION_MODEL, por defecto `gpt-6-luna` (ID según
@@ -38,21 +34,12 @@ const PROBLEMAS = Object.freeze({
   producto_distinto: 'La versión mejorada ya no muestra el mismo producto que tu foto.',
   ingrediente_inventado: 'La versión mejorada agregó o quitó ingredientes, guarniciones u objetos de tu producto.',
   cantidad_alterada: 'La versión mejorada cambió la cantidad o el tamaño de la porción.',
-  // Foto de perfil y portada del restaurante.
-  no_relacionada: 'La imagen no parece de tu negocio. Usa tu logo, tu local, tus platos o tu equipo.',
-  captura_pantalla: 'Parece una captura de pantalla o un collage. Sube la imagen original de tu logo o de tu negocio.',
-  marca_alterada: 'La versión con IA cambió tu logo, un texto o un elemento de tu marca, así que no la usamos.',
-  elemento_inventado: 'La versión con IA agregó o quitó elementos (comida, letreros, objetos o personas) que no estaban en tu imagen.',
 });
 
 // Problemas que ninguna mejora de imagen arregla: con ellos ni se intenta.
 const IRREPARABLES = Object.freeze(new Set(['no_es_comida', 'captura_o_collage', 'irreconocible']));
-const IRREPARABLES_NEGOCIO = Object.freeze(new Set(['no_relacionada', 'captura_pantalla', 'irreconocible']));
-// La IA cambió el producto (o la marca): el resultado no es fiel a la imagen del restaurante.
-const INFIDELIDAD = Object.freeze(new Set(['producto_distinto', 'ingrediente_inventado', 'cantidad_alterada', 'marca_alterada', 'elemento_inventado']));
-// Usos: 'publicacion' (foto de producto), 'perfil' y 'portada' (del restaurante).
-const USOS = Object.freeze(['publicacion', 'perfil', 'portada']);
-const irreparablesDe = (uso) => (uso === 'perfil' || uso === 'portada' ? IRREPARABLES_NEGOCIO : IRREPARABLES);
+// La IA cambió el producto: el resultado no es fiel a la foto del restaurante.
+const INFIDELIDAD = Object.freeze(new Set(['producto_distinto', 'ingrediente_inventado', 'cantidad_alterada']));
 // Un close-up o un plato que sale del cuadro NO es motivo para no publicar.
 const IGNORAR_EN_RESULTADO = Object.freeze(new Set(['recortada']));
 
@@ -89,35 +76,6 @@ const INSTRUCCIONES_RESULTADO = [
 ].join('\n');
 const INSTRUCCIONES = Object.freeze({ original: INSTRUCCIONES_ORIGINAL, resultado: INSTRUCCIONES_RESULTADO });
 
-// Perfil y portada: la imagen representa al restaurante (logo, local, platos,
-// equipo). Un logo con letras NO es una "imagen con texto encima".
-const QUE_ES = {
-  perfil: 'la FOTO DE PERFIL del restaurante (se muestra pequeña, dentro de un círculo): normalmente su logo, su fachada o un plato insignia',
-  portada: 'la PORTADA del restaurante (banner horizontal en su página): normalmente su local, su ambiente, su equipo o sus platos',
-};
-const instruccionesNegocio = (uso) => Object.freeze({
-  original: [
-    'Eres revisor de imágenes de Bocara, un marketplace de comida en Guatemala.',
-    `Esta imagen será ${QUE_ES[uso]}.`,
-    'Una IA hará SOLO restauración técnica (resolución, nitidez, ruido, luz, contraste, balance de blancos) y extenderá SOLO el fondo existente para adaptar el formato. No rediseña ni agrega nada.',
-    'Marca apta=false SOLO si: no tiene relación con un negocio de comida o bebida, o es inapropiada (no_relacionada); es una captura de pantalla de un teléfono o computadora, o un collage de varias imágenes (captura_pantalla); o no se reconoce qué muestra (irreconocible).',
-    'Un logo, un nombre o un letrero del negocio son válidos y esperados: NO son captura_pantalla.',
-    'En cualquier otro caso apta=true, y lista en problemas solo lo técnico que la restauración debe corregir: muy_oscura, borrosa, recortada, baja_calidad.',
-  ].join('\n'),
-  resultado: [
-    'Eres revisor de imágenes de Bocara, un marketplace de comida en Guatemala.',
-    `Recibes DOS imágenes de ${QUE_ES[uso]}: la PRIMERA es la original del restaurante; la SEGUNDA es la versión editada con IA que se publicaría.`,
-    'La edición solo podía hacer restauración técnica. La prioridad es la FIDELIDAD, no la estética: compara con cuidado ambas imágenes.',
-    'Marca marca_alterada si en la segunda cualquier letra, palabra, número o el nombre del negocio cambió (ortografía, tipografía, grosor, tamaño, espaciado o posición); si el logo o un símbolo fue redibujado, simplificado, vectorizado, reinterpretado o cambió sus proporciones internas; o si los colores de la marca cambiaron de tono o saturación más allá de corregir una dominante de color global.',
-    'Marca elemento_inventado si agregó o quitó cualquier cosa: texto, logos, letreros, comida, productos, personas, objetos, decoraciones o efectos (brillos, degradados, fondos nuevos). Extender el fondo existente con una continuación lisa NO es un cambio.',
-    'Marca aspecto_artificial si parece rediseñada, ilustración, render 3D o con textura plástica; borrosa, muy_oscura o baja_calidad si la segunda no mejora técnicamente.',
-    'Ante cualquier duda sobre letras, logo o colores, marca marca_alterada. apta=true solo si es la misma imagen, técnicamente mejor.',
-  ].join('\n'),
-});
-const INSTRUCCIONES_USO = Object.freeze({
-  publicacion: INSTRUCCIONES, perfil: instruccionesNegocio('perfil'), portada: instruccionesNegocio('portada'),
-});
-
 function crearRevisorIA({
   apiKey = process.env.OPENAI_API_KEY,
   modelo = process.env.OPENAI_VISION_MODEL || MODELO_VISION_POR_DEFECTO,
@@ -139,10 +97,8 @@ function crearRevisorIA({
     // → { apta, irreparable, infiel, problemas: [{ codigo, mensaje }], resumen, uso }. Lanza ErrorProveedor.
     //   irreparable: algún problema que la mejora no puede arreglar (modo original).
     //   infiel: la versión editada cambió el producto (modo resultado, con `original`).
-    async revisar(buffer, { modo = 'original', original = null, uso = 'publicacion' } = {}) {
-      if (!INSTRUCCIONES_USO[uso]) throw new Error(`uso de revisión desconocido: ${uso}`);
+    async revisar(buffer, { modo = 'original', original = null } = {}) {
       if (!INSTRUCCIONES[modo]) throw new Error(`modo de revisión desconocido: ${modo}`);
-      const irreparables = irreparablesDe(uso);
       const inicio = Date.now();
       const aJpeg = async (img) => (await sharp()(img, { failOn: 'none' }).rotate()
         .resize({ width: LADO_REVISION, height: LADO_REVISION, fit: 'inside', withoutEnlargement: true })
@@ -150,18 +106,18 @@ function crearRevisorIA({
       // Resultado: original primero, editada después (para juzgar fidelidad).
       const imagenes = modo === 'resultado' && original ? [await aJpeg(original), await aJpeg(buffer)] : [await aJpeg(buffer)];
       const detalle = imagenes.length > 1 ? 'high' : 'low';
-      console.log('[IMAGEN_IA] OpenAI revisión (%s, %s) → modelo=%s', uso, modo, modelo);
+      console.log('[IMAGEN_IA] OpenAI revisión (%s) → modelo=%s', modo, modelo);
       let r;
       try {
         r = await obtener().responses.create({
           model: modelo,
           reasoning: { effort: 'low' },
           max_output_tokens: 600,
-          instructions: INSTRUCCIONES_USO[uso][modo],
+          instructions: INSTRUCCIONES[modo],
           input: [{
             role: 'user',
             content: [
-              { type: 'input_text', text: imagenes.length > 1 ? 'Primera: foto original. Segunda: versión editada con IA.' : uso === 'publicacion' ? 'Revisa esta foto de una publicación.' : `Revisa esta imagen (${uso} del restaurante).` },
+              { type: 'input_text', text: imagenes.length > 1 ? 'Primera: foto original. Segunda: versión editada con IA.' : 'Revisa esta foto de una publicación.' },
               ...imagenes.map((b64) => ({ type: 'input_image', image_url: `data:image/jpeg;base64,${b64}`, detail: detalle })),
             ],
           }],
@@ -184,11 +140,11 @@ function crearRevisorIA({
       if (!datos.apta && !codigos.length) codigos.push('baja_calidad');
       if (modo === 'resultado') codigos = codigos.filter((c) => !IGNORAR_EN_RESULTADO.has(c));
       // Original: apta solo dice "hay información suficiente"; los problemas son lo que hay que corregir.
-      const apta = modo === 'original' ? !codigos.some((c) => irreparables.has(c)) : codigos.length === 0;
+      const apta = modo === 'original' ? !codigos.some((c) => IRREPARABLES.has(c)) : codigos.length === 0;
       console.log('[IMAGEN_IA] OpenAI revisión (%s) en %d ms: apta=%s problemas=[%s]', modo, Date.now() - inicio, apta, codigos.join(','));
       return {
         apta,
-        irreparable: codigos.some((c) => irreparables.has(c)),
+        irreparable: codigos.some((c) => IRREPARABLES.has(c)),
         infiel: codigos.some((c) => INFIDELIDAD.has(c)),
         problemas: codigos.map((codigo) => ({ codigo, mensaje: PROBLEMAS[codigo] })),
         resumen: String(datos.resumen || '').slice(0, 200),
@@ -198,7 +154,4 @@ function crearRevisorIA({
   };
 }
 
-module.exports = {
-  MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES, IRREPARABLES_NEGOCIO, INFIDELIDAD, USOS, ESQUEMA, INSTRUCCIONES, INSTRUCCIONES_USO,
-  irreparablesDe, crearRevisorIA,
-};
+module.exports = { MODELO_VISION_POR_DEFECTO, PROBLEMAS, IRREPARABLES, INFIDELIDAD, ESQUEMA, INSTRUCCIONES, crearRevisorIA };

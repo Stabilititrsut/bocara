@@ -5,13 +5,11 @@ export interface PickedImage {
   mimeType: string;
 }
 
-// aspect: recorte sugerido en el selector nativo (p. ej. [1, 1] para la foto
-// de perfil, [3, 2] para la portada). En web se sube la imagen tal cual.
-export async function pickImage({ aspect }: { aspect?: [number, number] } = {}): Promise<PickedImage | null> {
+export async function pickImage(): Promise<PickedImage | null> {
   if (Platform.OS === 'web') {
     return pickImageWeb();
   }
-  return pickImageNative(aspect);
+  return pickImageNative();
 }
 
 function pickImageWeb(): Promise<PickedImage | null> {
@@ -47,7 +45,7 @@ function pickImageWeb(): Promise<PickedImage | null> {
   });
 }
 
-async function pickImageNative(aspect?: [number, number]): Promise<PickedImage | null> {
+async function pickImageNative(): Promise<PickedImage | null> {
   let ImagePicker: any;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   try { ImagePicker = require('expo-image-picker'); } catch { return null; }
@@ -58,7 +56,6 @@ async function pickImageNative(aspect?: [number, number]): Promise<PickedImage |
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     allowsEditing: true,
-    ...(aspect ? { aspect } : {}),
     quality: 0.8,
     base64: true,
   });

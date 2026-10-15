@@ -12,15 +12,11 @@
 // Regla de la app (el backend la aplica igual): una foto NUEVA solo se puede
 // guardar con su trabajo en 'lista'.
 export type EstadoTrabajo = 'subida' | 'analizando' | 'mejorando' | 'validando' | 'lista' | 'rechazada' | 'fallida';
-// Mismo pipeline para la foto de una publicación y para la foto de perfil y
-// la portada del restaurante (components/ImagenNegocioIA.tsx).
-export type UsoImagen = 'publicacion' | 'perfil' | 'portada';
 
 export interface MotivoImagen { codigo: string; mensaje: string }
 
 export interface TrabajoImagen {
   id: string;
-  uso?: UsoImagen;
   estado: EstadoTrabajo;
   original_url: string;
   mejorada_url: string | null;
@@ -34,12 +30,6 @@ export interface TrabajoImagen {
   usa_original?: boolean;
   // Problemas de la original que la IA corrigió (oscura, borrosa…).
   problemas_corregidos?: string[];
-  // Perfil / portada: la original pasó el análisis con IA y cumple la calidad
-  // mínima, así que se puede guardar tal cual (el backend lo vuelve a validar).
-  puede_usar_original?: boolean;
-  // La original que se guardaría: en un logo no cuadrado, su copia cuadrada
-  // con relleno técnico (sin IA); si no, la original tal cual.
-  original_guardable_url?: string | null;
   // Paso donde terminó una rechazada/fallida (lo calcula el backend).
   paso_error?: 'analizando' | 'mejorando' | 'validando' | null;
 }
@@ -51,19 +41,13 @@ export const TEXTOS_IMAGEN = Object.freeze({
   mejorando: '✨ Mejorando tamaño, calidad y presentación con IA…',
   validando: '🔍 Validando resultado…',
   lista: '✅ Imagen optimizada y lista para publicar',
-  listaNegocio: '✅ Imagen optimizada y lista',
   procesando: 'Procesando imagen con IA, espera un momento…',
   fallida: '⚠️ No se pudo mejorar la imagen',
   rechazada: '❌ Esta imagen no cumple la calidad mínima para Bocara',
   rechazadaAntes: '❌ Imagen rechazada: no se puede usar esta foto',
   usaOriginal: 'Usaremos tu foto original: ya cumple la calidad de Bocara y la versión con IA no superó la validación.',
-  // Perfil / portada: la IA solo restaura; si su resultado no era idéntico en
-  // letras, logo, colores o elementos, se conserva la original.
-  usaOriginalNegocio: 'Conservamos tu imagen original: la versión con IA no la mantenía exactamente igual (letras, logo, colores o elementos).',
-  originalDisponible: 'Tu imagen original cumple la calidad mínima: también puedes usarla tal cual.',
   reintentar: 'Reintentar',
   cambiarFoto: 'Cambiar foto',
-  usarOriginal: 'Usar original',
 });
 
 const PASOS: { clave: EstadoTrabajo; texto: string }[] = [
@@ -113,7 +97,6 @@ const CORREGIDO: Record<string, string> = {
   oscura: 'iluminación', muy_oscura: 'iluminación', quemada: 'iluminación', sin_contraste: 'color y contraste',
   borrosa: 'nitidez', resolucion: 'tamaño', proporcion: 'encuadre', recortada: 'encuadre',
   baja_calidad: 'calidad', desordenada: 'presentación', manos_o_personas: 'presentación',
-  no_cuadrada: 'encuadre', no_horizontal: 'encuadre',
 };
 
 // "a", "a y b", "a, b y c" ("e" ante i-/hi-: "encuadre e iluminación").
@@ -135,33 +118,24 @@ export interface ResumenProceso {
   mensajes: string[];
   puedeReintentar: boolean;
   puedeCambiar: boolean;
-  // Perfil / portada que falló o se rechazó: se ofrece "Usar original".
-  puedeUsarOriginal: boolean;
 }
 
 // Lo que se le dice al restaurante. `dev` agrega el detalle técnico (p. ej.
 // "falta OPENAI_API_KEY") para que en desarrollo nada quede ambiguo.
 export function resumenProceso(t: TrabajoImagen | null, { dev = false }: { dev?: boolean } = {}): ResumenProceso | null {
   if (!t) return null;
-  const negocio = t.uso === 'perfil' || t.uso === 'portada';
   if (enCurso(t.estado)) {
     return {
       titulo: TEXTOS_IMAGEN[t.estado as 'subida'], tono: 'progreso',
       mensajes: [TEXTOS_IMAGEN.procesando, 'Guardar se habilita cuando la imagen esté lista.'],
-      puedeReintentar: false, puedeCambiar: true, puedeUsarOriginal: false,
+      puedeReintentar: false, puedeCambiar: true,
     };
   }
   if (t.estado === 'lista') {
     const corregido = mensajeCorregido(t.problemas_corregidos);
-    const usaOriginal = negocio ? TEXTOS_IMAGEN.usaOriginalNegocio : TEXTOS_IMAGEN.usaOriginal;
-    const mensajes = t.usa_original ? [usaOriginal] : corregido ? [corregido] : [];
-    return {
-      titulo: negocio ? TEXTOS_IMAGEN.listaNegocio : TEXTOS_IMAGEN.lista, tono: 'ok', mensajes,
-      puedeReintentar: false, puedeCambiar: true, puedeUsarOriginal: false,
-    };
+    const mensajes = t.usa_original ? [TEXTOS_IMAGEN.usaOriginal] : corregido ? [corregido] : [];
+    return { titulo: TEXTOS_IMAGEN.lista, tono: 'ok', mensajes, puedeReintentar: false, puedeCambiar: true };
   }
-  const puedeUsarOriginal = negocio && !!t.puede_usar_original;
-  const original = puedeUsarOriginal ? [TEXTOS_IMAGEN.originalDisponible] : [];
   if (t.estado === 'rechazada') {
     const mensajes = (t.motivos || []).map((m) => m.mensaje);
     // Tras mejorar y validar: la versión final no llegó a la calidad mínima.
@@ -171,17 +145,15 @@ export function resumenProceso(t: TrabajoImagen | null, { dev = false }: { dev?:
       tono: 'rechazo',
       mensajes: [
         ...(despuesDeMejorar ? ['La mejoramos con IA, pero el resultado final no se puede publicar:'] : []),
-        ...(mensajes.length ? mensajes : [negocio ? 'Usa otra imagen de tu negocio.' : 'Usa otra foto del producto.']),
-        ...original,
+        ...(mensajes.length ? mensajes : ['Usa otra foto del producto.']),
       ],
-      puedeReintentar: false, puedeCambiar: true, puedeUsarOriginal,
+      puedeReintentar: false, puedeCambiar: true,
     };
   }
   const mensajes = [t.error || 'Ocurrió un error al procesar la foto.'];
   for (const m of t.motivos || []) mensajes.push(m.mensaje);
-  mensajes.push(...original);
   if (dev && t.detalle) mensajes.push(`Detalle técnico: ${t.detalle}`);
-  return { titulo: TEXTOS_IMAGEN.fallida, tono: 'error', mensajes, puedeReintentar: !!t.puede_reintentar, puedeCambiar: true, puedeUsarOriginal };
+  return { titulo: TEXTOS_IMAGEN.fallida, tono: 'error', mensajes, puedeReintentar: !!t.puede_reintentar, puedeCambiar: true };
 }
 
 // ── Regla de guardado ───────────────────────────────────────────────────────
@@ -235,42 +207,6 @@ export function bloqueoPorFoto({ esEdicion, url, bolsa, trabajo, subiendo, error
   if (t.estado === 'rechazada') return BLOQUEOS.rechazada;
   if (t.estado === 'fallida') return BLOQUEOS.fallida;
   return null;
-}
-
-// ── Foto de perfil / portada del restaurante ───────────────────────────────
-export const BLOQUEOS_NEGOCIO = Object.freeze({
-  subiendo: 'Guardar bloqueado: la imagen se está subiendo.',
-  sinFoto: 'Selecciona una imagen para continuar.',
-  procesando: BLOQUEOS.procesando,
-  rechazada: 'Guardar bloqueado: la imagen no cumple la calidad mínima. Cambia la foto.',
-  fallida: 'Guardar bloqueado: no se pudo mejorar la imagen. Reintenta o cambia la foto.',
-  originalNoPermitida: 'Tu imagen original no cumple la calidad mínima para usarla sin la mejora con IA.',
-  errorRed: BLOQUEOS.errorRed,
-});
-
-// Motivo por el que Guardar está bloqueado, o null. usarOriginal: el
-// restaurante eligió guardar su original (solo si puede_usar_original).
-// El backend (PUT /api/negocios/:id/imagen) aplica la misma regla.
-export function bloqueoImagenNegocio({ trabajo, subiendo, errorRed, usarOriginal = false }: {
-  trabajo: TrabajoImagen | null;
-  subiendo?: boolean;
-  errorRed?: boolean;
-  usarOriginal?: boolean;
-}): string | null {
-  if (subiendo) return BLOQUEOS_NEGOCIO.subiendo;
-  if (!trabajo) return errorRed ? BLOQUEOS_NEGOCIO.errorRed : BLOQUEOS_NEGOCIO.sinFoto;
-  if (enCurso(trabajo.estado)) return errorRed ? BLOQUEOS_NEGOCIO.errorRed : BLOQUEOS_NEGOCIO.procesando;
-  if (usarOriginal) return trabajo.puede_usar_original ? null : BLOQUEOS_NEGOCIO.originalNoPermitida;
-  if (trabajo.estado === 'rechazada') return BLOQUEOS_NEGOCIO.rechazada;
-  if (trabajo.estado === 'fallida') return BLOQUEOS_NEGOCIO.fallida;
-  return null;
-}
-
-// Imagen que quedará guardada (vista previa antes de Guardar).
-export function imagenAGuardar(trabajo: TrabajoImagen | null, { usarOriginal = false }: { usarOriginal?: boolean } = {}): string | null {
-  if (!trabajo) return null;
-  if (usarOriginal) return trabajo.original_guardable_url || trabajo.original_url;
-  return trabajo.estado === 'lista' ? trabajo.mejorada_url || trabajo.original_url : null;
 }
 
 // ── Sondeo del trabajo ──────────────────────────────────────────────────────

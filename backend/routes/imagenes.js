@@ -34,8 +34,7 @@ async function puedeEditar(usuario, tabla, id) {
 }
 
 // ── Trabajos previos a publicar (services/imagenes/trabajos.js) ────────────
-//   POST /api/imagenes/trabajos                { imagen_url, uso?, negocio_id? } → 202 { trabajo }
-//        uso: publicacion (por defecto) | perfil | portada del restaurante
+//   POST /api/imagenes/trabajos                { imagen_url, negocio_id? } → 202 { trabajo }
 //   GET  /api/imagenes/trabajos/:id            → { trabajo }   (la app lo consulta cada ~1.5 s)
 //   POST /api/imagenes/trabajos/:id/reintentar → 202 { trabajo }
 async function negocioDelUsuario(usuario, negocioIdBody) {
@@ -53,9 +52,7 @@ router.post('/trabajos', authMiddleware, async (req, res) => {
   try {
     const negocioId = await negocioDelUsuario(req.usuario, req.body?.negocio_id);
     if (!negocioId) return res.status(400).json({ error: 'No encontramos tu negocio.' });
-    const r = await trabajos.crearTrabajo({
-      usuario: req.usuario, negocioId, imagenUrl: req.body?.imagen_url, uso: req.body?.uso || 'publicacion',
-    });
+    const r = await trabajos.crearTrabajo({ usuario: req.usuario, negocioId, imagenUrl: req.body?.imagen_url });
     if (!r.ok) return responderError(res, r);
     res.status(202).json({ trabajo: trabajos.serializar(r.trabajo) });
   } catch (err) {
@@ -94,15 +91,6 @@ router.post('/:tipo/:id/:accion', authMiddleware, async (req, res) => {
     if (!permiso.ok) return res.status(permiso.status).json({ error: permiso.status === 404 ? 'No encontrada' : 'No autorizado' });
     if (tabla === 'bolsas' && req.params.accion === 'reintentar') {
       return res.status(409).json({ error: 'Para reprocesar la foto de una publicación, cámbiala en el formulario de edición.', codigo: 'IMAGEN_SIN_VALIDAR' });
-    }
-    // Portada guardada con un trabajo de IA: volver a la original solo si
-    // esta cumplía la calidad mínima (la decisión quedó en el meta al guardar).
-    if (tabla === 'negocios' && req.params.accion === 'usar-original') {
-      const { data: fila } = await supabase.from('negocios').select('imagen_procesamiento_meta').eq('id', req.params.id).maybeSingle();
-      const meta = fila?.imagen_procesamiento_meta;
-      if (meta?.trabajo_id && meta.original_aceptable !== true) {
-        return res.status(409).json({ error: trabajos.CODIGOS_NEGOCIO.ORIGINAL_NO_PERMITIDA, codigo: 'ORIGINAL_NO_PERMITIDA' });
-      }
     }
 
     const r = await accion(tabla, req.params.id);

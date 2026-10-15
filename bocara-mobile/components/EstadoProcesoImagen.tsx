@@ -2,19 +2,16 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'rea
 import { pasosProceso, resumenProceso, TEXTOS_IMAGEN, type TrabajoImagen } from '@/src/utils/procesoImagen';
 import { Colors } from '@/constants/Colors';
 
-// Estado de la foto en el formulario de Promoción / Tiempo limitado (y de la
-// foto de perfil / portada del restaurante, ImagenNegocioIA.tsx): los pasos
+// Estado de la foto en el formulario de Promoción / Tiempo limitado: los pasos
 // del procesamiento con IA, el resultado y las acciones (Reintentar / Cambiar
-// foto / Usar original). Guardar queda bloqueado hasta "Imagen lista".
-export default function EstadoProcesoImagen({ trabajo, subiendo, error, errorRed, onReintentar, onCambiarFoto, onUsarOriginal }: {
+// foto). Guardar queda bloqueado en bolsas.tsx hasta "Imagen lista".
+export default function EstadoProcesoImagen({ trabajo, subiendo, error, errorRed, onReintentar, onCambiarFoto }: {
   trabajo: TrabajoImagen | null;
   subiendo?: boolean;
   error?: string | null;
   errorRed?: boolean;
   onReintentar: () => void;
   onCambiarFoto: () => void;
-  // Solo perfil / portada: se muestra si el backend dice que la original cumple.
-  onUsarOriginal?: () => void;
 }) {
   if (subiendo) {
     return (
@@ -72,11 +69,6 @@ export default function EstadoProcesoImagen({ trabajo, subiendo, error, errorRed
           <TouchableOpacity onPress={onCambiarFoto} style={s.botonSec} accessibilityRole="button" testID="cambiar-foto">
             <Text style={s.botonSecTexto}>{TEXTOS_IMAGEN.cambiarFoto}</Text>
           </TouchableOpacity>
-          {resumen.puedeUsarOriginal && onUsarOriginal ? (
-            <TouchableOpacity onPress={onUsarOriginal} style={s.botonSec} accessibilityRole="button" testID="usar-original">
-              <Text style={s.botonSecTexto}>{TEXTOS_IMAGEN.usarOriginal}</Text>
-            </TouchableOpacity>
-          ) : null}
         </View>
       ) : null}
     </View>
