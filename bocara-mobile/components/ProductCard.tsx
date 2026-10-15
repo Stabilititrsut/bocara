@@ -1,4 +1,4 @@
-import { publicacionVencida } from '@/src/utils/horarioRecogida';
+import { publicacionVencida, publicacionVencidaDefinitiva } from '@/src/utils/horarioRecogida';
 import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
 import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
@@ -67,9 +67,11 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
     }
   }
 
-  if (publicacionVencida(bolsa, ahora)) return null;
+  if (publicacionVencidaDefinitiva(bolsa, ahora)) return null;
+  // Fuera de su horario de hoy: se sigue mostrando, pero no se puede comprar.
+  const cerradoHoy = !agotado && publicacionVencida(bolsa, ahora);
   return (
-    <View style={[s.card, { width: w }, agotado && s.agotado]}>
+    <View style={[s.card, { width: w }, (agotado || cerradoHoy) && s.agotado]}>
       <TouchableOpacity
         style={s.imgWrap}
         onPress={() => router.push(`/producto/${bolsa.id}` as any)}
@@ -90,14 +92,14 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
           </View>
         )}
 
-        {pct > 0 && !agotado && (
+        {pct > 0 && !agotado && !cerradoHoy && (
           <View style={s.badge}>
             <Text style={s.badgeText}>{pct}% DTO</Text>
           </View>
         )}
-        {agotado && (
+        {(agotado || cerradoHoy) && (
           <View style={[s.badge, { backgroundColor: '#9CA3AF' }]}>
-            <Text style={s.badgeText}>Agotado</Text>
+            <Text style={s.badgeText}>{agotado ? 'Agotado' : 'Cerrado hoy'}</Text>
           </View>
         )}
 
@@ -133,7 +135,7 @@ export default function ProductCard({ bolsa, onAgregar, width, showFavorite, isF
             )}
           </View>
 
-          {!agotado && (
+          {!agotado && !cerradoHoy && (
             <TouchableOpacity
               style={[s.addBtn, cartCount > 0 && s.addBtnActive]}
               onPress={() => { if (!publicacionVencida(bolsa)) mostrarErrorCarrito(onAgregar(bolsa)); }}

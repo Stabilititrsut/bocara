@@ -1,4 +1,4 @@
-import { publicacionVencida, calcularEstadoHorario } from '@/src/utils/horarioRecogida';
+import { publicacionVencida, publicacionVencidaDefinitiva, calcularEstadoHorario } from '@/src/utils/horarioRecogida';
 import { useRelojPublicaciones } from '@/src/utils/usePublicacionesVigentes';
 import { volver } from '@/src/utils/backNavigation';
 import { useEffect, useState, useRef, useCallback } from 'react';
@@ -225,7 +225,10 @@ export default function ProductoScreen() {
     );
   }
 
-  if (publicacionVencida(bolsa, ahora) || horario?.bloqueado) return (
+  // Fuera de su horario de hoy la publicación se sigue mostrando: el pie
+  // deshabilita la compra (horarioBloqueado). Solo una vencida definitivamente
+  // (su fecha de caducidad ya pasó) deja de estar disponible.
+  if (publicacionVencidaDefinitiva(bolsa, ahora)) return (
     <View style={s.root}>
       <Text style={s.errorTitle}>Esta publicación ya no está disponible</Text>
       <TouchableOpacity onPress={() => router.replace('/(tabs)/' as any)}><Text style={s.retryText}>Volver a explorar</Text></TouchableOpacity>
@@ -237,7 +240,10 @@ export default function ProductoScreen() {
   const enCarrito = items.find(i => i.bolsa.id === bolsa.id);
   const stockReal = disponibilidadReal(bolsa);
   const agotada = stockReal <= 0;
-  const horarioBloqueado = horario?.bloqueado ?? false;
+  // `horario` se recalcula cada 30 s; publicacionVencida con el reloj actual
+  // cubre el intervalo entre ticks para que la compra nunca quede habilitada.
+  const horarioBloqueado = (horario?.bloqueado ?? false) || publicacionVencida(bolsa, ahora);
+  const mensajeHorario = horario?.bloqueado ? horario.mensaje : 'Cerrado por hoy';
   const puedeComprar = !agotada && !horarioBloqueado;
   const noPuedeComprarPorRol = !!usuario && usuario.rol !== 'cliente';
   const EMOJI_MAP: Record<string, string> = {
@@ -567,7 +573,7 @@ export default function ProductoScreen() {
         ) : horarioBloqueado ? (
           <View style={[s.footerBtn, s.footerBtnOff]}>
             <Ionicons name="time-outline" size={16} color={Colors.textLight} />
-            <Text style={s.footerBtnTextOff}>{horario?.mensaje}</Text>
+            <Text style={s.footerBtnTextOff}>{mensajeHorario}</Text>
           </View>
         ) : enCarrito ? (
           <TouchableOpacity

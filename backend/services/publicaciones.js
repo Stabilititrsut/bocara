@@ -8,7 +8,9 @@
 // y de la regla "¿la ve el cliente?", que antes estaba repetida —con pequeñas
 // diferencias— en seis consultas de routes/bolsas.js y routes/negocios.js.
 
-const { ahoraGuatemala, estaVencida, noHaIniciado, normalizarHora, normalizarFecha } = require('./horarioGuatemala');
+const {
+  ahoraGuatemala, estaVencida, vencidaDefinitivamente, noHaIniciado, normalizarHora, normalizarFecha,
+} = require('./horarioGuatemala');
 
 const ESTADOS_APROBACION = Object.freeze({
   PENDIENTE: 'pendiente',
@@ -62,7 +64,12 @@ function negocioDisponiblePublico(negocio) {
 // · El negocio solo se evalúa si la fila trae el embebido `negocios` con
 //   `activo`/`estado_verificacion`; los endpoints que ya validaron el negocio
 //   por separado no lo seleccionan.
-function motivosNoVisible(bolsa, { ahora = ahoraGuatemala(), exigirUnidades = true } = {}) {
+// · Vencida: una publicación diaria cuya ventana de hoy ya cerró SIGUE visible
+//   (vencidaDefinitivamente); comprarla fuera de horario lo impide el checkout
+//   (services/checkoutValidation.js). `exigirHorarioDeHoy: true` restaura la
+//   regla estricta (estaVencida) para quien necesita "comprable ahora mismo":
+//   avisos de cercanía y el KPI de negocios con oferta activa.
+function motivosNoVisible(bolsa, { ahora = ahoraGuatemala(), exigirUnidades = true, exigirHorarioDeHoy = false } = {}) {
   const motivos = [];
   // Primer chequeo, antes que cualquier otro: una eliminada nunca es visible
   // sin importar su estado_aprobacion/activo/vigencia — no hay combinación de
@@ -71,7 +78,8 @@ function motivosNoVisible(bolsa, { ahora = ahoraGuatemala(), exigirUnidades = tr
   if (!esAprobada(bolsa)) motivos.push(MOTIVOS_NO_VISIBLE.NO_APROBADA);
   if (bolsa?.activo !== true) motivos.push(MOTIVOS_NO_VISIBLE.INACTIVA);
   if (exigirUnidades && !(Number(bolsa?.cantidad_disponible) > 0)) motivos.push(MOTIVOS_NO_VISIBLE.SIN_UNIDADES);
-  if (estaVencida(bolsa, ahora)) motivos.push(MOTIVOS_NO_VISIBLE.VENCIDA);
+  const vencida = exigirHorarioDeHoy ? estaVencida(bolsa, ahora) : vencidaDefinitivamente(bolsa, ahora);
+  if (vencida) motivos.push(MOTIVOS_NO_VISIBLE.VENCIDA);
   if (noHaIniciado(bolsa, ahora)) motivos.push(MOTIVOS_NO_VISIBLE.NO_INICIADA);
   if (bolsa && 'negocios' in bolsa && !negocioDisponiblePublico(bolsa.negocios)) {
     motivos.push(MOTIVOS_NO_VISIBLE.NEGOCIO_NO_DISPONIBLE);

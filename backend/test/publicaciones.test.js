@@ -32,7 +32,8 @@ for (const [caso, extra, motivo] of [
   ['activo ausente', { activo: undefined }, 'inactiva'],
   ['sin unidades', { cantidad_disponible: 0 }, 'sin_unidades'],
   ['vencida por fecha', { fecha_caducidad: '2026-10-02' }, 'vencida'],
-  ['vencida por horario de hoy', { hora_recogida_fin: '11:00' }, 'vencida'],
+  ['vencida por horario con fecha de caducidad hoy', { hora_recogida_fin: '11:00', fecha_caducidad: '2026-10-03' }, 'vencida'],
+  ['hora de fin ininteligible (falla cerrado)', { hora_recogida_fin: '25:99' }, 'vencida'],
   ['negocio suspendido', { negocios: { activo: false } }, 'negocio_no_disponible'],
   ['negocio pendiente de verificación', { negocios: { activo: true, estado_verificacion: 'pendiente' } }, 'negocio_no_disponible'],
 ]) {
@@ -40,6 +41,13 @@ for (const [caso, extra, motivo] of [
     assert.deepEqual(motivosNoVisible({ ...BASE, ...extra }, { ahora: AHORA }), [motivo]);
   });
 }
+
+test('visible: diaria (sin fecha de caducidad) sigue visible aunque su horario de hoy ya cerró', () => {
+  const diariaCerrada = { ...BASE, hora_recogida_inicio: '08:00', hora_recogida_fin: '11:00' };
+  assert.deepEqual(motivosNoVisible(diariaCerrada, { ahora: AHORA }), []);
+  // Regla estricta (avisos de cercanía, KPI de oferta activa): sigue contando como vencida.
+  assert.deepEqual(motivosNoVisible(diariaCerrada, { ahora: AHORA, exigirHorarioDeHoy: true }), ['vencida']);
+});
 
 test('no visible: acumula todos los motivos (lo usa el aviso del admin)', () => {
   const m = motivosNoVisible({ ...BASE, activo: false, estado_aprobacion: 'rechazado', fecha_caducidad: '2026-01-01' }, { ahora: AHORA });
