@@ -1,7 +1,8 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { geocodeAddress } = require('../utils/geo');
+const { geocodeAddress, validarCoordenadasEntrada } = require('../utils/geo');
+const { armarFeedNegocios } = require('../services/feedNegocios');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { hoyGuatemala } = require('../services/horarioGuatemala');
@@ -83,20 +84,25 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
+// GET /api/negocios/feed[?lat=&lng=] — negocios activos y verificados con ≥1
+// publicación visible (Promoción o Tiempo limitado) + stats de descuento;
+// lat/lng solo ordenan
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
   // Estado, horario, unidades y vigencia se seleccionan aunque no se devuelvan:
   // son los que decide filtrarVisiblesParaCliente (misma regla que /api/bolsas).
   const CAMPOS_FEED = 'id, negocio_id, tipo, precio_original, precio_descuento, ' +
     'activo, estado_aprobacion, cantidad_disponible, ' +
-    'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, ' +
+    'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, fecha_disponible, ' +
     'negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)';
+  // eliminado_en: mismo filtro que /api/bolsas — una eliminada no cuenta como
+  // publicación disponible del restaurante.
   let { data: bolsas, error } = await supabase
     .from('bolsas')
     .select(CAMPOS_FEED)
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
+    .is('eliminado_en', null)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
     .or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
   if (error) {
@@ -109,29 +115,43 @@ router.get('/feed', async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Excluir lo que el cliente no ve ANTES de agrupar: si no, un negocio cuyas
+  // Excluir lo que el cliente no ve ANTES de contar: si no, un negocio cuyas
   // publicaciones ya cerraron (o cuyo fallback relajó filtros) seguiría
-  // apareciendo en el feed con cantidad_bolsas > 0.
+  // mostrando cantidad_bolsas > 0.
   bolsas = filtrarVisiblesParaCliente(bolsas);
 
-  const map = new Map();
-  for (const b of (bolsas || [])) {
-    const n = b.negocios;
-    if (!n) continue;
-    // Restaurantes suspendidos o aún no aprobados no deben aportar al feed del cliente.
-    if (!negocioDisponiblePublico(n)) continue;
-    if (zona && String(n.zona) !== String(zona)) continue;
-    if (categoria && n.categoria !== categoria) continue;
-    const disc = b.precio_original > 0
-      ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
-    if (!map.has(n.id)) map.set(n.id, { ...n, cantidad_bolsas: 0, max_descuento: 0 });
-    const e = map.get(n.id);
-    e.cantidad_bolsas++;
-    if (disc > e.max_descuento) e.max_descuento = disc;
+  // Restaurantes activos y verificados; abajo se quedan solo los que tienen
+  // al menos una publicación visible.
+  const CAMPOS_NEGOCIO_FEED = 'id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,' +
+    'latitud,longitud,activo,estado_verificacion';
+  let { data: negocios, error: nErr } = await supabase
+    .from('negocios')
+    .select(CAMPOS_NEGOCIO_FEED)
+    .eq('activo', true)
+    .or('estado_verificacion.eq.aprobado,estado_verificacion.is.null');
+  if (nErr) {
+    const r = await supabase.from('negocios').select(CAMPOS_NEGOCIO_FEED).eq('activo', true);
+    negocios = r.data; nErr = r.error;
   }
+  if (nErr) return res.status(500).json({ error: nErr.message });
 
-  const resultado = Array.from(map.values()).map(({ activo, estado_verificacion, ...pub }) => pub);
-  res.json(resultado.sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
+  negocios = (negocios || []).filter((n) =>
+    negocioDisponiblePublico(n) &&
+    (!zona || String(n.zona) === String(zona)) &&
+    (!categoria || n.categoria === categoria));
+
+  // lat/lng del cliente: SOLO para ordenar (cercanos primero). Si faltan o son
+  // inválidas no se responde error: el feed sale completo sin ese orden.
+  const ubic = validarCoordenadasEntrada(req.query.lat, req.query.lng);
+  const coords = ubic.ok ? { lat: ubic.lat, lng: ubic.lng } : null;
+
+  // Al cliente solo se le muestran restaurantes que tienen algo disponible
+  // (Promoción o Tiempo limitado). Una publicación diaria fuera de su horario
+  // de hoy sigue contando: se ve, aunque solo se compra dentro de la ventana.
+  const resultado = armarFeedNegocios(negocios, bolsas, coords)
+    .filter((n) => n.cantidad_bolsas > 0)
+    .map(({ activo, estado_verificacion, ...pub }) => pub);
+  res.json(resultado);
 });
 
 // GET /api/negocios/:id/detalle — detalle con bolsas agrupadas + veces_pedido

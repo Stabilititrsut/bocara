@@ -1071,7 +1071,11 @@ integracion('Estados (integración): el cliente solo ve la aprobada válida; el 
 
   assert.deepEqual((await clientePromociones()).map(b => b.id), ['aprobada']);
   assert.deepEqual((await clienteTienda()).map(b => b.id), ['aprobada']);
-  assert.deepEqual((await clienteHome()).map(n => [n.id, n.cantidad_bolsas]), [[backend.IDS.olaAzul, 1]]);
+  // Home: TODOS los restaurantes activos y verificados (regla de negocio), con
+  // disponibilidad primero; solo la aprobada válida cuenta como publicación.
+  const home = (await clienteHome()).map(n => [n.id, n.cantidad_bolsas]);
+  assert.deepEqual(home[0], [backend.IDS.olaAzul, 1]);
+  assert.ok(home.slice(1).every(([, c]) => c === 0), JSON.stringify(home));
   for (const id of ['pendiente', 'rechazada', 'vencida', 'inactiva']) {
     assert.equal((await clienteDetalle(id)).status, 404, id);
   }

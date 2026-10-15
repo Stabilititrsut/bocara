@@ -28,6 +28,8 @@ function load(file, mocks = {}, globals = {}) {
       if (name.endsWith('utils/analitica')) return { registrarEvento() {}, vaciarAnalitica: async () => {}, iniciarAnalitica: () => () => {}, establecerAnaliticaHabilitada() {} };
       // Meta Pixel (lib/metaPixel.ts): solo web; no-op en las pruebas.
       if (name.endsWith('lib/metaPixel')) return { iniciarMetaPixel() {}, trackPageView() {}, trackEvent() {} };
+      // Avisos del cliente (components/AvisosCliente.tsx): fuera de lo que se prueba aquí.
+      if (name.endsWith('components/AvisosCliente')) return { __esModule: true, default: () => null };
       throw new Error(`Import sin double: ${name}`);
     },
   }, { filename: file });

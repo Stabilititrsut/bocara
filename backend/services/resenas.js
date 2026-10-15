@@ -79,6 +79,32 @@ function resumirCalificacionesPorNegocio(resenas = []) {
   return resultado;
 }
 
+// Reseñas visibles por negocio, más recientes primero, para leer lo que
+// escribieron los clientes (texto, estrellas y fecha). Mismo filtro que
+// resumirCalificacionesPorNegocio: solo visibles y calificaciones 1–5.
+// `limite` por negocio para no inflar la respuesta del panel.
+function agruparResenasPorNegocio(resenas = [], { limite = 20 } = {}) {
+  const resultado = {};
+  const ordenadas = [...resenas].sort((a, b) =>
+    String(b?.created_at || '').localeCompare(String(a?.created_at || '')));
+  for (const r of ordenadas) {
+    if (!r || r.visible === false || !r.negocio_id) continue;
+    const c = Number(r.calificacion);
+    if (!Number.isInteger(c) || c < 1 || c > 5) continue;
+    const lista = resultado[r.negocio_id] || (resultado[r.negocio_id] = []);
+    if (lista.length >= limite) continue;
+    lista.push({
+      id: r.id,
+      calificacion: c,
+      comentario: typeof r.comentario === 'string' && r.comentario.trim() ? r.comentario.trim() : null,
+      respuesta_restaurante: r.respuesta_restaurante || null,
+      cliente: r.usuarios?.nombre || null,
+      created_at: r.created_at,
+    });
+  }
+  return resultado;
+}
+
 module.exports = {
   MAX_COMENTARIO,
   MAX_RESPUESTA,
@@ -90,4 +116,5 @@ module.exports = {
   validarModeracion,
   esDuplicado,
   resumirCalificacionesPorNegocio,
+  agruparResenasPorNegocio,
 };

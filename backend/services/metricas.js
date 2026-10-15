@@ -585,7 +585,7 @@ function kpiNegociosActivos({ negocios, bolsas, filtro, filtros, ahora }) {
   const habilitados = negocios.filter((n) => negocioDisponiblePublico(n) && filtro.negocioOk(n.id));
   const reloj = ahoraGuatemala(ahora);
   const conOferta = new Set(bolsas
-    .filter((b) => (!filtros.tipo || b.tipo === filtros.tipo) && motivosNoVisible(b, { ahora: reloj }).length === 0)
+    .filter((b) => (!filtros.tipo || b.tipo === filtros.tipo) && motivosNoVisible(b, { ahora: reloj, exigirHorarioDeHoy: true }).length === 0)
     .map((b) => b.negocio_id));
   const num = habilitados.filter((n) => conOferta.has(n.id)).length;
   return construirKpi('negocios_oferta_activa', {

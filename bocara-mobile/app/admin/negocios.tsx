@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
 import CalendarioPicker from '@/components/CalendarioPicker';
+import ListaResenas, { type ResenaLectura } from '@/components/ListaResenas';
 import { mesEnCurso, nombreMes } from '@/components/SelectorPeriodo';
 
 const BG     = '#F8FAFC';
@@ -42,6 +43,9 @@ export default function AdminNegociosScreen() {
   const [mesResenas, setMesResenas] = useState<string>(() => mesEnCurso());
   const [resenas, setResenas] = useState<Record<string, ResumenResena> | null>(null);
   const [cargandoResenas, setCargandoResenas] = useState(false);
+  // Comentarios escritos por negocio (mismo periodo) y tarjetas desplegadas.
+  const [comentarios, setComentarios] = useState<Record<string, ResenaLectura[]>>({});
+  const [comentariosAbiertos, setComentariosAbiertos] = useState<Record<string, boolean>>({});
 
   const cargar = useCallback(async () => {
     try {
@@ -56,8 +60,12 @@ export default function AdminNegociosScreen() {
     let vigente = true;
     setCargandoResenas(true);
     adminAPI.resenasResumen(periodoResenas === 'mes' ? mesResenas : undefined)
-      .then((res) => { if (vigente) setResenas(res.data?.negocios || {}); })
-      .catch(() => { if (vigente) setResenas(null); })
+      .then((res) => {
+        if (!vigente) return;
+        setResenas(res.data?.negocios || {});
+        setComentarios(res.data?.comentarios || {});
+      })
+      .catch(() => { if (vigente) { setResenas(null); setComentarios({}); } })
       .finally(() => { if (vigente) setCargandoResenas(false); });
     return () => { vigente = false; };
   }, [periodoResenas, mesResenas]);
@@ -249,6 +257,20 @@ export default function AdminNegociosScreen() {
                     </View>
                   );
                 })()}
+                {(comentarios[n.id]?.length ?? 0) > 0 && (
+                  <TouchableOpacity
+                    style={s.verComentariosBtn}
+                    onPress={() => setComentariosAbiertos((prev) => ({ ...prev, [n.id]: !prev[n.id] }))}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: !!comentariosAbiertos[n.id] }}
+                  >
+                    <Ionicons name="chatbubble-ellipses-outline" size={13} color={GOLD} />
+                    <Text style={s.verComentariosText}>
+                      {comentariosAbiertos[n.id] ? 'Ocultar comentarios' : `Ver comentarios (${comentarios[n.id].length})`}
+                    </Text>
+                    <Ionicons name={comentariosAbiertos[n.id] ? 'chevron-up' : 'chevron-down'} size={13} color={GOLD} />
+                  </TouchableOpacity>
+                )}
               </View>
               <View style={{ alignItems: 'flex-end', gap: 5 }}>
                 {n.verificado
@@ -257,6 +279,12 @@ export default function AdminNegociosScreen() {
                 {n.activo === false && <View style={s.chipInac}><Text style={s.chipInacText}>Inactivo</Text></View>}
               </View>
             </View>
+
+            {comentariosAbiertos[n.id] && (comentarios[n.id]?.length ?? 0) > 0 && (
+              <View style={s.comentariosWrap}>
+                <ListaResenas resenas={comentarios[n.id]} />
+              </View>
+            )}
 
             {/* Actions */}
             <View style={s.actionsRow}>
@@ -350,6 +378,9 @@ const s = StyleSheet.create({
   resenaChip:      { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, marginTop: 6, backgroundColor: '#FFF7ED', borderRadius: 10, borderWidth: 1, borderColor: '#FED7AA', paddingHorizontal: 8, paddingVertical: 3 },
   resenaPromedio:  { fontSize: 12, fontWeight: '800', color: '#9A3412' },
   resenaDetalle:   { fontSize: 11, color: '#9A3412' },
+  verComentariosBtn:  { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 4, marginTop: 6, paddingVertical: 2 },
+  verComentariosText: { fontSize: 12, fontWeight: '700', color: GOLD },
+  comentariosWrap:    { marginBottom: 12 },
 
   scroll:  { padding: 14 },
   count:   { fontSize: 11, color: TEXT2, marginBottom: 10, fontWeight: '600' },

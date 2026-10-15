@@ -101,9 +101,23 @@ export function publicacionVencida(publicacion: HorarioPublicacion, now = new Da
   return estaVencidaEn(publicacion, ahoraGuatemala(now));
 }
 
+// Regla de VISIBILIDAD para el cliente (publicacionVencida es la de COMPRA):
+// espejo de vencidaDefinitivamente() del backend. Una publicación diaria (sin
+// fecha_caducidad) sigue en el catálogo aunque su ventana de hoy ya cerró —
+// se ve, pero no se puede comprar hasta su siguiente ventana. Solo se oculta
+// cuando su fecha de caducidad ya pasó.
+function vencidaDefinitivamenteEn(publicacion: HorarioPublicacion, ahora: AhoraGuatemala): boolean {
+  if (!normalizarFecha(publicacion?.fecha_caducidad)) return false;
+  return estaVencidaEn(publicacion, ahora);
+}
+
+export function publicacionVencidaDefinitiva(publicacion: HorarioPublicacion, now = new Date()): boolean {
+  return vencidaDefinitivamenteEn(publicacion, ahoraGuatemala(now));
+}
+
 export function publicacionesVigentes<T extends HorarioPublicacion>(items: T[], now = new Date()): T[] {
   const ahora = ahoraGuatemala(now); // una sola lectura para todo el lote
-  return items.filter(item => !estaVencidaEn(item, ahora));
+  return items.filter(item => !vencidaDefinitivamenteEn(item, ahora));
 }
 
 function minutosHasta(desde: string, hasta: string): number {
@@ -128,7 +142,7 @@ export function calcularEstadoHorario(inicio: string, fin: string, now = new Dat
 
   const ahora = ahoraGuatemala(now);
   if (estaVencidaEn({ hora_recogida_inicio: inicio, hora_recogida_fin: fin }, ahora)) {
-    return { estado: 'vencido', mensaje: 'Horario de recogida vencido por hoy', color: Colors.error, bloqueado: true };
+    return { estado: 'vencido', mensaje: `Cerrado por hoy · se compra de ${inicio.slice(0, 5)} a ${fin.slice(0, 5)}`, color: Colors.error, bloqueado: true };
   }
   if (ahora.hora < ini) {
     const mins = minutosHasta(ahora.hora, ini);

@@ -2,7 +2,7 @@ const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
 const soloCliente = require('../middleware/soloCliente');
-const { enviarNotificacionPush, guardarNotificacion } = require('../services/notificaciones');
+const { enviarNotificacionPush, guardarNotificacion, notificarFasePedidoCliente } = require('../services/notificaciones');
 const { validarTransicion, esEstadoValido, ESTADOS_ENTREGADOS } = require('../services/orderStateMachine');
 const { liberarInventarioPedido } = require('../services/stock');
 const { impactoDePedidos } = require('../services/impactoAmbiental');
@@ -319,6 +319,13 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
         detalle: resultado.detalle || 'No se pudo cancelar el pedido.',
       });
     }
+    // Solo la cancelación efectiva avisa (un reintento 'ya_cancelado' no repite).
+    if (resultado.tipo === 'cancelado') {
+      await notificarFasePedidoCliente(supabase, {
+        usuarioId: pedido.usuario_id, token: pedido.usuarios?.expo_push_token, pedidoId: req.params.id,
+        codigo: pedido.codigo_recogida, estado: 'cancelado',
+      }, { push: enviarNotificacionPush });
+    }
     return res.json({ ok: true, tipo: resultado.tipo, estado: 'cancelado', stock_devuelto: resultado.stockDevuelto === true });
   }
 
@@ -369,26 +376,11 @@ router.put('/:id/estado', authMiddleware, async (req, res) => {
     });
   }
 
-  if (estado === 'en_preparacion') {
-    await enviarNotificacionPush(tokenCliente, '👨‍🍳 Preparando tu pedido',
-      `Tu pedido ${pedido.codigo_recogida} está en preparación.`,
-      { pedidoId: req.params.id, screen: 'pedidos' });
-    await guardarNotificacion(supabase, pedido.usuario_id, 'pedido_en_preparacion', '👨‍🍳 En preparación', `Tu pedido ${pedido.codigo_recogida} está siendo preparado.`, { pedidoId: req.params.id });
-  }
-
-  if (estado === 'listo') {
-    await enviarNotificacionPush(tokenCliente, '🛍️ ¡Tu bolsa está lista!',
-      `Tu pedido ${pedido.codigo_recogida} está listo para recoger.`,
-      { pedidoId: req.params.id, screen: 'pedidos' });
-    await guardarNotificacion(supabase, pedido.usuario_id, 'pedido_listo', '🛍️ Bolsa lista', `Tu pedido ${pedido.codigo_recogida} está listo.`, { pedidoId: req.params.id });
-  }
-
-  if (estado === 'completado' || estado === 'recogido') {
-    await enviarNotificacionPush(tokenCliente, '⭐ ¡Bolsa rescatada!',
-      '¡Gracias por rescatar tu bolsa! Tus puntos Bocara ya están en tu cuenta.',
-      { pedidoId: req.params.id, screen: 'pedidos' });
-    await guardarNotificacion(supabase, pedido.usuario_id, 'bolsa_recogida', '⭐ ¡Bolsa rescatada!', 'Tus puntos Bocara ya están en tu cuenta.', { pedidoId: req.params.id });
-  }
+  // Cada fase avisa al cliente: push con sonido + fila en su bandeja.
+  await notificarFasePedidoCliente(supabase, {
+    usuarioId: pedido.usuario_id, token: tokenCliente, pedidoId: req.params.id,
+    codigo: pedido.codigo_recogida, estado,
+  }, { push: enviarNotificacionPush });
 
   res.json(data);
 });
@@ -427,7 +419,7 @@ router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
     // Admin puede cancelar pedidos de cualquier usuario — sin filtro por usuario_id
     const { data: pedido, error: leerErr } = await supabase
       .from('pedidos')
-      .select('id, estado, estado_pago, negocio_id, codigo_recogida, negocios(propietario_id)')
+      .select('id, estado, estado_pago, negocio_id, usuario_id, codigo_recogida, negocios(propietario_id), usuarios(expo_push_token)')
       .eq('id', req.params.id)
       .maybeSingle();
 
@@ -484,6 +476,12 @@ router.patch('/:id/cancelar', authMiddleware, async (req, res) => {
         `El pedido ${pedido.codigo_recogida} fue cancelado por soporte. Reembolso: Q${monto_reembolsado}`, { pedidoId: pedido.id })
         .catch(err => console.warn('[CANCELAR ADMIN] guardarNotificacion:', err.message));
     }
+
+    // Notificar al cliente (push con sonido + bandeja)
+    await notificarFasePedidoCliente(supabase, {
+      usuarioId: pedido.usuario_id, token: pedido.usuarios?.expo_push_token, pedidoId: pedido.id,
+      codigo: pedido.codigo_recogida, estado: 'cancelado',
+    }, { push: enviarNotificacionPush });
 
     res.json({
       ok: true,

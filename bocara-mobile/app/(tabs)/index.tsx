@@ -10,7 +10,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { negociosAPI, notificacionesAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { useAuth } from '@/src/context/AuthContext';
-import { useLocation } from '@/src/context/LocationContext';
+import { useLocation, formatDistancia } from '@/src/context/LocationContext';
 import { useCart } from '@/src/context/CartContext';
 
 const { width: SW } = Dimensions.get('window');
@@ -54,9 +54,16 @@ function NegocioCard({ negocio, onPress }: { negocio: any; onPress: () => void }
       <View style={s.negocioInfo}>
         <Text style={s.negocioNombre} numberOfLines={1}>{negocio.nombre}</Text>
         {negocio.zona ? <Text style={s.negocioZona}>Zona {negocio.zona}</Text> : null}
-        <Text style={s.negocioCount}>
-          {negocio.cantidad_bolsas} disponible{negocio.cantidad_bolsas !== 1 ? 's' : ''}
-        </Text>
+        {negocio.cantidad_bolsas > 0 ? (
+          <Text style={s.negocioCount}>
+            {negocio.cantidad_bolsas} disponible{negocio.cantidad_bolsas !== 1 ? 's' : ''}
+            {formatDistancia(negocio.distancia_km) ? ` · ${formatDistancia(negocio.distancia_km)}` : ''}
+          </Text>
+        ) : (
+          <Text style={s.negocioSinOfertas}>
+            Sin ofertas hoy{formatDistancia(negocio.distancia_km) ? ` · ${formatDistancia(negocio.distancia_km)}` : ''}
+          </Text>
+        )}
       </View>
     </TouchableOpacity>
   );
@@ -71,7 +78,11 @@ export default function HomeScreen() {
   const [sinLeerCount, setSinLeerCount] = useState(0);
   const router = useRouter();
   const { usuario } = useAuth();
-  const { locationName, permissionStatus, requestPermission, actualizarUbicacion, loading: locLoading } = useLocation();
+  const { locationName, permissionStatus, requestPermission, actualizarUbicacion, loading: locLoading, coords } = useLocation();
+  // La ubicación SOLO ordena el feed (cercanos primero); el backend siempre
+  // devuelve todos los restaurantes activos y verificados.
+  const latFeed = coords?.lat;
+  const lngFeed = coords?.lng;
   const { cantidad: cantidadCarrito, loaded: cartLoaded } = useCart();
 
   useEffect(() => {
@@ -86,7 +97,7 @@ export default function HomeScreen() {
     const cached = await getCache<any[]>(cacheKey);
     if (cached) { setNegocios(cached); setLoading(false); }
     try {
-      const res = await negociosAPI.feed();
+      const res = await negociosAPI.feed(latFeed != null && lngFeed != null ? { lat: latFeed, lng: lngFeed } : undefined);
       const fresh = res.data || [];
       setNegocios(fresh);
       setCache(cacheKey, fresh);
@@ -98,7 +109,7 @@ export default function HomeScreen() {
     } finally {
       setLoading(false); setRefreshing(false);
     }
-  }, []);
+  }, [latFeed, lngFeed]);
 
   // Al recuperar el foco (no solo al montar): las pestañas quedan montadas, así
   // que sin esto una publicación aprobada por el admin no aparecía hasta un
@@ -248,7 +259,7 @@ export default function HomeScreen() {
               <View style={s.section}>
                 <View style={s.sectionHeader}>
                   <Text style={s.sectionTitle}>
-                    {catSelected === 'Todos' ? 'Negocios disponibles' : catSelected}
+                    {catSelected === 'Todos' ? (latFeed != null ? 'Restaurantes · más cercanos primero' : 'Restaurantes') : catSelected}
                   </Text>
                   {catSelected !== 'Todos' && (
                     <TouchableOpacity onPress={() => setCatSelected('Todos')}>
@@ -369,4 +380,5 @@ const s = StyleSheet.create({
   negocioNombre: { fontSize: 13, fontWeight: '900', color: Colors.textPrimary, marginBottom: 2 },
   negocioZona: { fontSize: 11, color: Colors.textSecondary, marginBottom: 2 },
   negocioCount: { fontSize: 11, color: Colors.accent, fontWeight: '700' },
+  negocioSinOfertas: { fontSize: 11, color: Colors.textSecondary, fontWeight: '600' },
 });

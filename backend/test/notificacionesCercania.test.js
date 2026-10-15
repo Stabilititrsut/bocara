@@ -373,3 +373,31 @@ test('push: un channelId desconocido cae a default (Android no muestra canales i
   assert.equal(construirMensaje('t', 'a', 'b', {}, 'inventado').channelId, 'default');
   assert.equal(construirMensaje('t', 'a', 'b', {}).channelId, 'default');
 });
+
+test('Tiempo limitado: avisa a TODOS los clientes que aceptan promociones; sin token solo bandeja', async () => {
+  const { cliente, notificaciones } = crearCliente({
+    usuarios: [
+      usuario('cerca', 1),
+      usuario('lejos', 50),
+      usuario('web', null, { expo_push_token: null }),
+      usuario('optout', 2, { notif_promociones: false }),
+      usuario('inactivo', 2, { activo: false }),
+      usuario('resto', 2, { rol: 'restaurante' }),
+    ],
+    bolsa: bolsaVisible({ tipo: 'bolsa' }),
+  });
+  const push = espiaPush();
+  const r = await manejarPublicacionVisible(evento(), { cliente, enviarPush: push.enviarPush });
+  assert.deepEqual(notificaciones.map(n => n.usuario_id).sort(), ['cerca', 'lejos', 'web']);
+  assert.deepEqual(push.tokens().sort(), ['ExponentPushToken[cerca]', 'ExponentPushToken[lejos]']);
+  assert.ok(push.lotes.flat().every(m => m.sound === 'default'), 'el push suena');
+  assert.match(push.lotes[0][0].title, /cómpralo ya/);
+  assert.equal(r.todos, 3);
+});
+
+test('Promoción: sigue limitada a ≤ 10 km y favoritos (no avisa a lejanos)', async () => {
+  const { cliente, notificaciones } = crearCliente({ usuarios: [usuario('cerca', 1), usuario('lejos', 50)] });
+  const push = espiaPush();
+  await manejarPublicacionVisible(evento(), { cliente, enviarPush: push.enviarPush });
+  assert.deepEqual(notificaciones.map(n => n.usuario_id), ['cerca']);
+});

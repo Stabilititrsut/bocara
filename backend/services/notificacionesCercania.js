@@ -1,6 +1,9 @@
 // Handler del evento `publicacion.visible`: avisa de una Promoción o de un
 // Tiempo limitado recién visible a los clientes a ≤ 10 km del negocio y a los
-// que lo tienen en favoritos.
+// que lo tienen en favoritos. Un Tiempo limitado además avisa a TODOS los
+// clientes que aceptan promociones ("cómpralo ya"): con token reciben push con
+// sonido; sin token (web) igual reciben la fila de la bandeja, que la app web
+// detecta por polling y hace sonar en pantalla.
 //
 // Garantía: como mucho UNA notificación por usuario y ciclo de publicación.
 // La barrera es el índice único de notificaciones.clave_idempotencia
@@ -55,8 +58,10 @@ function textos(bolsa, nombreNegocio) {
   const esPromocion = bolsa.tipo === 'cupon';
   return {
     tipoPayload: esPromocion ? 'promocion' : 'tiempo_limitado',
-    titulo: esPromocion ? '🏷️ Nueva promoción cerca de ti' : '⏱️ Tiempo limitado cerca de ti',
-    cuerpo: `${nombreNegocio} publicó: ${bolsa.nombre}`,
+    titulo: esPromocion ? '🏷️ Nueva promoción cerca de ti' : '⏱️ Tiempo limitado: ¡cómpralo ya!',
+    cuerpo: esPromocion
+      ? `${nombreNegocio} publicó: ${bolsa.nombre}`
+      : `${nombreNegocio} publicó: ${bolsa.nombre}. Disponible por tiempo limitado.`,
   };
 }
 
@@ -77,6 +82,27 @@ async function clientesEnRadio(cliente, lat, lng) {
   // Defensa en profundidad: la RPC ya acota a 10 km, pero la regla de negocio
   // no depende de que nadie cambie la función sin cambiar este código.
   return filas.filter(f => f?.usuario_id && f.expo_push_token && Number(f.distancia_km) <= RADIO_KM);
+}
+
+// Todos los clientes activos que aceptan promociones, con o sin token (sin
+// token = solo bandeja; la app web la detecta por polling). Paginado igual que
+// la RPC: PostgREST corta en 1000 filas.
+async function clientesQueAceptanPromociones(cliente) {
+  const filas = [];
+  for (let desde = 0; ; desde += PAGINA_RPC) {
+    const { data, error } = await cliente
+      .from('usuarios')
+      .select('id,rol,activo,notif_promociones,expo_push_token')
+      .eq('rol', 'cliente')
+      .order('id', { ascending: true })
+      .range(desde, desde + PAGINA_RPC - 1);
+    if (error) throw new Error(`usuarios (clientes) falló: ${error.message}`);
+    filas.push(...(data || []));
+    if (!data || data.length < PAGINA_RPC) break;
+  }
+  return filas
+    .filter(u => u?.id && u.rol === 'cliente' && u.activo !== false && u.notif_promociones !== false)
+    .map(u => ({ usuario_id: u.id, expo_push_token: u.expo_push_token || null }));
 }
 
 async function favoritosNotificables(cliente, negocioId) {
@@ -134,7 +160,7 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
 
   // El evento pudo procesarse tarde (reintentos, backend caído): se vuelve a
   // comprobar con la misma regla que el feed antes de avisar a nadie.
-  const motivos = motivosNoVisible(bolsa);
+  const motivos = motivosNoVisible(bolsa, { exigirHorarioDeHoy: true });
   if (motivos.length) {
     console.warn('[CERCANIA] Publicación %s ya no es visible (%s): sin envío', bolsaId, motivos.join(','));
     return { omitido: 'no_visible', motivos };
@@ -154,10 +180,11 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
     console.warn('[CERCANIA] Negocio %s sin coordenadas válidas: solo se avisa a favoritos', negocioId);
   }
   const favoritos = await favoritosNotificables(cliente, negocioId);
+  const todos = bolsa.tipo !== 'cupon' ? await clientesQueAceptanPromociones(cliente) : [];
 
   const porUsuario = new Map();
-  for (const f of [...cercanos, ...favoritos]) {
-    if (!porUsuario.has(f.usuario_id)) porUsuario.set(f.usuario_id, f.expo_push_token);
+  for (const f of [...cercanos, ...favoritos, ...todos]) {
+    if (!porUsuario.get(f.usuario_id)) porUsuario.set(f.usuario_id, f.expo_push_token || null);
   }
   const destinatarios = [...porUsuario].map(([usuarioId, token]) => ({ usuarioId, token }));
 
@@ -174,12 +201,13 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
     clave_idempotencia: claveNotificacion(bolsaId, ciclo, d.usuarioId),
   }));
 
-  const push = ganadores.length
-    ? await enviarPush(ganadores.map(d => construirMensaje(d.token, titulo, cuerpo, data, CANAL_CERCANIA)), { cliente })
+  const conToken = ganadores.filter(d => d.token);
+  const push = conToken.length
+    ? await enviarPush(conToken.map(d => construirMensaje(d.token, titulo, cuerpo, data, CANAL_CERCANIA)), { cliente })
     : null;
 
   const resumen = {
-    bolsaId, ciclo, cercanos: cercanos.length, favoritos: favoritos.length,
+    bolsaId, ciclo, cercanos: cercanos.length, favoritos: favoritos.length, todos: todos.length,
     destinatarios: destinatarios.length, insertadas: ganadores.length, duplicadas, errores: errores.length, push,
   };
   console.log('[CERCANIA] publicación %s ciclo %s:', bolsaId, ciclo, JSON.stringify(resumen));

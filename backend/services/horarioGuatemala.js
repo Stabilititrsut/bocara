@@ -166,6 +166,18 @@ function estaVencida(bolsa, ahora = ahoraGuatemala()) {
   return fin.hora <= ahora.hora;
 }
 
+// true si la publicación ya no volverá a poder comprarse nunca — la regla de
+// VISIBILIDAD para el cliente (estaVencida es la regla de COMPRA):
+//   · con `fecha_caducidad`: igual que estaVencida (su última ventana ya cerró)
+//   · sin `fecha_caducidad` es una publicación diaria: cerrar la ventana de hoy
+//     no la retira del catálogo, solo impide comprarla hasta la siguiente ventana
+//   · hora de fin ininteligible: se sigue fallando CERRADO (ver estaVencida)
+function vencidaDefinitivamente(bolsa, ahora = ahoraGuatemala()) {
+  const horaFinCorrupta = tieneValorDeHora(bolsa?.hora_recogida_fin) && !normalizarHora(bolsa.hora_recogida_fin);
+  if (!normalizarFecha(bolsa?.fecha_caducidad) && !horaFinCorrupta) return false;
+  return estaVencida(bolsa, ahora);
+}
+
 // Filtra una lista de publicaciones dejando solo las vigentes. Una sola lectura
 // de la hora para todo el lote: evita que un elemento se evalúe contra un
 // segundo distinto que el siguiente.
@@ -222,6 +234,7 @@ module.exports = {
   rangoMesGuatemalaUTC,
   finVentanaRecogida,
   estaVencida,
+  vencidaDefinitivamente,
   noHaIniciado,
   filtrarVigentes,
   validarHorarioFuturo,

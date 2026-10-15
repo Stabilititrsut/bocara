@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { negociosAPI, favoritosAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { useLocation, formatDistancia } from '@/src/context/LocationContext';
 
 const CATEGORIAS_FILTER = [
   'Todas', 'Panadería', 'Restaurante', 'Cafetería',
@@ -21,18 +22,22 @@ export default function TiendasScreen() {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [catFilter,  setCatFilter]  = useState('Todas');
+  // La ubicación SOLO ordena (cercanos primero); siempre llegan todos.
+  const { coords } = useLocation();
+  const latFeed = coords?.lat;
+  const lngFeed = coords?.lng;
 
   const cargar = useCallback(async () => {
     try {
       const [feedRes, favRes] = await Promise.all([
-        negociosAPI.feed(),
+        negociosAPI.feed(latFeed != null && lngFeed != null ? { lat: latFeed, lng: lngFeed } : undefined),
         favoritosAPI.listar().catch(() => ({ data: [] })),
       ]);
       setNegocios(feedRes.data || []);
       setFavIds(new Set((favRes.data || []).map((f: any) => f.id)));
     } catch {}
     finally { setLoading(false); setRefreshing(false); }
-  }, []);
+  }, [latFeed, lngFeed]);
 
   // Al recuperar el foco (no solo al montar): las pestañas quedan montadas, así
   // que sin esto una publicación aprobada por el admin no aparecía hasta un
@@ -188,8 +193,16 @@ export default function TiendasScreen() {
                     </Text>
                     <View style={s.metaSep} />
                     <Text style={s.countText}>
-                      {n.cantidad_bolsas} producto{n.cantidad_bolsas !== 1 ? 's' : ''}
+                      {n.cantidad_bolsas > 0
+                        ? `${n.cantidad_bolsas} producto${n.cantidad_bolsas !== 1 ? 's' : ''}`
+                        : 'Sin ofertas hoy'}
                     </Text>
+                    {formatDistancia(n.distancia_km) ? (
+                      <>
+                        <View style={s.metaSep} />
+                        <Text style={s.countText}>{formatDistancia(n.distancia_km)}</Text>
+                      </>
+                    ) : null}
                     {n.zona ? (
                       <>
                         <View style={s.metaSep} />
