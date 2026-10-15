@@ -41,12 +41,12 @@ function silenciar(fn) {
 
 // "Logo" sintético: fondo blanco liso con formas de color nítidas (como un
 // logo real), un poco de ruido de cámara para que no sea un vector perfecto.
-async function logo({ lado = 800, ancho = lado, alto = lado } = {}) {
+async function logo({ lado = 800, ancho = lado, alto = lado, rojo = [200, 40, 40], periodo = 9 } = {}) {
   const raw = Buffer.alloc(ancho * alto * 3);
   let s = 7;
   const rnd = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
   const formas = [
-    { x: ancho * 0.5, y: alto * 0.42, r: Math.min(ancho, alto) * 0.28, c: [200, 40, 40] },
+    { x: ancho * 0.5, y: alto * 0.42, r: Math.min(ancho, alto) * 0.28, c: rojo },
     { x: ancho * 0.5, y: alto * 0.42, r: Math.min(ancho, alto) * 0.16, c: [250, 200, 60] },
     { x: ancho * 0.36, y: alto * 0.8, r: Math.min(ancho, alto) * 0.06, c: [30, 30, 30] },
     { x: ancho * 0.64, y: alto * 0.8, r: Math.min(ancho, alto) * 0.06, c: [30, 30, 30] },
@@ -58,7 +58,7 @@ async function logo({ lado = 800, ancho = lado, alto = lado } = {}) {
       let c = [252, 252, 250];
       for (const f of formas) { const dx = x - f.x, dy = y - f.y; if (dx * dx + dy * dy < f.r * f.r) c = f.c; }
       // Franja de "letras": barras verticales finas (bordes duros como texto).
-      if (y > alto * 0.62 && y < alto * 0.7 && x > ancho * 0.2 && x < ancho * 0.8 && Math.floor(x / 9) % 2 === 0) c = [30, 30, 30];
+      if (y > alto * 0.62 && y < alto * 0.7 && x > ancho * 0.2 && x < ancho * 0.8 && Math.floor(x / periodo) % 2 === 0) c = [30, 30, 30];
       raw[i] = Math.max(0, Math.min(255, c[0] + n)); raw[i + 1] = Math.max(0, Math.min(255, c[1] + n)); raw[i + 2] = Math.max(0, Math.min(255, c[2] + n));
     }
   }
@@ -72,8 +72,13 @@ test.before(async () => {
   Object.assign(img, {
     logo: await logo(),
     logoAncho: await logo({ ancho: 1200, alto: 500 }),
-    logoBorroso: await sharp(await logo()).blur(6).jpeg().toBuffer(),
     logoDiminuto: await sharp(await logo()).resize(300).jpeg().toBuffer(),
+    // "Mejoras" que la IA NO puede hacer: recolorear la marca, redibujar las letras.
+    logoRecoloreado: await logo({ rojo: [40, 80, 200] }),
+    logoRojoANaranja: await logo({ rojo: [220, 110, 40] }),
+    logoOtrasLetras: await logo({ periodo: 16 }),
+    // Restauración técnica válida: más contraste y nitidez + corrección de una dominante global.
+    logoRestaurado: await sharp(await logo()).linear(1.08, -10).recomb([[1.02, 0, 0], [0, 1, 0], [0, 0, 0.97]]).sharpen().jpeg({ quality: 95 }).toBuffer(),
     local,
     localVertical: await escena(PLATO, { ancho: 700, alto: 1000 }),
     localOscuro: await sharp(local).modulate({ brightness: 0.45 }).jpeg().toBuffer(),
@@ -109,14 +114,21 @@ test('NPRO-1: prompts de perfil y portada preservan la identidad y prohíben inv
   for (const [encuadre, base] of [['perfil', PROMPT_PERFIL], ['portada', PROMPT_PORTADA]]) {
     const p = promptMejora({ encuadre, problemas: ['borrosa', 'no_horizontal', 'no_cuadrada'] });
     assert.ok(p.startsWith(base), encuadre);
-    assert.match(p, /Keep its identity exactly/);
-    assert.match(p, /Never invent or add logos, text, signs, food/);
-    assert.match(p, /Do not redraw, restyle, retype/);
-    assert.doesNotMatch(p, /dish or product taken by a restaurant/, 'no usa el prompt de comida');
-    assert.match(p, /without inventing new details or changing any letter/, 'corrección genérica (no de comida)');
+    assert.match(p, /technical photo restoration job, not a creative edit/);
+    assert.match(p, /every letter, word, number and the business name \(same font, spelling/);
+    assert.match(p, /same shapes, internal proportions/);
+    assert.match(p, /the brand colors \(same hues and saturation; do not recolor/);
+    assert.match(p, /Strictly forbidden: redrawing, redesigning, vectorizing, retyping/);
+    assert.match(p, /inventing or adding text, logos, signs, products, food, people/);
+    assert.match(p, /If an improvement would require changing any of the above, do not make it/);
+    assert.doesNotMatch(p, /dish or product taken by a restaurant|appetizing|tidier|well-composed/i, 'nada creativo ni de comida');
+    assert.match(p, /sharpen the existing edges only, without redrawing shapes or letters/);
   }
-  assert.match(PROMPT_PERFIL, /square profile picture shown inside a circle/);
-  assert.match(PROMPT_PORTADA, /wide horizontal cover banner/);
+  assert.match(PROMPT_PERFIL, /fully visible, never cropped/);
+  assert.match(PROMPT_PERFIL, /increase resolution, sharpen existing edges, reduce noise, correct exposure and contrast, correct white balance/);
+  assert.match(PROMPT_PORTADA, /only with a plain, seamless continuation of the existing background, wall, sky, floor or surface, with no new objects/);
+  // "Ordenar" el entorno no es una corrección técnica: nunca se le pide.
+  assert.doesNotMatch(promptMejora({ encuadre: 'portada', problemas: ['desordenada', 'manos_o_personas'] }), /Specific fixes/);
   // IMAGE_AI_PROMPT (A/B de comida) nunca reemplaza el de perfil/portada.
   process.env.IMAGE_AI_PROMPT = 'prompt de prueba';
   try {
@@ -196,7 +208,9 @@ test('NREV-2: resultado de perfil/portada — marca o texto alterado, o elemento
     const c = openaiFalso({ apta: false, problemas: [codigo], resumen: 'cambió el logo' });
     const r = await silenciar(() => crearRevisorIA({ cliente: c }).revisar(img.logo, { modo: 'resultado', original: img.logo, uso: 'perfil' }));
     assert.equal(r.infiel, true, codigo);
-    assert.match(c.llamadas[0].instructions, /marca_alterada si cambió, redibujó, borró o deformó el logo/);
+    assert.match(c.llamadas[0].instructions, /si el logo o un símbolo fue redibujado, simplificado, vectorizado, reinterpretado/);
+    assert.match(c.llamadas[0].instructions, /los colores de la marca cambiaron de tono o saturación/);
+    assert.match(c.llamadas[0].instructions, /Ante cualquier duda sobre letras, logo o colores, marca marca_alterada/);
     assert.equal(c.llamadas[0].input[0].content.filter((x) => x.type === 'input_image').length, 2);
   }
 });
@@ -297,22 +311,78 @@ test('NFLU-3: proveedor sin soporte de perfil/portada (p. ej. Replicate) → fal
   assert.equal(llamadas.proveedor, 0);
 });
 
-test('NFLU-4: la IA alteró la marca → fallida "fidelidad"; "usar original" solo si la original cumple la calidad mínima', async () => {
-  const buena = entorno({ uso: 'perfil', foto: 'logo', revisionFinal: { problemas: ['marca_alterada'] } });
-  // La original del logo ya cumplía todo: el fallback automático la deja lista con la original.
-  assert.equal(await procesar(buena), 'lista');
-  assert.equal(trabajos.serializar(buena.fila()).usa_original, true);
-
-  const conProblemas = entorno({ uso: 'perfil', foto: 'logo', revision: { problemas: ['desordenada'] }, revisionFinal: { problemas: ['marca_alterada'] } });
-  assert.equal(await procesar(conProblemas), 'fallida');
-  const s = trabajos.serializar(conProblemas.fila());
-  assert.equal(s.error_codigo, 'fidelidad');
-  assert.equal(s.puede_reintentar, true);
-  assert.equal(s.puede_usar_original, true, 'la original cumple el mínimo de perfil: se puede usar');
-
-  const borrosa = entorno({ uso: 'perfil', foto: 'logoBorroso', revision: { problemas: ['borrosa'] }, revisionFinal: { problemas: ['marca_alterada'] } });
+test('NFLU-4: la IA alteró la marca (revisión) → nunca se usa: con original válida queda lista con la ORIGINAL; si no, fallida reintentable', async () => {
+  for (const [codigo, revision] of [['marca_alterada', []], ['elemento_inventado', ['desordenada']]]) {
+    const env = entorno({ uso: 'perfil', foto: 'logo', revision: { problemas: revision }, revisionFinal: { problemas: [codigo] } });
+    assert.equal(await procesar(env), 'lista', codigo);
+    const t = env.fila();
+    assert.equal(t.mejorada_url, t.original_url, `${codigo}: se guarda la original, no el resultado`);
+    assert.equal(t.calidad_resultado.fallback_original, true);
+    assert.deepEqual(env.llamadas.subidas, [], 'el resultado alterado ni se sube');
+    assert.equal(trabajos.serializar(t).usa_original, true);
+  }
+  // La revisión ve la original borrosa: no es válida para usarla sin IA.
+  const borrosa = entorno({ uso: 'perfil', foto: 'logo', revision: { problemas: ['borrosa'] }, revisionFinal: { problemas: ['marca_alterada'] } });
   assert.equal(await procesar(borrosa), 'fallida');
-  assert.equal(trabajos.serializar(borrosa.fila()).puede_usar_original, false, 'una original borrosa no se puede usar sin IA');
+  const s = trabajos.serializar(borrosa.fila());
+  assert.equal(s.error_codigo, 'fidelidad_marca');
+  assert.match(s.error, /no conservaba tu imagen tal cual \(letras, logo, colores o elementos\)/);
+  assert.equal(s.puede_reintentar, true);
+  assert.equal(s.puede_usar_original, false, 'una original borrosa no se puede usar sin IA');
+  assert.equal(s.paso_error, 'validando');
+});
+
+test('NFLU-7: comparación automática contra la original — un resultado recoloreado o con otras letras se descarta ANTES de la revisión y se conserva la original', async () => {
+  for (const cambio of ['logoRecoloreado', 'logoOtrasLetras']) {
+    const env = entorno({ uso: 'perfil', foto: 'logo', cambia: img[cambio] });
+    assert.equal(await procesar(env), 'lista', cambio);
+    const t = env.fila();
+    assert.equal(t.mejorada_url, t.original_url, `${cambio}: original`);
+    assert.match(t.calidad_resultado.motivo_fallback, /cambió (los colores|formas, letras)/, cambio);
+    assert.deepEqual(env.llamadas.usosRevision, ['perfil/original'], 'ni se pide la revisión del resultado');
+  }
+  const sinOriginal = entorno({ uso: 'perfil', foto: 'logo', revision: { problemas: ['borrosa'] }, cambia: img.logoRecoloreado });
+  assert.equal(await procesar(sinOriginal), 'fallida');
+  assert.equal(sinOriginal.fila().error_codigo, 'fidelidad_marca');
+});
+
+test('NFLU-8: resultado fiel pero no presentable → con original válida, la original; sin ella, rechazada', async () => {
+  const conOriginal = entorno({ uso: 'perfil', foto: 'logo', revisionFinal: { problemas: ['aspecto_artificial'] } });
+  assert.equal(await procesar(conOriginal), 'lista');
+  assert.equal(trabajos.serializar(conOriginal.fila()).usa_original, true);
+  // La revisión ve la original borrosa: no es válida para usarla sin IA.
+  const sin = entorno({ uso: 'perfil', foto: 'logo', revision: { problemas: ['borrosa'] }, revisionFinal: { problemas: ['aspecto_artificial'] } });
+  assert.equal(await procesar(sin), 'rechazada');
+});
+
+test('NFLU-9: portada — elemento inventado, recoloreado o resultado no apto → se conserva la original válida; nunca se guarda el resultado', async () => {
+  for (const [nombre, opciones] of [
+    ['elemento_inventado', { revisionFinal: { problemas: ['elemento_inventado'] } }],
+    ['marca_alterada', { revisionFinal: { problemas: ['marca_alterada'] } }],
+    ['no presentable', { revisionFinal: { problemas: ['aspecto_artificial'] } }],
+  ]) {
+    const env = entorno({ uso: 'portada', foto: 'local', ...opciones });
+    assert.equal(await procesar(env), 'lista', nombre);
+    assert.equal(env.fila().mejorada_url, env.url, `${nombre}: la original`);
+    assert.deepEqual(env.llamadas.subidas, [], `${nombre}: el resultado no se sube`);
+  }
+  // Recoloreado: la comparación automática lo detecta sin depender de la revisión.
+  const recolor = entorno({ uso: 'portada', foto: 'local', cambia: await sharp(img.local).modulate({ hue: 120 }).jpeg().toBuffer() });
+  assert.equal(await procesar(recolor), 'lista');
+  assert.match(recolor.fila().calidad_resultado.motivo_fallback, /cambió los colores/);
+  assert.deepEqual(recolor.llamadas.usosRevision, ['portada/original']);
+});
+
+test('NVAL-1: validación estricta — restauración técnica (contraste, nitidez, dominante global) pasa; recolorear la marca o cambiar letras no', async () => {
+  const { validarResultado, ErrorValidacion } = require('../services/imagenes/validacion');
+  const m = await validarResultado(img.logo, img.logoRestaurado, { uso: 'perfil' });
+  assert.ok(m.similitud_detalle >= 0.8 && m.similitud_zona_min >= 0.6 && m.deriva_tono_local <= 8, JSON.stringify(m));
+  for (const [cambio, motivo] of [['logoRecoloreado', /cambió los colores/], ['logoRojoANaranja', /cambió los colores/], ['logoOtrasLetras', /cambió formas, letras/]]) {
+    await assert.rejects(validarResultado(img.logo, img[cambio], { uso: 'perfil' }),
+      (e) => e instanceof ErrorValidacion && e.fidelidad === true && motivo.test(e.message), cambio);
+  }
+  // Publicaciones: sin la regla estricta.
+  await assert.doesNotReject(validarResultado(img.logo, img.logoRestaurado));
 });
 
 test('NFLU-5: captura de pantalla o imagen no relacionada → rechazada antes de IA; no se puede usar la original', async () => {

@@ -58,6 +58,12 @@ test('NEG-FE-1: textos — perfil/portada "lista" no habla de publicar; "Usar or
   assert.deepEqual(plano(rechazada.mensajes), ['Usa otra imagen de tu negocio.']);
   assert.equal(P.resumenProceso(trabajo('fallida', { uso: 'publicacion', puede_usar_original: true })).puedeUsarOriginal, false, 'nunca en publicaciones');
   assert.equal(P.mensajeCorregido(['no_cuadrada', 'borrosa']), 'La IA mejoró encuadre y nitidez.');
+  // La IA no conservaba la marca: se usa la original y se explica sin tecnicismos.
+  const original = P.resumenProceso(trabajo('lista', { usa_original: true, mejorada_url: ORIGINAL }));
+  assert.equal(original.titulo, '✅ Imagen optimizada y lista');
+  assert.deepEqual(plano(original.mensajes), ['Conservamos tu imagen original: la versión con IA no la mantenía exactamente igual (letras, logo, colores o elementos).']);
+  assert.equal(P.imagenAGuardar(trabajo('lista', { usa_original: true, mejorada_url: ORIGINAL })), ORIGINAL);
+  assert.match(P.resumenProceso(trabajo('lista', { uso: 'publicacion', usa_original: true })).mensajes[0], /^Usaremos tu foto original/, 'publicaciones sin cambios');
 });
 
 test('NEG-FE-2: Guardar bloqueado mientras sube o procesa, rechazada o fallida; con original solo si cumple', () => {

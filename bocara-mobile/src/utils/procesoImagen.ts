@@ -54,6 +54,9 @@ export const TEXTOS_IMAGEN = Object.freeze({
   rechazada: '❌ Esta imagen no cumple la calidad mínima para Bocara',
   rechazadaAntes: '❌ Imagen rechazada: no se puede usar esta foto',
   usaOriginal: 'Usaremos tu foto original: ya cumple la calidad de Bocara y la versión con IA no superó la validación.',
+  // Perfil / portada: la IA solo restaura; si su resultado no era idéntico en
+  // letras, logo, colores o elementos, se conserva la original.
+  usaOriginalNegocio: 'Conservamos tu imagen original: la versión con IA no la mantenía exactamente igual (letras, logo, colores o elementos).',
   originalDisponible: 'Tu imagen original cumple la calidad mínima: también puedes usarla tal cual.',
   reintentar: 'Reintentar',
   cambiarFoto: 'Cambiar foto',
@@ -147,7 +150,8 @@ export function resumenProceso(t: TrabajoImagen | null, { dev = false }: { dev?:
   }
   if (t.estado === 'lista') {
     const corregido = mensajeCorregido(t.problemas_corregidos);
-    const mensajes = t.usa_original ? [TEXTOS_IMAGEN.usaOriginal] : corregido ? [corregido] : [];
+    const usaOriginal = negocio ? TEXTOS_IMAGEN.usaOriginalNegocio : TEXTOS_IMAGEN.usaOriginal;
+    const mensajes = t.usa_original ? [usaOriginal] : corregido ? [corregido] : [];
     return {
       titulo: negocio ? TEXTOS_IMAGEN.listaNegocio : TEXTOS_IMAGEN.lista, tono: 'ok', mensajes,
       puedeReintentar: false, puedeCambiar: true, puedeUsarOriginal: false,

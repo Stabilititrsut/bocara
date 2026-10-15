@@ -36,9 +36,13 @@
 //   portada      portada / banner del restaurante      negocios/<negocio>/portada_…
 // El uso sale de la ruta en Storage (la valida crearTrabajo), así que no hace
 // falta columna nueva y un trabajo de perfil nunca sirve para una publicación.
-// Perfil y portada, además, pueden guardarse con la ORIGINAL ("usar mi
-// original") solo si esta pasó el análisis con IA y cumple la calidad mínima
-// de su uso (calidad_original.original_aceptable).
+// Perfil y portada: la IA es solo restauración técnica (prompts.js) y el
+// resultado pasa una validación de fidelidad ESTRICTA (validacion.js: formas,
+// letras y colores; revisionIA.js: marca_alterada / elemento_inventado).
+// Si el resultado falla por lo que sea y la original es válida (pasó el
+// análisis con IA y cumple la calidad mínima de su uso:
+// calidad_original.original_aceptable), queda 'lista' con la ORIGINAL. Si
+// la original tampoco es válida: fallida (reintentable) o rechazada.
 const { ErrorProveedor } = require('./errores');
 const { prepararEntrada, validarResultado, ErrorValidacion } = require('./validacion');
 const { analizarCalidad, analizarRecuperable } = require('./calidad');
@@ -82,6 +86,8 @@ const MENSAJES_FALLO = Object.freeze({
   validacion: 'La versión mejorada no se parecía lo suficiente a tu foto, así que no la usamos.',
   calidad_resultado: 'Aun después de mejorarla con IA, la foto no alcanzó la calidad mínima para Bocara.',
   fidelidad: 'La versión con IA cambió tu producto (por ejemplo, agregó o quitó ingredientes), así que no la usamos. Reintenta para generar otra versión.',
+  fidelidad_marca: 'La versión con IA no conservaba tu imagen tal cual (letras, logo, colores o elementos), así que no la usamos. Reintenta o cambia la foto.',
+  resultado_no_apto: 'La versión con IA no quedó presentable, así que no la usamos.',
   interrumpido: 'El procesamiento se interrumpió.',
   descarga: 'No pudimos leer la foto subida.',
   interno: 'Ocurrió un error inesperado al procesar la foto.',
@@ -116,7 +122,7 @@ function pasoError(t) {
   if (t.estado === ESTADOS.RECHAZADA) return t.proveedor ? ESTADOS.VALIDANDO : ESTADOS.ANALIZANDO;
   if (t.estado !== ESTADOS.FALLIDA) return null;
   if (t.error_codigo === 'interrumpido') return /desde (\w+)/.exec(t.error || '')?.[1] || ESTADOS.ANALIZANDO;
-  if (['validacion', 'calidad_resultado', 'fidelidad'].includes(t.error_codigo) || t.calidad_resultado) return ESTADOS.VALIDANDO;
+  if (['validacion', 'calidad_resultado', 'fidelidad', 'fidelidad_marca'].includes(t.error_codigo) || t.calidad_resultado) return ESTADOS.VALIDANDO;
   if (String(t.error_codigo || '').startsWith('proveedor') && t.proveedor) return ESTADOS.MEJORANDO;
   return ESTADOS.ANALIZANDO;
 }
@@ -324,9 +330,13 @@ async function procesarTrabajo(id, {
     console.log('[IMAGEN_IA] %s validando resultado', id);
     let fallo = null; // por qué la mejorada no sirve (reintentable)
     let similitud = null;
-    try { similitud = await validarResultado(prep.buffer, resultado.buffer, { region: resultado.meta?.region || null }); } catch (err) {
+    // Perfil / portada: además, fidelidad estricta (formas, letras y colores).
+    const negocio = uso !== 'publicacion';
+    try {
+      similitud = await validarResultado(prep.buffer, resultado.buffer, { region: resultado.meta?.region || null, uso: negocio ? uso : null });
+    } catch (err) {
       if (!(err instanceof ErrorValidacion)) throw err;
-      fallo = { codigo: 'validacion', detalle: err.message, motivos: null, metricas: err.metricas || {} };
+      fallo = { codigo: err.fidelidad ? 'fidelidad_marca' : 'validacion', detalle: err.message, motivos: null, metricas: err.metricas || {} };
     }
     let calidadFinal = null;
     if (!fallo) {
@@ -351,16 +361,26 @@ async function procesarTrabajo(id, {
         // La IA cambió el producto (agregó/quitó ingredientes, cambió la cantidad):
         // ese resultado nunca se publica. Reintentar genera otra versión.
         const motivos = revisionFinal.problemas.filter((p) => INFIDELIDAD.has(p.codigo));
-        fallo = { codigo: 'fidelidad', detalle: motivos.map((m) => m.codigo).join(','), motivos, metricas };
+        fallo = { codigo: negocio ? 'fidelidad_marca' : 'fidelidad', detalle: motivos.map((m) => m.codigo).join(','), motivos, metricas };
       } else if (!revisionFinal.apta) {
-        return await rechazar(revisionFinal.problemas, { calidad_resultado: metricas, revision_ia: revisionIA });
+        // Perfil / portada con una original válida: no se rechaza, se usa la original.
+        if (!(negocio && calidadOriginal.original_aceptable)) {
+          return await rechazar(revisionFinal.problemas, { calidad_resultado: metricas, revision_ia: revisionIA });
+        }
+        fallo = { codigo: 'resultado_no_apto', detalle: revisionFinal.problemas.map((p) => p.codigo).join(','), motivos: revisionFinal.problemas, metricas };
       }
     }
     if (fallo) {
       console.warn('[IMAGEN_IA] %s la mejorada no pasó la validación (%s): %s', id, fallo.codigo, fallo.detalle);
-      // Fallback seguro: si la ORIGINAL ya cumplía todo (sin problemas en el
-      // análisis ni en la revisión), se publica la original tal cual.
-      if (!problemasPrevios.length && (await analizarCalidad(original, { nivel: cfg.nivel })).ok) {
+      // Fallback seguro: se publica la original tal cual si ya era válida.
+      //   publicación: sin problemas en el análisis ni en la revisión y publicable.
+      //   perfil / portada: la original pasó la revisión IA y cumple el mínimo
+      //   de su uso (original_aceptable). Ante cualquier cambio de marca,
+      //   texto o color en el resultado, la prioridad es conservar la original.
+      const originalValida = negocio
+        ? calidadOriginal.original_aceptable === true
+        : !problemasPrevios.length && (await analizarCalidad(original, { nivel: cfg.nivel })).ok;
+      if (originalValida) {
         await mover(cliente, id, ESTADOS.VALIDANDO, {
           estado: ESTADOS.LISTA, mejorada_url: t.original_url, revision_ia: revisionIA,
           calidad_resultado: { ...fallo.metricas, fallback_original: true, motivo_fallback: fallo.detalle },

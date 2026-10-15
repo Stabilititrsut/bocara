@@ -156,7 +156,12 @@ Mismo pipeline (`trabajos.js`), con `uso` = `perfil` o `portada`. El uso sale de
 | perfil | `negocios/<negocio>/perfil_…` | 1024×1024 (avatar) | `perfil`: cuadrada, ≥ 400 px, admite fondo blanco | `negocios.logo_url` |
 | portada | `negocios/<negocio>/portada_…` | 1536×1024 (banner) | `portada`: horizontal (≥ 1.2:1), ≥ 720 px | `negocios.imagen_url` + columnas del pipeline |
 
-- Prompt propio (`prompts.js`): conserva logo, nombre, letras, colores y elementos de marca; prohíbe inventar logos, texto, comida o personas; solo extiende el fondo existente.
+- **Solo mejora técnica, nunca creativa.** Prompt propio (`prompts.js`): resolución, nitidez, ruido, luz, contraste, balance de blancos, artefactos y adaptar el formato extendiendo solo el fondo existente. Prohibido redibujar, retipografiar o reinterpretar logos y textos, recolorear la marca, cambiar proporciones, agregar o quitar elementos.
+- **Comparación automática contra la original** (`validacion.js`, `uso` perfil/portada), antes de la revisión con IA:
+  - estructura global y a 96 px, y la **peor zona** de una cuadrícula 8×8 (letras o símbolos cambiados en un área pequeña);
+  - **tono** de los píxeles con color, descontando el giro global (una corrección de balance de blancos no cuenta; recolorear la marca sí) y cambio de saturación.
+  - Umbrales ajustables: `IMAGE_AI_{PERFIL|PORTADA}_MIN_SIMILITUD[_DETALLE|_ZONA]`, `_MAX_DERIVA_TONO[_GLOBAL]`, `_MAX_CAMBIO_SATURACION`.
+- **Si el resultado falla por cualquier motivo y la original es válida, se guarda la original** (`lista` con `usa_original`). Si la original tampoco es válida: `fallida/fidelidad_marca` (reintentable) o `rechazada`.
 - Revisión propia (`revisionIA.js`): un logo con letras es válido. Irreparable: `no_relacionada`, `captura_pantalla`, `irreconocible`. Infiel: `marca_alterada`, `elemento_inventado`.
 - Solo proveedores que declaran el encuadre (`encuadres`, hoy OpenAI); otro proveedor termina en `fallida/proveedor_no_soporta`.
 - App: `components/ImagenNegocioIA.tsx` (pasos, Guardar bloqueado hasta "Imagen optimizada y lista", Reintentar / Cambiar foto / Usar original).

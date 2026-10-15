@@ -99,17 +99,19 @@ const instruccionesNegocio = (uso) => Object.freeze({
   original: [
     'Eres revisor de imágenes de Bocara, un marketplace de comida en Guatemala.',
     `Esta imagen será ${QUE_ES[uso]}.`,
-    'Una IA de edición va a mejorar su nitidez, iluminación, resolución y presentación, y a extender SOLO el fondo para adaptar el formato. No puede inventar logos, textos, comida ni elementos de marca.',
+    'Una IA hará SOLO restauración técnica (resolución, nitidez, ruido, luz, contraste, balance de blancos) y extenderá SOLO el fondo existente para adaptar el formato. No rediseña ni agrega nada.',
     'Marca apta=false SOLO si: no tiene relación con un negocio de comida o bebida, o es inapropiada (no_relacionada); es una captura de pantalla de un teléfono o computadora, o un collage de varias imágenes (captura_pantalla); o no se reconoce qué muestra (irreconocible).',
     'Un logo, un nombre o un letrero del negocio son válidos y esperados: NO son captura_pantalla.',
-    'En cualquier otro caso apta=true, y lista en problemas lo que la edición debe corregir: muy_oscura, borrosa, recortada, desordenada, baja_calidad.',
+    'En cualquier otro caso apta=true, y lista en problemas solo lo técnico que la restauración debe corregir: muy_oscura, borrosa, recortada, baja_calidad.',
   ].join('\n'),
   resultado: [
     'Eres revisor de imágenes de Bocara, un marketplace de comida en Guatemala.',
     `Recibes DOS imágenes de ${QUE_ES[uso]}: la PRIMERA es la original del restaurante; la SEGUNDA es la versión editada con IA que se publicaría.`,
-    'Fidelidad (lo más importante): marca marca_alterada si cambió, redibujó, borró o deformó el logo, el nombre, cualquier letra o texto, o los colores de la marca; elemento_inventado si agregó o quitó comida, platos, letreros, objetos, decoraciones o personas. Extender el fondo (pared, superficie, cielo, color liso) NO es un cambio.',
-    'Calidad: marca borrosa, muy_oscura, desordenada, aspecto_artificial (render, plástico, ilustración) o baja_calidad si la segunda no sirve para el perfil de un negocio.',
-    'apta=true si es fiel y presentable. Sé estricto con la fidelidad de la marca y justo con el resto.',
+    'La edición solo podía hacer restauración técnica. La prioridad es la FIDELIDAD, no la estética: compara con cuidado ambas imágenes.',
+    'Marca marca_alterada si en la segunda cualquier letra, palabra, número o el nombre del negocio cambió (ortografía, tipografía, grosor, tamaño, espaciado o posición); si el logo o un símbolo fue redibujado, simplificado, vectorizado, reinterpretado o cambió sus proporciones internas; o si los colores de la marca cambiaron de tono o saturación más allá de corregir una dominante de color global.',
+    'Marca elemento_inventado si agregó o quitó cualquier cosa: texto, logos, letreros, comida, productos, personas, objetos, decoraciones o efectos (brillos, degradados, fondos nuevos). Extender el fondo existente con una continuación lisa NO es un cambio.',
+    'Marca aspecto_artificial si parece rediseñada, ilustración, render 3D o con textura plástica; borrosa, muy_oscura o baja_calidad si la segunda no mejora técnicamente.',
+    'Ante cualquier duda sobre letras, logo o colores, marca marca_alterada. apta=true solo si es la misma imagen, técnicamente mejor.',
   ].join('\n'),
 });
 const INSTRUCCIONES_USO = Object.freeze({

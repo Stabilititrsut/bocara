@@ -80,59 +80,67 @@ const PROMPT_COMERCIAL = [OBJETIVO, PRESERVAR_COMERCIAL, MEJORAR, ENCUADRE_COMER
   .join('\n');
 
 // Imágenes del RESTAURANTE (no de un producto): foto de perfil y portada.
-// La identidad del negocio es lo que hay que preservar: logo, nombre, letras,
-// colores de marca, fachada, local, platos y personas tal como son.
+// Aquí la IA es SOLO restauración técnica (resolución, nitidez, ruido, luz,
+// contraste, balance de blancos, artefactos) y adaptación del formato
+// extendiendo el fondo existente. Nada creativo: la prioridad es la
+// FIDELIDAD a la marca. Si el resultado cambia letras, logo, colores o
+// elementos, la validación lo rechaza y se conserva la original (trabajos.js).
+const TECNICO_NEGOCIO = [
+  'This is the real image of a restaurant or food business. Treat it as a technical photo restoration job, not a creative edit.',
+  'The output must be the SAME image, pixel-faithful in content, only technically cleaner.',
+];
 const PRESERVAR_NEGOCIO = [
-  'This image represents a real restaurant or food business on a food marketplace.',
-  'Keep its identity exactly: every logo, brand mark, name, letter, word, color of the brand, storefront, interior, dish and person must stay the same, in the same place and legible.',
-  'Do not redraw, restyle, retype, translate, simplify or "clean up" a logo or any text.',
+  'Preserve exactly: every letter, word, number and the business name (same font, spelling, size, spacing and position);',
+  'every logo and symbol (same shapes, internal proportions, line weights and positions);',
+  'the brand colors (same hues and saturation; do not recolor, shift, enrich or replace them);',
+  'every product, dish, person, object and decoration, in the same place, size and appearance;',
+  'the composition and the identity of the business.',
 ];
 const PROHIBIDO_NEGOCIO = [
-  'Never invent or add logos, text, signs, food, dishes, products, people, decorations or brand elements that were not in the image.',
-  'Never remove existing logos, text or brand elements.',
-  'Do not warp, stretch or distort shapes.',
-  'The soft blurred area around the image is only padding: replace it with a plain, natural continuation of the existing background (same color, wall, surface or scene), never with new objects.',
+  'Strictly forbidden: redrawing, redesigning, vectorizing, retyping, restyling, simplifying, "cleaning up" or reinterpreting a logo, symbol or text;',
+  'inventing or adding text, logos, signs, products, food, people, props or decorations;',
+  'removing any element; changing colors other than correcting a global color cast; stretching, warping or changing proportions;',
+  'beautifying, stylizing, adding effects, bokeh, glow, gradients or a new background design.',
+  'If an improvement would require changing any of the above, do not make it: leave that part exactly as in the original.',
 ];
 const ESTILO_NEGOCIO = [
-  'The result must look like the same real image, professionally retouched:',
-  'no artificial HDR look, no oversaturated colors, no plastic or overly smooth AI look, no illustration or 3D render style.',
+  'Natural, true-to-original look: no HDR effect, no oversaturation, no plastic or AI-smooth texture, no illustration or 3D look.',
 ];
 
-// Perfil (avatar): lienzo cuadrado, lo principal centrado y completo.
+// Perfil (avatar): lienzo cuadrado; el logo completo, sin recortar nada.
 const ENCUADRE_PERFIL = [
-  'Retouch it to work as a square profile picture shown inside a circle:',
-  'the original image occupies a rectangle in the center of this square canvas; keep it exactly where it is, at the same size, fully visible and centered.',
-  'Improve sharpness, clean edges, lighting, contrast and resolution; remove compression artifacts and noise.',
+  'Allowed technical fixes only: increase resolution, sharpen existing edges, reduce noise, correct exposure and contrast, correct white balance of a global color cast, remove compression artifacts.',
+  'Square format: the original image occupies a centered rectangle of this square canvas and must stay exactly there, at the same size, fully visible, never cropped.',
+  'The soft blurred area around it is only padding: fill it with a plain, seamless continuation of the image’s own background color or texture, with nothing in it.',
 ];
-// Portada (banner): lienzo horizontal, el fondo puede extenderse.
+// Portada (banner): lienzo horizontal; solo se extiende fondo o superficie.
 const ENCUADRE_PORTADA = [
-  'Retouch it to work as a wide horizontal cover banner for the business page:',
-  'the original image occupies a rectangle of this horizontal canvas; keep it exactly where it is, at the same size.',
-  'Extend only the existing background, walls, surfaces or scenery so the banner looks like one complete, well-composed photograph.',
-  'Improve lighting, white balance, exposure, contrast, sharpness and resolution, and make the surroundings tidier without replacing the setting.',
+  'Allowed technical fixes only: increase resolution, sharpen, reduce noise, correct lighting, exposure and contrast, correct white balance of a global color cast.',
+  'Horizontal format: the original image occupies a rectangle of this wide canvas and must stay exactly there, at the same size.',
+  'The soft blurred area around it is only padding: fill it only with a plain, seamless continuation of the existing background, wall, sky, floor or surface, with no new objects, products, people, text or decorations.',
 ];
 
-const PROMPT_PERFIL = [PRESERVAR_NEGOCIO, ENCUADRE_PERFIL, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
+const PROMPT_PERFIL = [TECNICO_NEGOCIO, PRESERVAR_NEGOCIO, ENCUADRE_PERFIL, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
   .map((seccion) => seccion.join(' '))
   .join('\n');
-const PROMPT_PORTADA = [PRESERVAR_NEGOCIO, ENCUADRE_PORTADA, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
+const PROMPT_PORTADA = [TECNICO_NEGOCIO, PRESERVAR_NEGOCIO, ENCUADRE_PORTADA, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
   .map((seccion) => seccion.join(' '))
   .join('\n');
 
-// Igual que CORRECCIONES, sin suponer que la imagen es comida.
+// Igual que CORRECCIONES, sin suponer que la imagen es comida y solo con
+// correcciones técnicas (sin "ordenar" ni recomponer el contenido).
 const CORRECCIONES_NEGOCIO = Object.freeze({
-  oscura: 'The image is underexposed: brighten it and open the shadows.',
-  muy_oscura: 'The image is underexposed: brighten it and open the shadows.',
-  quemada: 'The image is overexposed: recover the blown highlights.',
-  sin_contraste: 'The image looks flat and washed out: restore natural contrast and color depth.',
-  borrosa: 'The image is soft or slightly out of focus: recover crisp edges and detail without inventing new details or changing any letter.',
-  resolucion: 'The image is low resolution: restore clean, crisp detail and edges.',
-  baja_calidad: 'The image has low overall quality: clean up noise and compression artifacts.',
-  desordenada: 'The surroundings look messy: make them tidier and less distracting without replacing the setting.',
-  proporcion: 'The original image has an awkward aspect ratio: extend only the existing background to fill the canvas.',
-  no_cuadrada: 'The original image is not square: extend only the existing background to fill the square canvas.',
-  no_horizontal: 'The original image is not horizontal: extend only the existing background to the sides to fill the wide canvas.',
-  recortada: 'The main subject is tightly framed: extend only the background around it, never the subject itself.',
+  oscura: 'The image is underexposed: raise the exposure and open the shadows.',
+  muy_oscura: 'The image is underexposed: raise the exposure and open the shadows.',
+  quemada: 'The image is overexposed: recover the blown highlights where detail exists.',
+  sin_contraste: 'The image looks flat: restore natural contrast without changing any color.',
+  borrosa: 'The image is soft: sharpen the existing edges only, without redrawing shapes or letters.',
+  resolucion: 'The image is low resolution: upscale it faithfully, keeping every shape and letter identical.',
+  baja_calidad: 'The image has noise and compression artifacts: remove them without altering any detail.',
+  proporcion: 'Fill the canvas only by extending the existing background.',
+  no_cuadrada: 'The original is not square: fill the square canvas only with the existing background color or texture.',
+  no_horizontal: 'The original is not horizontal: fill the sides only with the existing background or surface.',
+  recortada: 'The subject is tightly framed: leave the subject untouched and extend only the background around it.',
 });
 
 // Problemas detectados en el análisis de la original (calidad.js y
@@ -168,5 +176,5 @@ function promptMejora({ problemas = [], encuadre = 'original' } = {}) {
 
 module.exports = {
   PROMPT_FOTO_COMIDA, PROMPT_COMERCIAL, PROMPT_PERFIL, PROMPT_PORTADA, CORRECCIONES, CORRECCIONES_NEGOCIO, promptMejora,
-  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL, ENCUADRE_PERFIL, ENCUADRE_PORTADA },
+  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL, ENCUADRE_PERFIL, ENCUADRE_PORTADA, PRESERVAR_NEGOCIO, PROHIBIDO_NEGOCIO },
 };
