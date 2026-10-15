@@ -23,11 +23,14 @@ const ESTADOS = Object.freeze({
   PENDIENTE: 'pendiente', PROCESANDO: 'procesando', COMPLETADA: 'completada',
   FALLIDA: 'fallida', DESCARTADA: 'descartada',
 });
-const TABLAS = new Set(['bolsas', 'negocios']);
-// La cola en segundo plano solo procesa fotos de NEGOCIOS. Las de publicaciones
-// se validan antes de guardar con un trabajo (trabajos.js), que además exige
-// calidad mínima: procesarlas aquí permitiría una foto sin ese análisis.
-const TABLAS_COLA = Object.freeze(['negocios']);
+// Solo publicaciones: la foto del negocio (perfil, portada, registro) NO
+// pasa por IA. Lo que queda aquí lo usan las acciones "usar original / usar
+// mejorada" de las publicaciones (routes/imagenes.js).
+const TABLAS = new Set(['bolsas']);
+// Cola en segundo plano: vacía. Las fotos de publicaciones se validan antes de
+// guardar con un trabajo (trabajos.js), que además exige calidad mínima:
+// procesarlas aquí permitiría una foto sin ese análisis.
+const TABLAS_COLA = Object.freeze([]);
 const MAX_INTENTOS = 3;
 const ESPERA_REINTENTO_MS = 2 * 60 * 1000;
 const ABANDONO_MS = 10 * 60 * 1000;

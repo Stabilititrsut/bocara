@@ -50,7 +50,6 @@ const { procesarEventosFallidos } = require('./services/pagoEventos');
 const { RESERVA_TTL_MINUTOS } = require('./services/stock');
 const { enqueueEventBestEffort } = require('./services/eventosDominio');
 const { ejecutarDespachador } = require('./services/despachadorEventos');
-const { procesarPendientes: procesarImagenesPendientes } = require('./services/imagenes/pipeline');
 const { procesarTrabajosPendientes } = require('./services/imagenes/trabajos');
 const { registrarDiagnosticoAlArrancar } = require('./services/iaEstado');
 const { resolverRequestId } = require('./utils/requestId');
@@ -317,19 +316,6 @@ app.listen(PORT, () => {
   setInterval(cerrarReservasVencidas, 5 * 60 * 1000);
   setTimeout(cerrarReservasVencidas, 10 * 1000);
   console.log(`⏰ Cron de cierre de reservas vencidas activo (cada 5 min, TTL ${RESERVA_TTL_MINUTOS} min)`);
-
-  // Pipeline de imágenes: además del disparo inmediato al guardar, este tick
-  // retoma reintentos, procesos interrumpidos (reinicio) y lo que haya
-  // quedado en cola. Máximo 5 imágenes por tabla y vuelta, una a la vez.
-  let imagenesEnCurso = false;
-  setInterval(async () => {
-    if (imagenesEnCurso) return;
-    imagenesEnCurso = true;
-    try { await procesarImagenesPendientes(); }
-    catch (err) { console.error('[IMAGENES] tick falló:', err.message); }
-    finally { imagenesEnCurso = false; }
-  }, 60 * 1000);
-  console.log('🖼️ Pipeline de fotos de negocio activo (cada minuto, proveedor: %s)', process.env.IMAGE_AI_PROVIDER || 'local');
 
   // Trabajos de imagen de publicaciones (previos a publicar): el disparo es
   // inmediato al subir la foto; este tick retoma huérfanos tras un reinicio y

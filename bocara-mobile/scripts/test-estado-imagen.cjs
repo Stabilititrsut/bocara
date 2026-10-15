@@ -87,8 +87,9 @@ test('IMG-UI-8: panel del restaurante muestra el estado en publicaciones y en la
   const bolsas = read('app/restaurante/bolsas.tsx');
   assert.match(bolsas, /<EstadoImagenIA tipo="publicacion" id=\{b\.id\} fila=\{b\} onCambio=\{cargar\} \/>/);
   assert.match(bolsas, /if \(!mejoraEnCurso\) return undefined;\s*const t = setInterval\(cargar, 10000\);/);
+  // La foto del negocio no pasa por IA: el perfil no muestra estado ni acciones de IA.
   const perfil = read('app/restaurante/perfil.tsx');
-  assert.match(perfil, /<EstadoImagenIA tipo="negocio" id=\{negocio\.id\} fila=\{negocio\} onCambio=\{cargarNegocio\} \/>/);
+  assert.doesNotMatch(perfil, /EstadoImagenIA|Usar mi original|mejorada con IA/);
   const api = read('src/services/api.ts');
   assert.match(api, /api\.post\(`\/imagenes\/\$\{tipo\}\/\$\{id\}\/\$\{accion\}`\)/);
 });
