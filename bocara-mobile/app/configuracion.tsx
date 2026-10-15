@@ -2,7 +2,6 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, Switch, Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 
@@ -50,7 +49,6 @@ function RowItem({
 
 export default function ConfiguracionScreen() {
   const { usuario } = useAuth();
-  const router = useRouter();
 
   // Toggles de notificaciones por categoría — pendiente: no existe columna en
   // usuarios ni endpoint que lea/guarde esta preferencia, así que se quitaron
@@ -92,11 +90,11 @@ export default function ConfiguracionScreen() {
       <ScrollView contentContainerStyle={s.scroll}>
         {/* Cuenta */}
         <Section title="👤 Mi cuenta">
+          {/* Solo informativo: la edición del perfil se quitó del MVP. */}
           <RowItem
-            emoji="✏️"
-            label="Editar perfil"
-            sublabel={`${usuario?.nombre} ${usuario?.apellido || ''}`}
-            onPress={() => router.push('/editar-perfil')}
+            emoji="👤"
+            label="Nombre"
+            sublabel={`${usuario?.nombre || ''} ${usuario?.apellido || ''}`.trim()}
           />
           <RowItem
             emoji="📧"

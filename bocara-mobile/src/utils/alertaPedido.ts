@@ -90,6 +90,14 @@ async function beepsWeb() {
   });
 }
 
+// Mismos beeps para los avisos del cliente (cambios de fase, ofertas). Nunca
+// lanza: si el navegador bloquea el audio, el aviso visual queda igual.
+export async function sonarAvisoWeb() {
+  if (Platform.OS !== 'web') return;
+  try { (navigator as any)?.vibrate?.(PATRON_VIBRACION); } catch { }
+  try { await beepsWeb(); } catch { }
+}
+
 // ── Alerta ───────────────────────────────────────────────────────────────────
 
 export async function reproducirAlertaNuevoPedido(cantidad: number, codigo?: string) {

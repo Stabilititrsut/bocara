@@ -300,8 +300,10 @@ export default function AdminFinancieroScreen() {
               </View>
               <View style={s.restCifra}>
                 <Text style={s.restCifraLabel}>Comisión Bocara</Text>
-                <Text style={[s.restCifraVal, { color: GOLD }]}>{q(desglose(r).comision)}</Text>
-                <Text style={s.restCifraSub}>{pctTL} + {pctPromo}</Text>
+                {/* Comisión de productos + 3.5% de servicio (lo paga el cliente): misma
+                    suma que Top restaurantes y "Total Bocara" del resumen. */}
+                <Text style={[s.restCifraVal, { color: GOLD }]}>{q(desglose(r).comision + (r.cargoPlataforma || 0))}</Text>
+                <Text style={s.restCifraSub}>{pctTL} + {pctPromo} + 3.5%</Text>
               </View>
               <View style={s.restCifra}>
                 <Text style={s.restCifraLabel}>Neto al comercio</Text>
@@ -316,8 +318,8 @@ export default function AdminFinancieroScreen() {
                   { label: `Comisión Bocara TL (${pctTL})`,         val: q(desglose(r).comisionTL),    color: GOLD },
                   { label: 'Ventas Promoción',                     val: q(desglose(r).ventasPromo),   color: TEXT },
                   { label: `Comisión Bocara Promo (${pctPromo})`,   val: q(desglose(r).comisionPromo), color: GOLD },
-                  { label: 'Comisión Bocara total',                val: q(desglose(r).comision),      color: GOLD, bold: true },
                   { label: 'Cargo al cliente (3.5%)',               val: `Q${r.cargoPlataforma.toFixed(2)}`,             color: GOLD },
+                  { label: 'Comisión Bocara total',                val: q(desglose(r).comision + (r.cargoPlataforma || 0)), color: GOLD, bold: true },
                   ...((r.envios || 0) > 0 ? [
                     { label: 'Envíos para el restaurante', val: `Q${r.envios.toFixed(2)}`, color: GREEN },
                   ] : []),

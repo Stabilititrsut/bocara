@@ -1,7 +1,8 @@
 const express = require('express');
 const supabase = require('../config/supabase');
 const authMiddleware = require('../middleware/auth');
-const { geocodeAddress } = require('../utils/geo');
+const { geocodeAddress, validarCoordenadasEntrada } = require('../utils/geo');
+const { armarFeedNegocios } = require('../services/feedNegocios');
 const { guardarNotificacion } = require('../services/notificaciones');
 const { aNumero, obtenerSubtotalProductos } = require('../services/finanzas');
 const { hoyGuatemala } = require('../services/horarioGuatemala');
@@ -84,7 +85,8 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// GET /api/negocios/feed — negocios activos con ≥1 bolsa aprobada + stats de descuento
+// GET /api/negocios/feed[?lat=&lng=] — TODOS los negocios activos y verificados
+// (con o sin publicaciones) + stats de descuento; lat/lng solo ordenan
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
   // Estado, horario, unidades y vigencia se seleccionan aunque no se devuelvan:
@@ -110,29 +112,41 @@ router.get('/feed', async (req, res) => {
   }
   if (error) return res.status(500).json({ error: error.message });
 
-  // Excluir lo que el cliente no ve ANTES de agrupar: si no, un negocio cuyas
+  // Excluir lo que el cliente no ve ANTES de contar: si no, un negocio cuyas
   // publicaciones ya cerraron (o cuyo fallback relajó filtros) seguiría
-  // apareciendo en el feed con cantidad_bolsas > 0.
+  // mostrando cantidad_bolsas > 0.
   bolsas = filtrarVisiblesParaCliente(bolsas);
 
-  const map = new Map();
-  for (const b of (bolsas || [])) {
-    const n = b.negocios;
-    if (!n) continue;
-    // Restaurantes suspendidos o aún no aprobados no deben aportar al feed del cliente.
-    if (!negocioDisponiblePublico(n)) continue;
-    if (zona && String(n.zona) !== String(zona)) continue;
-    if (categoria && n.categoria !== categoria) continue;
-    const disc = b.precio_original > 0
-      ? Math.round((1 - b.precio_descuento / b.precio_original) * 100) : 0;
-    if (!map.has(n.id)) map.set(n.id, { ...n, cantidad_bolsas: 0, max_descuento: 0 });
-    const e = map.get(n.id);
-    e.cantidad_bolsas++;
-    if (disc > e.max_descuento) e.max_descuento = disc;
+  // TODOS los restaurantes activos y verificados, tengan o no publicaciones
+  // hoy (regla de negocio: el cliente siempre ve el catálogo completo). Antes
+  // el feed salía de las publicaciones disponibles y un restaurante sin bolsas
+  // vigentes desaparecía de Inicio/Tiendas.
+  const CAMPOS_NEGOCIO_FEED = 'id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,' +
+    'latitud,longitud,activo,estado_verificacion';
+  let { data: negocios, error: nErr } = await supabase
+    .from('negocios')
+    .select(CAMPOS_NEGOCIO_FEED)
+    .eq('activo', true)
+    .or('estado_verificacion.eq.aprobado,estado_verificacion.is.null');
+  if (nErr) {
+    const r = await supabase.from('negocios').select(CAMPOS_NEGOCIO_FEED).eq('activo', true);
+    negocios = r.data; nErr = r.error;
   }
+  if (nErr) return res.status(500).json({ error: nErr.message });
 
-  const resultado = Array.from(map.values()).map(({ activo, estado_verificacion, ...pub }) => pub);
-  res.json(resultado.sort((a, b) => (b.calificacion_promedio || 0) - (a.calificacion_promedio || 0)));
+  negocios = (negocios || []).filter((n) =>
+    negocioDisponiblePublico(n) &&
+    (!zona || String(n.zona) === String(zona)) &&
+    (!categoria || n.categoria === categoria));
+
+  // lat/lng del cliente: SOLO para ordenar (cercanos primero). Si faltan o son
+  // inválidas no se responde error: el feed sale completo sin ese orden.
+  const ubic = validarCoordenadasEntrada(req.query.lat, req.query.lng);
+  const coords = ubic.ok ? { lat: ubic.lat, lng: ubic.lng } : null;
+
+  const resultado = armarFeedNegocios(negocios, bolsas, coords)
+    .map(({ activo, estado_verificacion, ...pub }) => pub);
+  res.json(resultado);
 });
 
 // GET /api/negocios/:id/detalle — detalle con bolsas agrupadas + veces_pedido

@@ -216,6 +216,8 @@ export const pagosAPI = {
 export const resenasAPI = {
   listarPorNegocio: (negocioId: string) => api.get(`/resenas/${negocioId}`),
   crear: (data: any) => api.post('/resenas', data),
+  // Reseñas recibidas por el restaurante autenticado; `mes` = 'AAAA-MM'.
+  delRestaurante: (mes?: string) => api.get('/resenas/restaurante', { params: mes ? { mes } : {} }),
 };
 
 export const notificacionesAPI = {

@@ -89,6 +89,11 @@ export default function GananciasScreen() {
   const pctPromo = promo.porcentaje_comision ?? COMISION_PROMO_DEFECTO;
   const unidades = (n: number | null) => (n ? ` · ${n} unid.` : '');
   const complemento = (p: number) => Math.round((100 - p) * 10) / 10;
+  // Mes ya cerrado (anterior al actual) o ya liquidado en el historial: el
+  // dinero ya se recibió, así que los textos van en pasado.
+  const mesYaRecibido = periodo === 'mes' && (
+    mes < mesActual || pagosMensuales.some((p) => p.mes === mes && p.estado === 'pagado')
+  );
 
   return (
     <SafeAreaView style={s.root}>
@@ -134,7 +139,7 @@ export default function GananciasScreen() {
 
         {/* Card principal — venta neta de comisión + propina íntegra, lo que realmente se paga */}
         <View style={s.mainCard}>
-          <Text style={s.mainCardLabel}>Lo que recibirás</Text>
+          <Text style={s.mainCardLabel}>{mesYaRecibido ? 'Lo que recibiste' : 'Lo que recibirás'}</Text>
           <Text style={s.mainCardVal}>Q{totalARecibir.toFixed(2)}</Text>
           <Text style={s.mainCardSub}>{resumen.total_pedidos || 0} pedidos</Text>
         </View>
@@ -153,7 +158,7 @@ export default function GananciasScreen() {
           <View style={s.emptyVentas}>
             <Text style={{ fontSize: 40, marginBottom: 10 }}>🛍️</Text>
             <Text style={s.emptyVentasTitle}>Aún no tienes ventas registradas</Text>
-            <Text style={s.emptyVentasSub}>Publica tus primeras bolsas sorpresa para empezar a vender.</Text>
+            <Text style={s.emptyVentasSub}>Publica tus primeros productos para empezar a vender.</Text>
           </View>
         )}
 
@@ -171,7 +176,7 @@ export default function GananciasScreen() {
               { label: 'Envíos recibidos (100%)', val: dt?.envios ?? resumen.total_envios, color: '#22C55E' },
             ] : []),
             { label: 'Propinas (100%)',           val: dt?.propinas ?? resumen.total_propinas ?? 0, color: '#22C55E' },
-            { label: 'Total a recibir',           val: totalARecibir,  color: Colors.green, bold: true },
+            { label: mesYaRecibido ? 'Total recibido' : 'Total a recibir', val: totalARecibir, color: Colors.green, bold: true },
           ].map(({ label, val, color, bold, neg, sub, grupo }: any) => (
             <View key={label} style={[s.desgloseRow, grupo && s.desgloseGrupo]}>
               <Text style={[s.desgloseLabel, sub && s.desgloseSub, grupo && s.desgloseLabelGrupo]}>{label}</Text>

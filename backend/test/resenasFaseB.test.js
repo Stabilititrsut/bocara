@@ -270,3 +270,42 @@ test('GET /admin/resenas/resumen: filtra por mes (hora de Guatemala) y excluye o
   assert.equal((await pedir('GET', '/api/admin/resenas/resumen?mes=2999-01', { como: IDS.admin })).status, 400);
   assert.equal((await pedir('GET', '/api/admin/resenas/resumen', { como: IDS.restaurante })).status, 403);
 });
+
+test('agruparResenasPorNegocio: comentarios visibles, recientes primero, con límite por negocio', () => {
+  const g = R.agruparResenasPorNegocio([
+    { id: '1', negocio_id: 'a', calificacion: 5, comentario: '  rico  ', created_at: '2026-10-01T10:00:00Z', usuarios: { nombre: 'Javier' } },
+    { id: '2', negocio_id: 'a', calificacion: 3, comentario: '', created_at: '2026-10-03T10:00:00Z' },
+    { id: '3', negocio_id: 'a', calificacion: 1, comentario: 'spam', visible: false, created_at: '2026-10-04T10:00:00Z' },
+    { id: '4', negocio_id: 'a', calificacion: 4, comentario: 'bien', visible: null, created_at: '2026-10-02T10:00:00Z' },
+    { id: '5', negocio_id: 'b', calificacion: 9, comentario: 'inválida', created_at: '2026-10-02T10:00:00Z' },
+  ], { limite: 2 });
+  assert.deepEqual(g.a.map((r) => r.id), ['2', '4'], 'recientes primero, sin ocultas, máximo 2');
+  assert.equal(g.a[0].comentario, null, 'comentario vacío → null');
+  assert.equal(g.b, undefined);
+  const todos = R.agruparResenasPorNegocio([{ id: '1', negocio_id: 'a', calificacion: 5, comentario: '  rico  ', created_at: 'x', usuarios: { nombre: 'Javier' } }]);
+  assert.deepEqual(todos.a[0], { id: '1', calificacion: 5, comentario: 'rico', respuesta_restaurante: null, cliente: 'Javier', created_at: 'x' });
+});
+
+test('GET /admin/resenas/resumen: incluye comentarios escritos del mes (también la recién creada)', async () => {
+  sembrarResena({ calificacion: 5, comentario: 'Muy rico todo', created_at: '2026-10-03T18:00:00Z' });
+  sembrarResena({ calificacion: 2, comentario: 'Frío', created_at: '2026-09-10T18:00:00Z' });
+  sembrarResena({ calificacion: 1, comentario: 'spam', created_at: '2026-10-05T18:00:00Z', visible: false });
+  // Recién creada sin valor de visible todavía: debe contarse y leerse.
+  sembrarResena({ calificacion: 4, comentario: 'Recién escrita', created_at: '2026-10-06T18:00:00Z', visible: null });
+
+  const oct = await pedir('GET', '/api/admin/resenas/resumen?mes=2026-10', { como: IDS.admin });
+  assert.equal(oct.status, 200);
+  assert.deepEqual(oct.body.negocios, { [IDS.olaAzul]: { promedio: 4.5, total: 2 } });
+  assert.deepEqual(oct.body.comentarios[IDS.olaAzul].map((r) => r.comentario), ['Recién escrita', 'Muy rico todo']);
+  assert.equal(oct.body.comentarios[IDS.olaAzul][0].calificacion, 4);
+  assert.ok(oct.body.comentarios[IDS.olaAzul][0].created_at);
+});
+
+test('GET /resenas/restaurante?mes=: filtra el mes en hora de Guatemala', async () => {
+  sembrarResena({ comentario: 'oct', created_at: '2026-10-03T18:00:00Z' });
+  sembrarResena({ comentario: 'sep', created_at: '2026-10-01T05:30:00Z' }); // 30/09 23:30 Guatemala
+  const oct = await pedir('GET', '/api/resenas/restaurante?mes=2026-10', { como: IDS.restaurante });
+  assert.equal(oct.status, 200);
+  assert.deepEqual(oct.body.map((r) => r.comentario), ['oct']);
+  assert.equal((await pedir('GET', '/api/resenas/restaurante?mes=2026-13', { como: IDS.restaurante })).status, 400);
+});

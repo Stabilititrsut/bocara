@@ -109,7 +109,7 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosici
         </TouchableOpacity>
       )}
       {pedido.estado === 'listo' && (
-        <Text style={s.txtListoInfo}>Tu pedido ya está terminado y no puede cancelarse.</Text>
+        <Text style={s.txtListoInfo}>Tu pedido ya está terminado y no puede cancelarse. Para cualquier reclamo escríbenos al WhatsApp +502 5107-7949.</Text>
       )}
     </View>
   );
