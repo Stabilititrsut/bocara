@@ -11,7 +11,6 @@ import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { ZONAS_GT } from '@/constants/zonas';
 import { pickImage } from '@/src/utils/pickImage';
-import EstadoImagenIA from '@/components/EstadoImagenIA';
 import ResenasRestaurante from '@/components/ResenasRestaurante';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
@@ -217,8 +216,15 @@ export default function PerfilRestauranteScreen() {
       const path = `negocios/${negocio.id}/imagen_${Date.now()}.${ext}`;
       const { data } = await uploadsAPI.uploadBase64(base64, path, mimeType);
       if (data?.publicUrl) {
-        await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
-        setNegocio((n: any) => ({ ...n, imagen_url: data.publicUrl }));
+        const res = await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
+        if (res.data?.cambio_foto_pendiente) {
+          // Negocio aprobado: la foto queda en revisión del admin y la vigente
+          // sigue siendo la que ven los clientes hasta que la apruebe.
+          if (res.data.solicitud) setSolicitudPendiente(res.data.solicitud);
+          showToast('📸 Foto enviada a revisión. Se publicará cuando el administrador la apruebe.');
+        } else {
+          setNegocio((n: any) => ({ ...n, imagen_url: data.publicUrl }));
+        }
       }
     } catch (e: any) {
       setImgError(e.message || 'No se pudo subir la imagen');
@@ -316,6 +322,9 @@ export default function PerfilRestauranteScreen() {
   if (loading) return <View style={s.loading}><ActivityIndicator color={Colors.orange} /></View>;
 
   const tieneCoordenadas = negocio?.latitud != null && negocio?.longitud != null;
+  const fotoEnRevision: string | null = solicitudPendiente?.estado === 'pendiente'
+    ? solicitudPendiente.cambios?.imagen_url || null
+    : null;
 
   return (
     <SafeAreaView style={s.root}>
@@ -444,8 +453,11 @@ export default function PerfilRestauranteScreen() {
             }
           </View>
         </TouchableOpacity>
-        {negocio?.id ? (
-          <EstadoImagenIA tipo="negocio" id={negocio.id} fila={negocio} onCambio={cargarNegocio} />
+        {fotoEnRevision ? (
+          <View style={s.fotoRevision}>
+            <Image source={{ uri: fotoEnRevision }} style={s.fotoRevisionImg} contentFit="cover" />
+            <Text style={s.fotoRevisionText}>⏳ Nueva foto en revisión del administrador. Tus clientes siguen viendo la foto actual.</Text>
+          </View>
         ) : null}
         {imgError ? (
           <View style={s.errorInline}>
@@ -687,6 +699,9 @@ const s = StyleSheet.create({
   imgPlaceholderText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
   imgEditBtn: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.55)', paddingVertical: 10, alignItems: 'center' },
   imgEditText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
+  fotoRevision: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FEF3C7', borderRadius: 12, padding: 10, marginBottom: 12, borderWidth: 1, borderColor: '#FDE68A' },
+  fotoRevisionImg: { width: 56, height: 56, borderRadius: 8 },
+  fotoRevisionText: { flex: 1, fontSize: 12, color: '#92400E', fontWeight: '600', lineHeight: 17 },
   errorInline: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12 },
   errorInlineText: { color: '#B91C1C', fontSize: 13, fontWeight: '600' },
   statsRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },

@@ -11,7 +11,8 @@ const { solicitarMejora } = require('../services/imagenes/pipeline');
 const args = process.argv.slice(2);
 const aplicar = args.includes('--aplicar');
 const limite = Number(args[args.indexOf('--limite') + 1]) || 20;
-const tablas = args.includes('--tabla') ? [args[args.indexOf('--tabla') + 1]] : ['bolsas', 'negocios'];
+// La foto del negocio no pasa por IA: solo publicaciones.
+const tablas = args.includes('--tabla') ? [args[args.indexOf('--tabla') + 1]] : ['bolsas'];
 
 (async () => {
   const supabase = require('../config/supabase');

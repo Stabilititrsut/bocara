@@ -405,28 +405,22 @@ test('IMG-9: usar original / volver a la mejorada — ninguna de las dos se pier
   assert.equal(env.fila().imagen_original_url, ORIGINAL);
 });
 
-test('IMG-10: job — solo procesa fotos de NEGOCIOS (recupera abandonada, respeta la espera); nunca toca publicaciones', async () => {
+test('IMG-10: job — la cola ya no procesa fotos de negocios ni de publicaciones (la foto del negocio no pasa por IA)', async () => {
   const hace = (ms) => new Date(Date.now() - ms).toISOString();
-  const abandonada = {
-    estado_procesamiento_imagen: ESTADOS.PROCESANDO, imagen_original_url: ORIGINAL, imagen_intentos: 1,
-    imagen_procesamiento_iniciado_at: hace(pipeline.ABANDONO_MS + 1000), imagen_solicitada_at: hace(1e6),
+  const pendiente = {
+    estado_procesamiento_imagen: ESTADOS.PENDIENTE, imagen_original_url: ORIGINAL, imagen_intentos: 0,
+    imagen_procesamiento_iniciado_at: null, imagen_solicitada_at: hace(1e6),
   };
-  const env = entorno({ fila: abandonada });
-  env.cliente._db.tablas.negocios = [{ id: 'n1', imagen_url: ORIGINAL, imagen_intentos: 0, ...abandonada }];
-  const r = await silenciar(() => pipeline.procesarPendientes({ ...env.opts }));
-  assert.equal(r.completadas, 1);
-  assert.equal(env.cliente.tabla('negocios')[0].estado_procesamiento_imagen, ESTADOS.COMPLETADA);
-  // Las publicaciones se validan antes de guardar (trabajos.js): la cola no las procesa.
-  assert.equal(env.fila().estado_procesamiento_imagen, ESTADOS.PROCESANDO);
+  const env = entorno({ fila: pendiente });
+  env.cliente._db.tablas.negocios = [{ id: 'n1', imagen_url: ORIGINAL, ...pendiente }];
+  const proveedor = { nombre: 'openai', ia: true, mejorar: async () => { throw new Error('no debe llamarse'); } };
+  const r = await silenciar(() => pipeline.procesarPendientes({ ...env.opts, proveedor }));
+  assert.deepEqual(r, { procesadas: 0, completadas: 0, fallidas: 0 });
+  assert.equal(env.cliente.tabla('negocios')[0].imagen_url, ORIGINAL);
   assert.equal(env.fila().imagen_url, ORIGINAL);
-
-  const env2 = entorno();
-  env2.cliente._db.tablas.negocios = [{
-    id: 'n1', imagen_url: ORIGINAL, estado_procesamiento_imagen: ESTADOS.PENDIENTE, imagen_original_url: ORIGINAL, imagen_intentos: 1,
-    imagen_procesamiento_iniciado_at: hace(10 * 1000), imagen_solicitada_at: hace(20 * 1000),
-  }];
-  const r2 = await silenciar(() => pipeline.procesarPendientes({ ...env2.opts }));
-  assert.equal(r2.procesadas, 0, 'un reintento reciente espera ESPERA_REINTENTO_MS');
+  // Ni se puede encolar ni procesar una foto de negocio.
+  assert.equal((await silenciar(() => pipeline.solicitarMejora('negocios', 'n1', ORIGINAL, { cliente: env.cliente }))).ok, false);
+  await assert.rejects(pipeline.procesarFila('negocios', 'n1', { ...env.opts, proveedor }), /tabla no soportada/);
 });
 
 test('IMG-11: sin migración aplicada (columna inexistente) → no lanza ni rompe el llamador', async () => {
@@ -564,6 +558,50 @@ test('HTTP-4: acciones — solo el dueño o admin; en publicaciones "reintentar"
   assert.equal(uo.body.imagen.estado_procesamiento_imagen, ESTADOS.DESCARTADA);
   const um = await accion('publicacion', id, 'usar-mejorada', IDS.admin);
   assert.equal(um.body.imagen.imagen_url, 'https://m/2.webp');
+});
+
+test('HTTP-6: foto del negocio (registro, perfil, portada) se guarda tal cual, SIN IA; sus acciones de IA ya no existen', async () => {
+  const FOTO_NEGOCIO = 'https://proyecto.supabase.co/storage/v1/object/public/bocara-images/negocios/n/imagen_1.jpg';
+  const OTRA = 'https://proyecto.supabase.co/storage/v1/object/public/bocara-images/negocios/n/imagen_2.jpg';
+  const negocio = () => fake.tabla('negocios').find((n) => n.id === IDS.olaAzul);
+  const sinIA = (n) => {
+    for (const c of ['estado_procesamiento_imagen', 'imagen_original_url', 'imagen_mejorada_url', 'imagen_solicitada_at']) {
+      assert.equal(n[c], undefined, `${c} no se toca`);
+    }
+  };
+  // Perfil / portada de un negocio aprobado: pasa por la revisión del admin
+  // (negocio_cambios_pendientes) y al aprobarla se guarda tal cual, sin IA.
+  const fotoAprobada = async (url) => {
+    const put = await silenciar(() => pedir('PUT', `/api/negocios/${IDS.olaAzul}`, { como: IDS.restaurante, body: { imagen_url: url } }));
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    assert.equal(put.body.cambio_foto_pendiente, true);
+    assert.notEqual(negocio().imagen_url, url, 'no se publica antes de la aprobación');
+    sinIA(negocio());
+    const ok = await silenciar(() => pedir('PUT', `/api/admin/cambios-perfil/${put.body.solicitud.id}/aprobar`, { como: IDS.admin }));
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(negocio().imagen_url, url, 'se guarda la imagen subida');
+    sinIA(negocio());
+  };
+  await fotoAprobada(FOTO_NEGOCIO);
+  await fotoAprobada(OTRA);
+  // Registro: negocio pendiente que sube su foto justo después de crearse.
+  negocio().estado_verificacion = 'pendiente';
+  assert.equal((await silenciar(() => pedir('PUT', `/api/negocios/${IDS.olaAzul}`, { como: IDS.restaurante, body: { imagen_url: FOTO_NEGOCIO } }))).status, 200);
+  assert.equal(negocio().imagen_url, FOTO_NEGOCIO);
+  sinIA(negocio());
+  // Alta por admin (POST).
+  const alta = await silenciar(() => pedir('POST', '/api/negocios', { como: IDS.admin, body: { nombre: 'Nuevo', imagen_url: FOTO_NEGOCIO, latitud: 14.6, longitud: -90.5 } }));
+  assert.equal(alta.status, 201, JSON.stringify(alta.body));
+  const creado = fake.tabla('negocios').find((n) => n.id === alta.body.id);
+  assert.equal(creado.imagen_url, FOTO_NEGOCIO);
+  sinIA(creado);
+  // Nada quedó en proceso en segundo plano.
+  await pipeline.esperarMejorasEnCurso();
+  sinIA(negocio());
+  // Las acciones de IA sobre la foto del negocio ya no existen.
+  for (const nombre of ['reintentar', 'usar-original', 'usar-mejorada']) {
+    assert.equal((await accion('negocio', IDS.olaAzul, nombre, IDS.restaurante)).status, 404, nombre);
+  }
 });
 
 test('HTTP-5: el cliente ve la mejor versión en el feed y el detalle sin cambios en la app (imagen_url)', async () => {

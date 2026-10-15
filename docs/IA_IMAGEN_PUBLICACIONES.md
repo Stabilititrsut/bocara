@@ -2,7 +2,7 @@
 
 Ninguna **Promoción** ni **Tiempo limitado** se publica sin una foto que haya pasado por el análisis de calidad, la mejora con IA y la validación del resultado. La foto original del restaurante se conserva siempre.
 
-> Antes (rama `feat/image-pipeline`) la mejora corría **después** de guardar, en segundo plano y sin bloquear nada: sin migración ni clave no hacía nada, en silencio, y se podía publicar cualquier foto. Este documento describe el flujo que lo reemplaza para publicaciones. Las fotos de **negocio** siguen con el pipeline en segundo plano ([PIPELINE_IMAGENES.md](PIPELINE_IMAGENES.md)).
+> Antes (rama `feat/image-pipeline`) la mejora corría **después** de guardar, en segundo plano y sin bloquear nada: sin migración ni clave no hacía nada, en silencio, y se podía publicar cualquier foto. Este documento describe el flujo que lo reemplaza para publicaciones. Las fotos del **negocio** (registro, perfil, portada) **no pasan por IA**: se guardan tal como las sube el restaurante.
 
 ## 1. Flujo
 

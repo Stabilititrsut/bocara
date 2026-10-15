@@ -15,7 +15,6 @@ const { esMesValido, urlFirmadaComprobante, consolidarPagosPorMes } = require('.
 const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
-const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -43,6 +42,46 @@ const CAMPOS_BOLSA_PUBLICOS = 'id,negocio_id,nombre,descripcion,contenido,precio
 // publicaciones que aún eran válidas ese día.
 function hoy() {
   return hoyGuatemala();
+}
+
+// Campos que el restaurante puede proponer en una solicitud de cambio de perfil
+// (negocio_cambios_pendientes.cambios). El admin los aplica tal cual al aprobar.
+const CAMPOS_CAMBIO_PERFIL = ['nombre','descripcion','direccion','zona','ciudad','telefono',
+  'categoria','latitud','longitud','punto_referencia','google_maps_url','waze_url','imagen_url'];
+
+// Guarda `cambios` en la solicitud pendiente del negocio (o crea una). Si ya
+// hay una pendiente, los campos de `conservar` que tuviera y que no vengan en
+// `cambios` se mantienen — así subir una foto no borra los textos en revisión
+// y reenviar los textos no borra la foto en revisión. Cualquier otra corrección
+// reemplaza la versión anterior y limpia motivo_rechazo (ver solicitar-cambios).
+async function registrarCambiosPendientes(negocioId, usuarioId, cambios, { conservar = [] } = {}) {
+  const { data: pendiente } = await supabase
+    .from('negocio_cambios_pendientes')
+    .select('id,cambios')
+    .eq('negocio_id', negocioId)
+    .eq('estado', 'pendiente')
+    .maybeSingle();
+
+  if (pendiente) {
+    const previos = pendiente.cambios || {};
+    const fusion = { ...cambios };
+    for (const k of conservar) {
+      if (fusion[k] === undefined && previos[k] !== undefined) fusion[k] = previos[k];
+    }
+    const { data, error } = await supabase
+      .from('negocio_cambios_pendientes')
+      .update({ cambios: fusion, motivo_rechazo: null })
+      .eq('id', pendiente.id)
+      .select()
+      .single();
+    return { data, error, actualizado: true };
+  }
+  const { data, error } = await supabase
+    .from('negocio_cambios_pendientes')
+    .insert([{ negocio_id: negocioId, usuario_id: usuarioId, cambios, estado: 'pendiente' }])
+    .select()
+    .single();
+  return { data, error, actualizado: false };
 }
 
 // GET /api/negocios — listar negocios activos y aprobados
@@ -359,7 +398,6 @@ router.post('/', authMiddleware, async (req, res) => {
     .select()
     .single();
   if (error) return res.status(400).json({ error: error.message });
-  programarMejora('negocios', data.id, data.imagen_url);
   res.status(201).json(data);
 });
 
@@ -529,7 +567,7 @@ router.get('/mi-negocio/liquidaciones/:id/comprobante', authMiddleware, async (r
 
 // PUT /api/negocios/:id — actualizar negocio con re-geocodificación si cambia dirección
 router.put('/:id', authMiddleware, async (req, res) => {
-  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud,imagen_url').eq('id', req.params.id).single();
+  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud,imagen_url,estado_verificacion').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
   if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
@@ -576,15 +614,23 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // quedar activo por esta vía.
   const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
   if (errorFoto) return res.status(400).json({ error: errorFoto });
-  // Pipeline de imágenes: la original/mejorada de la foto actual no es una
-  // foto nueva. Lectura aparte y tolerante: sin la migración aplicada, las
-  // columnas no existen y se compara solo contra imagen_url.
-  let fotoNueva = false;
-  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url) {
-    const { data: img } = await supabase.from('negocios')
-      .select('imagen_original_url, imagen_mejorada_url').eq('id', req.params.id).maybeSingle();
-    fotoNueva = esFotoNueva(updates.imagen_url, { ...negocio, ...(img || {}) });
-    if (!fotoNueva) delete updates.imagen_url;
+  // La foto del negocio (registro, perfil, portada) se guarda tal como la
+  // subió el restaurante: la IA de imágenes es solo para publicaciones
+  // (Tiempo limitado / Promociones, services/imagenes/trabajos.js).
+  //
+  // Foto nueva de un negocio ya aprobado: es lo que ven los clientes, así que
+  // la decide el admin (PUT /api/admin/cambios-perfil/:id/aprobar) y no se
+  // escribe en negocios hasta la aprobación. Durante el alta o tras un rechazo
+  // sí se aplica directo: el negocio entero está en revisión y el admin ve la
+  // foto al aprobarlo.
+  let solicitudFoto = null;
+  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url
+      && req.usuario.rol !== 'admin' && negocio.estado_verificacion === 'aprobado') {
+    const r = await registrarCambiosPendientes(req.params.id, req.usuario.id,
+      { imagen_url: updates.imagen_url }, { conservar: CAMPOS_CAMBIO_PERFIL });
+    if (r.error) return res.status(400).json({ error: 'No se pudo enviar la foto a revisión: ' + r.error.message });
+    solicitudFoto = r.data;
+    delete updates.imagen_url;
   }
   const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
   if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
@@ -607,10 +653,13 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (coords) { updates.latitud = coords.lat; updates.longitud = coords.lng; }
   }
 
-  const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
+  // Si lo único que venía era la foto en revisión, no hay nada que escribir.
+  const { data, error } = Object.keys(updates).length > 0
+    ? await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single()
+    : await supabase.from('negocios').select().eq('id', req.params.id).single();
 
   if (error) return res.status(400).json({ error: error.message });
-  if (fotoNueva) programarMejora('negocios', req.params.id, data.imagen_url);
+  if (solicitudFoto) return res.json({ ...data, cambio_foto_pendiente: true, solicitud: solicitudFoto });
   res.json(data);
 });
 
@@ -762,45 +811,27 @@ router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) =>
     return res.status(400).json({ error: 'Se esperaba { cambios: { ... } } en el body' });
   }
 
-  const campos_permitidos = ['nombre','descripcion','direccion','zona','ciudad','telefono',
-    'categoria','latitud','longitud','punto_referencia','google_maps_url','waze_url'];
   const cambios = {};
-  for (const k of campos_permitidos) {
+  for (const k of CAMPOS_CAMBIO_PERFIL) {
     if (bodyChanges[k] !== undefined) cambios[k] = bodyChanges[k];
+  }
+  // La foto propuesta no puede ser vacía (mismo criterio que PUT /:id).
+  if (cambios.imagen_url !== undefined) {
+    if (!tieneFoto(cambios.imagen_url)) return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
+    cambios.imagen_url = cambios.imagen_url.trim();
   }
   console.log('[CAMBIOS PERFIL] cambios:', cambios);
 
   if (Object.keys(cambios).length === 0)
     return res.status(400).json({ error: 'No se enviaron campos para cambiar' });
 
-  // Si ya hay solicitud pendiente → actualizar en lugar de rechazar con 409
-  const { data: pendiente } = await supabase
-    .from('negocio_cambios_pendientes')
-    .select('id')
-    .eq('negocio_id', negocio.id)
-    .eq('estado', 'pendiente')
-    .maybeSingle();
-
-  let data, error;
-
-  if (pendiente) {
-    // Limpiar motivo_rechazo: si el admin había pedido cambios, esta es la versión
-    // corregida — el motivo viejo ya no aplica y no debe seguir mostrándose como
-    // si la nueva versión todavía tuviera ese pendiente (mismo criterio que
-    // PUT /bolsas/:id al reenviar tras un "pedir cambios").
-    ({ data, error } = await supabase
-      .from('negocio_cambios_pendientes')
-      .update({ cambios, motivo_rechazo: null })
-      .eq('id', pendiente.id)
-      .select()
-      .single());
-  } else {
-    ({ data, error } = await supabase
-      .from('negocio_cambios_pendientes')
-      .insert([{ negocio_id: negocio.id, usuario_id: req.usuario.id, cambios, estado: 'pendiente' }])
-      .select()
-      .single());
-  }
+  // Si ya hay solicitud pendiente → se actualiza en lugar de rechazar con 409.
+  // Se limpia motivo_rechazo: si el admin había pedido cambios, esta es la
+  // versión corregida — el motivo viejo ya no aplica (mismo criterio que
+  // PUT /bolsas/:id al reenviar tras un "pedir cambios"). La foto en revisión
+  // se sube aparte (PUT /:id), así que se conserva si este envío no la trae.
+  const { data, error, actualizado } = await registrarCambiosPendientes(
+    negocio.id, req.usuario.id, cambios, { conservar: ['imagen_url'] });
 
   if (error) {
     console.error('[CAMBIOS PERFIL] error Supabase:', error.message, error.code, error.details);
@@ -812,7 +843,7 @@ router.post('/mi-negocio/solicitar-cambios', authMiddleware, async (req, res) =>
   }
 
   console.log('[CAMBIOS PERFIL] solicitud creada/actualizada:', data.id);
-  res.status(pendiente ? 200 : 201).json({ ok: true, solicitud: data, actualizado: !!pendiente });
+  res.status(actualizado ? 200 : 201).json({ ok: true, solicitud: data, actualizado });
 });
 
 // GET /api/negocios/mi-negocio/cambios-pendientes
