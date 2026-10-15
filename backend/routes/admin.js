@@ -19,6 +19,7 @@ const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
 const { bolsaTieneImagenValidada } = require('../services/imagenes/trabajos');
+const { programarMejora } = require('../services/imagenes/pipeline');
 const MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA = 'No se puede aprobar: la foto de esta publicación no pasó la validación de calidad con IA. El restaurante debe cambiarla.';
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
@@ -1297,7 +1298,7 @@ router.put('/bolsas/:id/rechazar', authMiddleware, adminOnly, async (req, res) =
 router.get('/cambios-perfil', authMiddleware, adminOnly, async (req, res) => {
   let query = supabase
     .from('negocio_cambios_pendientes')
-    .select('*, negocios(id,nombre,propietario_id,usuarios:propietario_id(nombre,apellido,email))')
+    .select('*, negocios(id,nombre,imagen_url,propietario_id,usuarios:propietario_id(nombre,apellido,email))')
     .order('created_at', { ascending: false })
     .limit(50);
   if (req.query.estado) query = query.eq('estado', req.query.estado);
@@ -1316,12 +1317,25 @@ router.put('/cambios-perfil/:id/aprobar', authMiddleware, adminOnly, async (req,
   if (fetchErr || !solicitud) return res.status(404).json({ error: 'Solicitud no encontrada' });
   if (solicitud.estado !== 'pendiente') return res.status(400).json({ error: 'La solicitud ya fue procesada' });
 
+  // La foto del negocio llega aquí en revisión (ver PUT /api/negocios/:id):
+  // nunca se aplica una vacía, el negocio no puede quedarse sin foto.
+  const cambios = { ...(solicitud.cambios || {}) };
+  if (cambios.imagen_url !== undefined && !tieneFoto(cambios.imagen_url)) {
+    return res.status(400).json({ error: 'La foto propuesta no es válida.' });
+  }
+
   // Aplicar los cambios al negocio
+  const { data: negocioPrevio } = await supabase
+    .from('negocios').select('imagen_url').eq('id', solicitud.negocio_id).maybeSingle();
   const { error: updErr } = await supabase
     .from('negocios')
-    .update(solicitud.cambios)
+    .update(cambios)
     .eq('id', solicitud.negocio_id);
   if (updErr) return res.status(400).json({ error: updErr.message });
+  // Foto aprobada: recién ahora entra al pipeline de mejora con IA.
+  if (cambios.imagen_url && cambios.imagen_url !== negocioPrevio?.imagen_url) {
+    programarMejora('negocios', solicitud.negocio_id, cambios.imagen_url);
+  }
 
   // Marcar solicitud como aprobada. reviewed_at (no updated_at, esa columna no
   // existe en negocio_cambios_pendientes) — si esta escritura fallara, la
