@@ -11,7 +11,6 @@ import { useAuth } from '@/src/context/AuthContext';
 import { Colors } from '@/constants/Colors';
 import { ZONAS_GT } from '@/constants/zonas';
 import { pickImage } from '@/src/utils/pickImage';
-import EstadoImagenIA from '@/components/EstadoImagenIA';
 import ResenasRestaurante from '@/components/ResenasRestaurante';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
@@ -459,9 +458,6 @@ export default function PerfilRestauranteScreen() {
             <Image source={{ uri: fotoEnRevision }} style={s.fotoRevisionImg} contentFit="cover" />
             <Text style={s.fotoRevisionText}>⏳ Nueva foto en revisión del administrador. Tus clientes siguen viendo la foto actual.</Text>
           </View>
-        ) : null}
-        {negocio?.id ? (
-          <EstadoImagenIA tipo="negocio" id={negocio.id} fila={negocio} onCambio={cargarNegocio} />
         ) : null}
         {imgError ? (
           <View style={s.errorInline}>

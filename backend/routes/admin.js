@@ -18,9 +18,7 @@ const { impactoDePedidos } = require('../services/impactoAmbiental');
 const { enqueueEventBestEffort } = require('../services/eventosDominio');
 const { encolarPublicacionVisible } = require('../services/notificacionesCercania');
 const { MENSAJE_APROBAR_NEGOCIO_SIN_FOTO, MENSAJE_ACTIVAR_NEGOCIO_SIN_FOTO, MENSAJE_APROBAR_PUBLICACION_SIN_FOTO, tieneFoto } = require('../services/fotoObligatoria');
-const { bolsaTieneImagenValidada } = require('../services/imagenes/trabajos');
-const { programarMejora } = require('../services/imagenes/pipeline');
-const MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA = 'No se puede aprobar: la foto de esta publicación no pasó la validación de calidad con IA. El restaurante debe cambiarla.';
+const { bolsaTieneImagenValidada } = require('../services/imagenes/trabajos');const MENSAJE_APROBAR_SIN_IMAGEN_VALIDADA = 'No se puede aprobar: la foto de esta publicación no pasó la validación de calidad con IA. El restaurante debe cambiarla.';
 const {
   ESTADOS_APROBACION, MOTIVO_RECHAZO_POR_DEFECTO, motivosNoVisible, estaEliminada,
 } = require('../services/publicaciones');
@@ -1324,18 +1322,13 @@ router.put('/cambios-perfil/:id/aprobar', authMiddleware, adminOnly, async (req,
     return res.status(400).json({ error: 'La foto propuesta no es válida.' });
   }
 
-  // Aplicar los cambios al negocio
-  const { data: negocioPrevio } = await supabase
-    .from('negocios').select('imagen_url').eq('id', solicitud.negocio_id).maybeSingle();
+  // Aplicar los cambios al negocio. La foto se guarda tal cual: la IA de
+  // imágenes es solo para publicaciones (services/imagenes/trabajos.js).
   const { error: updErr } = await supabase
     .from('negocios')
     .update(cambios)
     .eq('id', solicitud.negocio_id);
   if (updErr) return res.status(400).json({ error: updErr.message });
-  // Foto aprobada: recién ahora entra al pipeline de mejora con IA.
-  if (cambios.imagen_url && cambios.imagen_url !== negocioPrevio?.imagen_url) {
-    programarMejora('negocios', solicitud.negocio_id, cambios.imagen_url);
-  }
 
   // Marcar solicitud como aprobada. reviewed_at (no updated_at, esa columna no
   // existe en negocio_cambios_pendientes) — si esta escritura fallara, la

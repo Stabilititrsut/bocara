@@ -15,7 +15,6 @@ const { esMesValido, urlFirmadaComprobante, consolidarPagosPorMes } = require('.
 const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
-const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -399,7 +398,6 @@ router.post('/', authMiddleware, async (req, res) => {
     .select()
     .single();
   if (error) return res.status(400).json({ error: error.message });
-  programarMejora('negocios', data.id, data.imagen_url);
   res.status(201).json(data);
 });
 
@@ -616,30 +614,23 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // quedar activo por esta vía.
   const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
   if (errorFoto) return res.status(400).json({ error: errorFoto });
-  // Pipeline de imágenes: la original/mejorada de la foto actual no es una
-  // foto nueva. Lectura aparte y tolerante: sin la migración aplicada, las
-  // columnas no existen y se compara solo contra imagen_url.
-  let fotoNueva = false;
-  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url) {
-    const { data: img } = await supabase.from('negocios')
-      .select('imagen_original_url, imagen_mejorada_url').eq('id', req.params.id).maybeSingle();
-    fotoNueva = esFotoNueva(updates.imagen_url, { ...negocio, ...(img || {}) });
-    if (!fotoNueva) delete updates.imagen_url;
-  }
-
+  // La foto del negocio (registro, perfil, portada) se guarda tal como la
+  // subió el restaurante: la IA de imágenes es solo para publicaciones
+  // (Tiempo limitado / Promociones, services/imagenes/trabajos.js).
+  //
   // Foto nueva de un negocio ya aprobado: es lo que ven los clientes, así que
-  // la decide el admin (PUT /api/admin/cambios-perfil/:id/aprobar). No se
-  // escribe en negocios ni se dispara la mejora con IA hasta la aprobación.
-  // Durante el alta o tras un rechazo sí se aplica directo: el negocio entero
-  // está en revisión y el admin ve la foto al aprobarlo.
+  // la decide el admin (PUT /api/admin/cambios-perfil/:id/aprobar) y no se
+  // escribe en negocios hasta la aprobación. Durante el alta o tras un rechazo
+  // sí se aplica directo: el negocio entero está en revisión y el admin ve la
+  // foto al aprobarlo.
   let solicitudFoto = null;
-  if (fotoNueva && req.usuario.rol !== 'admin' && negocio.estado_verificacion === 'aprobado') {
+  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url
+      && req.usuario.rol !== 'admin' && negocio.estado_verificacion === 'aprobado') {
     const r = await registrarCambiosPendientes(req.params.id, req.usuario.id,
       { imagen_url: updates.imagen_url }, { conservar: CAMPOS_CAMBIO_PERFIL });
     if (r.error) return res.status(400).json({ error: 'No se pudo enviar la foto a revisión: ' + r.error.message });
     solicitudFoto = r.data;
     delete updates.imagen_url;
-    fotoNueva = false;
   }
   const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
   if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
@@ -668,7 +659,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
     : await supabase.from('negocios').select().eq('id', req.params.id).single();
 
   if (error) return res.status(400).json({ error: error.message });
-  if (fotoNueva) programarMejora('negocios', req.params.id, data.imagen_url);
   if (solicitudFoto) return res.json({ ...data, cambio_foto_pendiente: true, solicitud: solicitudFoto });
   res.json(data);
 });

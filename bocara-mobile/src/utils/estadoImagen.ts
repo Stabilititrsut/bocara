@@ -30,8 +30,10 @@ export function esMejoraConIA(fila: FilaImagen | null | undefined): boolean {
 
 // Publicaciones: su foto se valida ANTES de guardar (procesoImagen.ts). Una
 // publicación sin foto validada (heredada o del flujo anterior) no se
-// reprocesa desde la tarjeta: se cambia la foto al editar.
-export const ETIQUETA_SIN_VALIDAR = '⚠️ Foto sin validar por IA · cámbiala al editar para volver a publicar';
+// reprocesa desde la tarjeta: se cambia la foto al editar. El aviso es una
+// invitación (tono comercial, no un error técnico); EstadoImagenIA lo muestra
+// como una nota destacada, sin colores de alerta.
+export const ETIQUETA_SIN_VALIDAR = 'Impulsa tus ventas con la nueva IA de imágenes. Sube nuevamente una foto y deja que la IA haga su trabajo.';
 
 export function estadoImagenIA(fila: FilaImagen | null | undefined, { tipo = 'negocio' }: { tipo?: 'publicacion' | 'negocio' } = {}): EstadoImagen {
   const puedeComparar = !!(fila?.imagen_original_url && fila?.imagen_mejorada_url);
