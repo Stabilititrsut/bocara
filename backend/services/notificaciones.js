@@ -118,8 +118,58 @@ async function guardarNotificacion(supabase, usuarioId, tipo, titulo, mensaje, d
   }
 }
 
+// Aviso al cliente en CADA cambio de fase de su pedido. El confirmado lo emite
+// el webhook de pago (pagoEventos.js, tipo 'pago_confirmado'). Los `tipo` se
+// conservan por compatibilidad con la bandeja y el ruteo de la app.
+const FASES_CLIENTE = {
+  en_preparacion: {
+    tipo: 'pedido_en_preparacion',
+    titulo: '👨‍🍳 Tu pedido está en preparación',
+    cuerpo: (c) => `El restaurante ya está preparando tu pedido ${c}.`,
+  },
+  listo: {
+    tipo: 'pedido_listo',
+    titulo: '🛍️ ¡Tu pedido está listo para recoger!',
+    cuerpo: (c) => `Tu pedido ${c} ya está listo. ¡Pasa por él!`,
+  },
+  completado: {
+    tipo: 'bolsa_recogida',
+    titulo: '✅ Pedido entregado',
+    cuerpo: (c) => `Tu pedido ${c} fue entregado. ¡Gracias por comprar en Bocara!`,
+  },
+  cancelado: {
+    tipo: 'pedido_cancelado',
+    titulo: '❌ Tu pedido fue cancelado',
+    cuerpo: (c) => `Tu pedido ${c} fue cancelado. Si tienes dudas escríbenos al WhatsApp +502 5107-7949.`,
+  },
+};
+FASES_CLIENTE.recogido = FASES_CLIENTE.completado;
+
+function textoFaseCliente(estado, codigo) {
+  const fase = FASES_CLIENTE[estado];
+  if (!fase) return null;
+  return { tipo: fase.tipo, titulo: fase.titulo, cuerpo: fase.cuerpo(codigo || '') };
+}
+
+// Push (con sonido, prioridad alta) + fila en la bandeja: la bandeja es lo que
+// la app detecta por polling para sonar en web y cuando no hay token de push.
+// Best-effort: nunca lanza.
+async function notificarFasePedidoCliente(supabase, { usuarioId, token, pedidoId, codigo, estado }, { push = enviarNotificacionPush } = {}) {
+  const texto = textoFaseCliente(estado, codigo);
+  if (!texto || !usuarioId) return null;
+  const data = { pedidoId, screen: 'pedidos', estado };
+  try {
+    await push(token, texto.titulo, texto.cuerpo, data);
+  } catch (err) {
+    console.warn('[PUSH] Fase %s del pedido %s (best-effort) falló:', estado, pedidoId, err.message);
+  }
+  await guardarNotificacion(supabase, usuarioId, texto.tipo, texto.titulo, texto.cuerpo, data);
+  return texto;
+}
+
 module.exports = {
   EXPO_LOTE_MAX, CANALES,
   construirMensaje, enviarPushEnLotes,
   enviarNotificacionPush, enviarNotificacionesMultiples, guardarNotificacion,
+  FASES_CLIENTE, textoFaseCliente, notificarFasePedidoCliente,
 };

@@ -31,7 +31,7 @@ const PASOS = [
     num: '02',
     icon: 'add-circle-outline',
     titulo: 'Sube tus ofertas',
-    desc: 'Publica bolsas sorpresa o promociones con precio rebajado. Tú decides el contenido y la hora.',
+    desc: 'Publica productos del día o promociones con precio rebajado. Tú decides el contenido y la hora.',
   },
   {
     num: '03',

@@ -79,6 +79,8 @@ function montar(file, { forzados = {}, mocks = {} } = {}) {
     '@/src/utils/pickImage': { pickImage: async () => null },
     '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
     '@/components/SelectorPeriodo': { mesEnCurso: () => '2026-10', nombreMes: (m) => `mes ${m}` },
+    '@/components/ListaResenas': { __esModule: true, default: () => null },
+    '@/components/ResenasRestaurante': { __esModule: true, default: () => null },
     ...mocks,
   }).default;
   const app = {

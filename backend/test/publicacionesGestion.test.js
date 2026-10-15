@@ -87,8 +87,11 @@ test('DELETE-2: tiempo limitado eliminado tampoco aparece públicamente (mismo c
 
   assert.equal((await pedir('GET', '/api/bolsas')).body.some(x => x.id === b.id), false);
   assert.equal((await pedir('GET', `/api/bolsas/${b.id}`)).status, 404);
-  assert.equal((await pedir('GET', '/api/negocios/feed')).body.some(n => n.id === IDS.olaAzul), false,
-    'sin ninguna otra publicación visible, el negocio tampoco sale en el Home');
+  // El restaurante sigue en el Home (regla: siempre todos), pero ya no cuenta
+  // la publicación eliminada.
+  const enHome = (await pedir('GET', '/api/negocios/feed')).body.find(n => n.id === IDS.olaAzul);
+  assert.ok(enHome, 'el negocio sigue apareciendo aunque no tenga publicaciones');
+  assert.equal(enHome.cantidad_bolsas, 0, 'sin ninguna otra publicación visible, no cuenta la eliminada');
 });
 
 test('DELETE-3: si hay pedido_items históricos, se conserva la integridad — nunca un DELETE físico', async () => {

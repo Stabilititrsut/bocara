@@ -449,7 +449,7 @@ export default function DashboardRestauranteScreen() {
             return (
               <View key={p.id} style={s.pedidoCard}>
                 <View style={{ flex: 1 }}>
-                  <Text style={s.pedidoNombre} numberOfLines={1}>{p.bolsas?.nombre || 'Bolsa sorpresa'}</Text>
+                  <Text style={s.pedidoNombre} numberOfLines={1}>{p.bolsas?.nombre || 'Producto'}</Text>
                   <Text style={s.pedidoHora}>
                     {vista === 'mes' ? `${diaCortoGt(p.created_at)} · ` : ''}{horaGt(p.created_at)}
                   </Text>

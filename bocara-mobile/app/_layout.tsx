@@ -13,6 +13,7 @@ import { resolverRutaNotificacion } from '@/src/utils/resolverRutaNotificacion';
 import { recordarPushToken } from '@/src/services/pushToken';
 import { iniciarAnalitica, establecerAnaliticaHabilitada } from '@/src/utils/analitica';
 import { iniciarMetaPixel, trackPageView } from '@/lib/metaPixel';
+import AvisosCliente from '@/components/AvisosCliente';
 import Constants from 'expo-constants';
 import * as SplashScreen from 'expo-splash-screen';
 
@@ -373,6 +374,9 @@ function AuthGuard() {
         <Stack.Screen name="cupones"       options={{ headerShown: false }} />
         <Stack.Screen name="referidos"     options={{ headerShown: false }} />
       </Stack>
+
+      {/* Cliente: banner + sonido en cada cambio de fase del pedido y ofertas */}
+      {usuario?.rol === 'cliente' && <AvisosCliente />}
 
       {!splashDone && (
         <BocaraSplash

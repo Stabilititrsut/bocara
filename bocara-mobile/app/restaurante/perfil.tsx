@@ -12,6 +12,7 @@ import { Colors } from '@/constants/Colors';
 import { ZONAS_GT } from '@/constants/zonas';
 import { pickImage } from '@/src/utils/pickImage';
 import EstadoImagenIA from '@/components/EstadoImagenIA';
+import ResenasRestaurante from '@/components/ResenasRestaurante';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
 const CAMBIO_CERRADO_KEY = 'bocara_cambio_perfil_cerrado';
@@ -472,6 +473,9 @@ export default function PerfilRestauranteScreen() {
             <Text style={s.statLabel}>Reseñas</Text>
           </View>
         </View>
+
+        {/* Promedio del mes y comentarios escritos por los clientes */}
+        <ResenasRestaurante />
 
         {/* Datos básicos */}
         <View style={s.sectionRow}>
