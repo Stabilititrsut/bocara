@@ -176,10 +176,12 @@ test('IMG-UI-13: foto de negocio sin procesar (dato previo al pipeline) → el c
   assert.equal(montarEstado({}, { tipo: 'negocio' }).render(), null);
 });
 
-test('IMG-UI-14: publicación sin foto validada (heredada, en cola vieja o fallida) → aviso "sin validar", sin Reintentar', () => {
+test('IMG-UI-14: publicación sin foto validada (heredada, en cola vieja o fallida) → invitación a usar la IA (texto exacto, sin tono de error), sin Reintentar', () => {
+  const INVITACION = 'Impulsa tus ventas con la nueva IA de imágenes. Sube nuevamente una foto y deja que la IA haga su trabajo.';
   for (const estado of [undefined, 'pendiente', 'procesando', 'fallida']) {
     const arbol = montarEstado({ estado_procesamiento_imagen: estado, imagen_original_url: 'o' }).render();
-    assert.match(texto(arbol), /Foto sin validar por IA/, String(estado));
+    assert.ok(texto(arbol).includes(INVITACION), String(estado));
+    assert.doesNotMatch(texto(arbol), /sin validar|⚠️|error/i, 'no parece un error técnico');
     assert.equal(boton(arbol, 'Reintentar'), undefined, 'reprocesar desde la tarjeta saltaría el análisis de calidad');
   }
 });

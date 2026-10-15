@@ -21,6 +21,16 @@ export default function EstadoImagenIA({ tipo, id, fila, onCambio }: {
   const [error, setError] = useState('');
   const [comparando, setComparando] = useState(false);
   if (estado.clave === 'sin_procesar') return null;
+  // Publicación con foto anterior a la IA: invitación a subirla de nuevo (al
+  // editar). Texto completo, sin recortar, para que se lea bien en móvil y web.
+  if (estado.clave === 'sin_validar') {
+    return (
+      <View style={s.invitacion} accessibilityLabel={estado.etiqueta} testID="invitacion-ia">
+        <Text style={s.invitacionIcono} accessibilityElementsHidden importantForAccessibility="no">✨</Text>
+        <Text style={s.invitacionTexto}>{estado.etiqueta}</Text>
+      </View>
+    );
+  }
 
   async function ejecutar() {
     if (!estado.accion) return;
@@ -38,7 +48,7 @@ export default function EstadoImagenIA({ tipo, id, fila, onCambio }: {
   return (
     <View style={s.fila} accessibilityLabel={`Estado de la foto: ${estado.etiqueta}`}>
       {estado.enCurso ? <ActivityIndicator size="small" color={Colors.textSecondary} style={s.spinner} /> : null}
-      <Text style={[s.texto, (estado.clave === 'fallida' || estado.clave === 'sin_validar') && s.textoError]} numberOfLines={2}>{estado.etiqueta}</Text>
+      <Text style={[s.texto, estado.clave === 'fallida' && s.textoError]} numberOfLines={2}>{estado.etiqueta}</Text>
       {estado.accion ? (
         <TouchableOpacity onPress={ejecutar} disabled={enviando} accessibilityRole="button" style={s.boton}>
           {enviando ? <ActivityIndicator size="small" color={Colors.primary} /> : <Text style={s.botonTexto}>{estado.textoAccion}</Text>}
@@ -80,6 +90,12 @@ const s = StyleSheet.create({
   spinner: { transform: [{ scale: 0.7 }] },
   texto: { fontSize: 11, color: Colors.textSecondary, flexShrink: 1 },
   textoError: { fontSize: 11, color: '#B45309' },
+  invitacion: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6, alignSelf: 'stretch', marginTop: 6,
+    paddingVertical: 6, paddingHorizontal: 8, borderRadius: 10, backgroundColor: '#F2FAF9', borderWidth: 1, borderColor: '#BFE6E1',
+  },
+  invitacionIcono: { fontSize: 13, lineHeight: 17 },
+  invitacionTexto: { flex: 1, fontSize: 12, lineHeight: 17, fontWeight: '600', color: Colors.textPrimary },
   boton: { paddingVertical: 2, paddingHorizontal: 8, borderRadius: 10, borderWidth: 1, borderColor: Colors.primary },
   botonTexto: { fontSize: 11, fontWeight: '700', color: Colors.primary },
   botonSec: { paddingVertical: 2, paddingHorizontal: 8 },
