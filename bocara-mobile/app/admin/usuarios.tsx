@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
+import { rehabilitarCuenta, suspenderCuenta } from '@/src/utils/suspensionAdmin';
 
 const DARK = '#1E293B';
 
@@ -24,7 +25,8 @@ export default function AdminUsuariosScreen() {
   const [confirmando, setConfirmando] = useState<{ id: string; accion: string; nombre: string; rol?: string } | null>(null);
   const [procesando, setProcesando] = useState<string | null>(null);
   const [errores, setErrores] = useState<Record<string, string>>({});
-  const [suspendModal, setSuspendModal] = useState<{ id: string; nombre: string; email: string } | null>(null);
+  const [exito, setExito] = useState('');
+  const [suspendModal, setSuspendModal] = useState<{ id: string; nombre: string; email: string; rol: string } | null>(null);
   const [suspendMotivo, setSuspendMotivo] = useState('');
   const [suspendMotivoError, setSuspendMotivoError] = useState(false);
   const [suspendando, setSuspendando] = useState(false);
@@ -44,9 +46,18 @@ export default function AdminUsuariosScreen() {
     setProcesando(id);
     setConfirmando(null);
     setErrores(prev => ({ ...prev, [id]: '' }));
+    setExito('');
+    if (accion === 'rehabilitar') {
+      const r = await rehabilitarCuenta(adminAPI, confirmando, rol || 'cliente');
+      setProcesando(null);
+      if (!r.ok) { setErrores(prev => ({ ...prev, [id]: r.error })); return; }
+      setUsuarios(prev => prev.map(u => (u.id === id ? { ...u, rol: rol || 'cliente' } : u)));
+      setExito(r.mensaje);
+      cargar();
+      return;
+    }
     try {
-      if (accion === 'rehabilitar') await adminAPI.rehabilitarUsuario(id, rol || 'cliente');
-      else if (accion === 'cambiar_rol') await adminAPI.gestionarUsuario(id, { rol });
+      if (accion === 'cambiar_rol') await adminAPI.gestionarUsuario(id, { rol });
       cargar();
     } catch (e: any) {
       setErrores(prev => ({ ...prev, [id]: e.message || 'Error al procesar' }));
@@ -60,17 +71,16 @@ export default function AdminUsuariosScreen() {
     if (!suspendMotivo.trim()) { setSuspendMotivoError(true); return; }
     const { id } = suspendModal;
     setSuspendando(true);
-    setSuspendModal(null);
     setErrores(prev => ({ ...prev, [id]: '' }));
-    try {
-      await adminAPI.suspenderUsuario(id, suspendMotivo.trim());
-      setSuspendMotivo('');
-      cargar();
-    } catch (e: any) {
-      setErrores(prev => ({ ...prev, [id]: e.message || 'Error al suspender' }));
-    } finally {
-      setSuspendando(false);
-    }
+    setExito('');
+    const r = await suspenderCuenta(adminAPI, suspendModal, suspendMotivo);
+    setSuspendando(false);
+    setSuspendModal(null);
+    if (!r.ok) { setErrores(prev => ({ ...prev, [id]: r.error })); return; }
+    setSuspendMotivo('');
+    setUsuarios(prev => prev.map(u => (u.id === id ? { ...u, rol: 'suspendido' } : u)));
+    setExito(r.mensaje);
+    cargar();
   }
 
   const filtrados = usuarios.filter((u) => {
@@ -126,6 +136,7 @@ export default function AdminUsuariosScreen() {
         contentContainerStyle={s.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); cargar(); }} tintColor={Colors.orange} />}
       >
+        {exito ? <Text style={s.exitoText} onPress={() => setExito('')}>✓ {exito}</Text> : null}
         <Text style={s.count}>{filtrados.length} usuario{filtrados.length !== 1 ? 's' : ''}</Text>
 
         {filtrados.map((u) => {
@@ -195,11 +206,11 @@ export default function AdminUsuariosScreen() {
                       id: u.id, accion: 'rehabilitar', nombre: u.nombre,
                       rol: u.negocio_activo !== null ? 'restaurante' : 'cliente',
                     })}>
-                      <Text style={s.btnRehabilitarText}>▶ Rehabilitar</Text>
+                      <Text style={s.btnRehabilitarText}>▶ Rehabilitar cuenta</Text>
                     </TouchableOpacity>
                   ) : (
-                    <TouchableOpacity style={s.btnSuspender} onPress={() => { setSuspendModal({ id: u.id, nombre: u.nombre, email: u.email }); setSuspendMotivo(''); setSuspendMotivoError(false); }}>
-                      <Text style={s.btnSuspenderText}>⏸ Suspender</Text>
+                    <TouchableOpacity style={s.btnSuspender} onPress={() => { setSuspendModal({ id: u.id, nombre: u.nombre, email: u.email, rol: u.rol }); setSuspendMotivo(''); setSuspendMotivoError(false); }}>
+                      <Text style={s.btnSuspenderText}>⏸ Suspender cuenta</Text>
                     </TouchableOpacity>
                   )}
                   {u.rol === 'cliente' && (
@@ -225,7 +236,7 @@ export default function AdminUsuariosScreen() {
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
           <View style={{ backgroundColor: '#1E293B', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, borderTopWidth: 1, borderTopColor: '#334155' }}>
             <Text style={{ fontSize: 18, fontWeight: '900', color: '#F1F5F9', marginBottom: 4 }}>
-              Suspender cuenta
+              ¿Seguro que deseas suspender esta cuenta?
             </Text>
             <Text style={{ fontSize: 13, color: '#94A3B8', marginBottom: 16 }}>{suspendModal?.nombre}</Text>
             <Text style={{ fontSize: 13, fontWeight: '600', color: '#94A3B8', marginBottom: 8 }}>
@@ -251,7 +262,7 @@ export default function AdminUsuariosScreen() {
               </Text>
             )}
             <Text style={{ fontSize: 12, color: '#64748B', marginBottom: 16, lineHeight: 18 }}>
-              Se enviará un email de notificación al usuario con el motivo.
+              No podrá iniciar sesión; si es dueño de un restaurante, su negocio también se suspende. Se enviará un email al usuario con el motivo.
             </Text>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <TouchableOpacity
@@ -267,7 +278,7 @@ export default function AdminUsuariosScreen() {
               >
                 {suspendando
                   ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Suspender</Text>}
+                  : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Suspender cuenta</Text>}
               </TouchableOpacity>
             </View>
           </View>
@@ -308,6 +319,7 @@ const s = StyleSheet.create({
   btnRolText: { color: '#60A5FA', fontSize: 12, fontWeight: '700' },
   errorCard: { backgroundColor: '#450A0A', borderRadius: 8, padding: 8, marginBottom: 8, borderWidth: 1, borderColor: '#991B1B' },
   errorText: { color: '#FCA5A5', fontSize: 12, fontWeight: '600' },
+  exitoText: { color: '#34D399', fontSize: 13, fontWeight: '700', marginBottom: 10 },
   confirmCard: { backgroundColor: '#1E293B', borderRadius: 10, padding: 12, borderWidth: 1.5, borderColor: '#334155', marginTop: 4 },
   confirmText: { color: '#E2E8F0', fontSize: 12, lineHeight: 18, marginBottom: 10 },
   confirmRow: { flexDirection: 'row', gap: 8 },

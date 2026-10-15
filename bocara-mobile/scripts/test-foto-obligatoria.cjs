@@ -81,6 +81,7 @@ function montar(file, { forzados = {}, mocks = {} } = {}) {
     '@/components/SelectorPeriodo': { mesEnCurso: () => '2026-10', nombreMes: (m) => `mes ${m}` },
     '@/components/ListaResenas': { __esModule: true, default: () => null },
     '@/components/ResenasRestaurante': { __esModule: true, default: () => null },
+    '@/src/utils/suspensionAdmin': load('src/utils/suspensionAdmin.ts'),
     ...mocks,
   }).default;
   const app = {
