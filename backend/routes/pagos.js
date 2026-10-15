@@ -685,7 +685,7 @@ router.post('/generar-link', authMiddleware, soloCliente, async (req, res) => {
 
     const { data: pedidoItems, error: itemsErr } = await supabase
       .from('pedido_items')
-      .select('*, bolsas(id,negocio_id,nombre,activo,estado_aprobacion,precio_descuento,cantidad_disponible,fecha_caducidad,permite_envio,negocios(id,activo,estado_verificacion))')
+      .select('*, bolsas(id,negocio_id,nombre,activo,estado_aprobacion,precio_descuento,cantidad_disponible,fecha_caducidad,hora_recogida_inicio,hora_recogida_fin,permite_envio,negocios(id,activo,estado_verificacion))')
       .eq('pedido_id', pedidoId);
     if (itemsErr || !pedidoItems?.length) {
       return res.status(400).json({ error: 'El pedido no contiene productos válidos' });

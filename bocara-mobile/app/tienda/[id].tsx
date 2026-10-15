@@ -80,8 +80,8 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
     mostrarErrorCarrito(onAgregar(bolsa));
   }
 
-  if (vencido) return null;
-
+  // Fuera de su horario de hoy se sigue mostrando (sin botón de agregar). Las
+  // vencidas definitivamente ya no llegan aquí: usePublicacionesVigentes.
   return (
     <View style={[pc.card, { width: CARD_W }, noDisponible && pc.agotado]}>
       <TouchableOpacity
@@ -112,7 +112,7 @@ function ProductCard({ bolsa, onAgregar }: { bolsa: any; onAgregar: (b: any) => 
         )}
         {noDisponible && (
           <View style={[pc.badgeDisc, { backgroundColor: '#9CA3AF' }]}>
-            <Text style={pc.badgeDiscTxt}>{vencido ? 'Vencido' : 'Agotado'}</Text>
+            <Text style={pc.badgeDiscTxt}>{agotado ? 'Agotado' : 'Cerrado hoy'}</Text>
           </View>
         )}
 

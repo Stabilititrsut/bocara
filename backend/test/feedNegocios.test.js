@@ -1,5 +1,5 @@
-// Feed de restaurantes del cliente: SIEMPRE todos los activos y verificados,
-// la ubicación solo ordena (cercanos y con disponibilidad primero), nunca recorta.
+// Feed de restaurantes del cliente: activos y verificados con al menos una
+// publicación disponible; la ubicación solo ordena (cercanos primero), nunca recorta.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -68,20 +68,53 @@ test.before(iniciar);
 test.after(detener);
 test.beforeEach(() => fake.reiniciar(datosBase()));
 
-test('GET /negocios/feed: todos los activos y verificados, aunque no tengan publicaciones', async () => {
+// Publicación aprobada y con unidades. Por defecto es diaria (sin fecha de
+// caducidad) con una ventana de un minuto: casi siempre está fuera de horario,
+// y aun así debe contar como disponible en el feed.
+function publicacion(negocioId, extra = {}) {
+  return {
+    id: `b-${negocioId}-${fake.tabla('bolsas').length}`, negocio_id: negocioId, tipo: 'cupon',
+    precio_original: 100, precio_descuento: 60, activo: true, estado_aprobacion: 'aprobado',
+    cantidad_disponible: 5, hora_recogida_inicio: '00:00', hora_recogida_fin: '00:01',
+    fecha_caducidad: null, fecha_disponible: null, eliminado_en: null, ...extra,
+  };
+}
+
+test('GET /negocios/feed: solo activos y verificados que tienen publicaciones disponibles', async () => {
   fake.tabla('negocios').push(
     { id: 'pendiente', nombre: 'Pendiente', activo: true, estado_verificacion: 'pendiente' },
     { id: 'suspendido', nombre: 'Suspendido', activo: false, estado_verificacion: 'aprobado' },
     { id: 'legacy', nombre: 'Legacy sin estado', activo: true },
+    { id: 'sin-bolsas', nombre: 'Sin publicaciones', activo: true, estado_verificacion: 'aprobado' },
+  );
+  fake.tabla('bolsas').push(
+    publicacion(IDS.olaAzul),
+    publicacion(IDS.otroNegocio, { tipo: 'bolsa' }),
+    publicacion('legacy'),
+    publicacion('pendiente'),
+    publicacion('suspendido'),
   );
   const r = await pedir('GET', '/api/negocios/feed');
   assert.equal(r.status, 200);
   const ids = r.body.map((n) => n.id).sort();
   assert.deepEqual(ids, [IDS.olaAzul, IDS.otroNegocio, 'legacy'].sort());
+  assert.ok(r.body.every((n) => n.cantidad_bolsas > 0));
   assert.ok(r.body.every((n) => !('activo' in n) && !('estado_verificacion' in n)), 'no expone campos internos');
 });
 
-test('GET /negocios/feed?lat&lng: ordena por cercanía sin ocultar a nadie; coords inválidas no rompen', async () => {
+test('GET /negocios/feed: caducada, eliminada o aún no iniciada no mantiene al negocio en el feed', async () => {
+  fake.tabla('bolsas').push(
+    publicacion(IDS.olaAzul, { fecha_caducidad: '2026-01-01' }),
+    publicacion(IDS.olaAzul, { eliminado_en: '2026-10-01T00:00:00Z' }),
+    publicacion(IDS.otroNegocio, { fecha_disponible: '2999-01-01' }),
+  );
+  const r = await pedir('GET', '/api/negocios/feed');
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, []);
+});
+
+test('GET /negocios/feed?lat&lng: ordena por cercanía; coords inválidas no rompen', async () => {
+  fake.tabla('bolsas').push(publicacion(IDS.olaAzul), publicacion(IDS.otroNegocio));
   // Otro queda en Cayalá; Ola Azul (14.6, -90.5) a ~2 km.
   fake.tabla('negocios').find((n) => n.id === IDS.otroNegocio).latitud = CAYALA.lat;
   fake.tabla('negocios').find((n) => n.id === IDS.otroNegocio).longitud = CAYALA.lng;

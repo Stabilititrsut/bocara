@@ -1,3 +1,5 @@
+const { ahoraGuatemala, estaVencida } = require('./horarioGuatemala');
+
 const MAX_DISTINCT_ITEMS = 20;
 const MAX_QUANTITY_PER_ITEM = 50;
 
@@ -44,6 +46,7 @@ function validateCheckoutBags(cartItems, bolsas, tipoEntrega) {
   const hoyGuatemala = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/Guatemala', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(new Date());
+  const ahora = ahoraGuatemala();
 
   for (const bolsa of bolsas) {
     const negocio = bolsa?.negocios;
@@ -64,6 +67,12 @@ function validateCheckoutBags(cartItems, bolsas, tipoEntrega) {
     }
     if (bolsa.fecha_caducidad && String(bolsa.fecha_caducidad).slice(0, 10) < hoyGuatemala) {
       return `"${bolsa.nombre || 'Producto'}" ya venció`;
+    }
+    // Una publicación diaria sigue visible después de su ventana de recogida
+    // (services/publicaciones.js), pero solo se compra mientras la de hoy siga
+    // abierta: pasada la hora de fin ya no se acepta hasta la siguiente ventana.
+    if (estaVencida(bolsa, ahora)) {
+      return `"${bolsa.nombre || 'Producto'}" ya no se puede comprar hoy: su horario de recogida terminó`;
     }
     if (tipoEntrega === 'envio' && bolsa.permite_envio !== true) {
       return `"${bolsa.nombre || 'Producto'}" solo está disponible para recogida`;

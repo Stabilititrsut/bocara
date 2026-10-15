@@ -160,7 +160,7 @@ async function manejarPublicacionVisible(evento, { cliente = db(), enviarPush = 
 
   // El evento pudo procesarse tarde (reintentos, backend caído): se vuelve a
   // comprobar con la misma regla que el feed antes de avisar a nadie.
-  const motivos = motivosNoVisible(bolsa);
+  const motivos = motivosNoVisible(bolsa, { exigirHorarioDeHoy: true });
   if (motivos.length) {
     console.warn('[CERCANIA] Publicación %s ya no es visible (%s): sin envío', bolsaId, motivos.join(','));
     return { omitido: 'no_visible', motivos };

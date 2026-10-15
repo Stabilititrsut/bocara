@@ -131,8 +131,8 @@ test('nueva: crear → pendiente, no visible; aprobar → visible en todas las s
 test('nueva: el feed de negocios (Home) cuenta solo las publicaciones visibles', async () => {
   const p = await crear(promo());
   let home = (await pedir('GET', '/api/negocios/feed')).body;
-  assert.equal(home.find(n => n.id === IDS.olaAzul)?.cantidad_bolsas, 0,
-    'sin aprobadas el negocio sigue en el Home (regla: siempre todos) pero sin publicaciones contadas');
+  assert.equal(home.some(n => n.id === IDS.olaAzul), false,
+    'sin publicaciones aprobadas el negocio no aparece en el Home');
   await aprobar(p.id);
   home = (await pedir('GET', '/api/negocios/feed')).body;
   assert.equal(home.find(n => n.id === IDS.olaAzul)?.cantidad_bolsas, 1);

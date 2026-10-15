@@ -388,7 +388,7 @@ test('Horario Guatemala ignora la zona horaria del dispositivo/navegador', () =>
   assert.equal(publicacionVencida({ hora_recogida_inicio: '22:00', hora_recogida_fin: '02:00' }, madrugadaGuatemala), false);
 });
 
-test('Tarjeta tienda desaparece, impide agregar y revalida al tocar tras vencer; limpia timer', () => {
+test('Tarjeta tienda sigue visible fuera de horario, impide agregar y revalida al tocar tras vencer; limpia timer', () => {
   let now = new Date(Date.UTC(2026, 8, 10, 17)).getTime() /* 11:00 Guatemala (UTC-6) */;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } }
   const horario = load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }, { Date: Clock });
@@ -412,8 +412,10 @@ test('Tarjeta tienda desaparece, impide agregar y revalida al tocar tras vencer;
   const active = render(); const cleanup = focus(); addButton(active).props.onPress(); assert.equal(added, 1);
   now = new Date(Date.UTC(2026, 8, 10, 19)).getTime() /* 13:00 Guatemala (UTC-6) */;
   addButton(active).props.onPress(); assert.equal(added, 1, 'handler anterior revalida reloj actual');
-  let expired = render(); assert.equal(expired, null); assert.equal(addButton(expired), undefined);
-  interval(); expired = render(); assert.equal(expired, null);
+  let expired = render(); assert.notEqual(expired, null, 'fuera de horario la tarjeta se sigue mostrando');
+  assert.equal(addButton(expired), undefined, 'sin botón de agregar');
+  assert.ok(textOf(expired).includes('Cerrado hoy'));
+  interval(); expired = render(); assert.equal(addButton(expired), undefined);
   cleanup(); assert.equal(cleared, true);
 });
 
@@ -438,10 +440,13 @@ test('A4 tarjeta no permite agregar durante hidratación y muestra rechazo del c
   button.props.onPress(); assert.equal(alerts.length, 1); assert.equal(alerts[0][0], 'Un restaurante por pedido');
 });
 
-test('Catálogos tienda, negocio, favoritos, búsqueda y promociones excluyen vencidos', () => {
-  const expired = { ...bolsa(), id: 'expired', nombre: 'EXPIRED', hora_recogida_fin: '00:00' };
+test('Catálogos tienda, negocio, favoritos, búsqueda y promociones excluyen caducadas y muestran las cerradas por hoy', () => {
+  // Caducada: su fecha_caducidad ya pasó → no vuelve nunca, se oculta.
+  const expired = { ...bolsa(), id: 'expired', nombre: 'EXPIRED', hora_recogida_fin: '00:00', fecha_caducidad: '2026-01-01' };
+  // Diaria cuya ventana de hoy ya cerró → se sigue mostrando (no comprable).
+  const closed = { ...bolsa(), id: 'closed', nombre: 'CLOSED', hora_recogida_fin: '00:00' };
   const live = { ...bolsa(), id: 'live', nombre: 'LIVE' };
-  const products = [expired, live];
+  const products = [expired, closed, live];
   const cart = { loaded: true, items: [], cantidad: 0, total: 0 };
   const cases = [
     ['app/tienda/[id].tsx', [{ nombre: 'Tienda' }, products, 'todos', false]],
@@ -458,24 +463,30 @@ test('Catálogos tienda, negocio, favoritos, búsqueda y promociones excluyen ve
       if (node.props?.bolsas) assert.ok(node.props.bolsas.every(b => b.id !== 'expired'), file);
       if (node.props?.items && Array.isArray(node.props.items)) assert.ok(node.props.items.every(b => b.id !== 'expired'), file);
     }
-    assert.ok(textOf(result.tree).includes('LIVE') || walk(result.tree).some(node =>
-      node.props?.bolsa?.id === 'live' || node.props?.bolsas?.some(b => b.id === 'live') ||
-      (Array.isArray(node.props?.items) && node.props.items.some(b => b.id === 'live'))), `vigente visible: ${file}`);
+    for (const [id, nombre] of [['live', 'LIVE'], ['closed', 'CLOSED']]) {
+      assert.ok(textOf(result.tree).includes(nombre) || walk(result.tree).some(node =>
+        node.props?.bolsa?.id === id || node.props?.bolsas?.some(b => b.id === id) ||
+        (Array.isArray(node.props?.items) && node.props.items.some(b => b.id === id))), `${id} visible: ${file}`);
+    }
   }
 });
 
-test('Reloj real del filtro retira publicación con pantalla abierta y limpia suscripción temporal', () => {
+test('Reloj real del filtro retira la caducada (no la diaria) con pantalla abierta y limpia suscripción temporal', () => {
   let now = new Date(Date.UTC(2026, 8, 10, 17)).getTime() /* 11:00 Guatemala (UTC-6) */;
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } }
   const h = hooks(); let focus, interval, cleaned = false;
   const module = load('src/utils/usePublicacionesVigentes.ts', {
     react: h.react, 'expo-router': { useFocusEffect: fn => { focus = fn; } }, './horarioRecogida': horarioReal,
   }, { Date: Clock, setInterval: fn => { interval = fn; return 1; }, clearInterval: () => { cleaned = true; } });
-  const items = [{ ...bolsa(), hora_recogida_fin: '12:00' }];
+  const items = [
+    { ...bolsa(), id: 'diaria', hora_recogida_fin: '12:00' },
+    { ...bolsa(), id: 'caduca-hoy', hora_recogida_fin: '12:00', fecha_caducidad: '2026-09-10' },
+  ];
   const render = () => { h.reset(); return module.usePublicacionesVigentes(items); };
-  assert.equal(render().length, 1); const cleanup = focus();
+  assert.equal(render().length, 2); const cleanup = focus();
   now = new Date(Date.UTC(2026, 8, 10, 19)).getTime() /* 13:00 Guatemala (UTC-6) */; interval();
-  assert.equal(render().length, 0); assert.equal(items.length, 1); cleanup(); assert.equal(cleaned, true);
+  assert.deepEqual(render().map(b => b.id), ['diaria'], 'la diaria sigue visible; la que caducaba hoy se retira');
+  assert.equal(items.length, 2); cleanup(); assert.equal(cleaned, true);
 });
 
 test('Detalle vencido no es comprable; carrito y entrada directa a pago bloquean sin borrar persistencia', async () => {
@@ -484,8 +495,13 @@ test('Detalle vencido no es comprable; carrito y entrada directa a pago bloquean
   const store = createCartStore('A', createCartPersistence(disk)); store.activate(); await tick();
   assert.equal(store.agregar(expired).motivo, 'vencido'); assert.equal(disk.writes.length, 0);
   const cart = { ...store.getSnapshot(), total: 20, agregar: store.agregar };
+  // Diaria fuera de horario: el detalle se ve, pero sin botón de compra.
   const detail = ui('app/producto/[id].tsx', cart, [expired, false]);
-  assert.ok(textOf(detail.tree).includes('ya no está disponible'));
+  assert.ok(textOf(detail.tree).includes('Cerrado por hoy'));
+  assert.equal(walk(detail.tree).some(n => n.type === 'Button' && textOf(n).includes('Agregar al carrito')), false);
+  // Caducada (fecha pasada): ya no está disponible.
+  const caducada = ui('app/producto/[id].tsx', cart, [{ ...expired, fecha_caducidad: '2026-01-01' }, false]);
+  assert.ok(textOf(caducada.tree).includes('ya no está disponible'));
   const result = ui('app/(tabs)/carrito.tsx', cart);
   const button = walk(result.tree).find(n => n.type === 'Button' && textOf(n).includes('Proceder al pago'));
   assert.equal(button.props.disabled, true); button.props.onPress(); assert.equal(result.navigation.length, 0);
@@ -535,7 +551,10 @@ test('Detalle abierto antes de vencer bloquea un handler anterior y abandona UI 
     });
   const button = walk(result.tree).find(n => n.type === 'Button' && textOf(n).includes('Agregar al carrito'));
   assert.ok(button); now = new Date(Date.UTC(2026, 8, 10, 19)).getTime() /* 13:00 Guatemala (UTC-6) */; button.props.onPress();
-  assert.equal(added, 0); assert.ok(textOf(result.render()).includes('ya no está disponible'));
+  assert.equal(added, 0);
+  const despues = result.render();
+  assert.ok(textOf(despues).includes('Cerrado por hoy'), 'tras cerrar la ventana el detalle sigue visible pero bloqueado');
+  assert.equal(walk(despues).some(n => n.type === 'Button' && textOf(n).includes('Agregar al carrito')), false);
 });
 
 test('Flujo vigente tienda a carrito a pago conserva navegación y montaje', () => {
