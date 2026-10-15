@@ -7,6 +7,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI, API_BASE_URL } from '@/src/services/api';
 import { getAuthToken } from '@/src/services/authTokenStorage';
+import ConfirmarAccionModal, { AvisoAccion } from '@/components/ConfirmarAccionModal';
 
 const BG     = '#FAFAFA';
 const CARD   = '#FFFFFF';
@@ -60,6 +61,8 @@ export default function AdminConfigScreen() {
   const [geoLoading,       setGeoLoading]       = useState(false);
   const [geoMsg,           setGeoMsg]           = useState('');
   const [geoSinResultado,  setGeoSinResultado]  = useState<string[]>([]);
+  const [confirmarRestaurar, setConfirmarRestaurar] = useState(false);
+  const [avisoRestaurar, setAvisoRestaurar] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
 
   const cargar = useCallback(async () => {
     try {
@@ -118,17 +121,19 @@ export default function AdminConfigScreen() {
     }
   }
 
+  // Confirmación con modal propio: Alert.alert con botones no hace nada en web.
   function restaurarDefaults() {
-    Alert.alert('Restaurar valores', '¿Restaurar todos los valores por defecto?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Restaurar', onPress: () => {
-          const vals: Record<string, string> = {};
-          for (const [k, v] of Object.entries(DEFAULTS)) vals[k] = String(v);
-          setConfig(vals);
-        },
-      },
-    ]);
+    setAvisoRestaurar(null);
+    setConfirmarRestaurar(true);
+  }
+
+  // Solo rellena el formulario con DEFAULTS (como antes); se aplica con "Guardar".
+  function aplicarDefaults() {
+    const vals: Record<string, string> = {};
+    for (const [k, v] of Object.entries(DEFAULTS)) vals[k] = String(v);
+    setConfig(vals);
+    setConfirmarRestaurar(false);
+    setAvisoRestaurar({ tipo: 'exito', texto: 'Valores por defecto cargados. Pulsa "Guardar" para aplicarlos.' });
   }
 
   if (loading) return (
@@ -153,6 +158,20 @@ export default function AdminConfigScreen() {
           <Text style={s.resetText}>Restaurar</Text>
         </TouchableOpacity>
       </View>
+
+      <AvisoAccion aviso={avisoRestaurar} onCerrar={() => setAvisoRestaurar(null)} tema="claro" />
+
+      <ConfirmarAccionModal
+        visible={confirmarRestaurar}
+        tema="claro"
+        titulo="Restaurar valores"
+        mensaje="¿Restaurar todos los valores por defecto?"
+        detalle='Se rellenan los campos con los valores por defecto. No se guarda nada hasta que pulses "Guardar".'
+        textoConfirmar="Restaurar"
+        tono="neutro"
+        onConfirmar={aplicarDefaults}
+        onCancelar={() => setConfirmarRestaurar(false)}
+      />
 
       <ScrollView contentContainerStyle={s.scroll} keyboardShouldPersistTaps="handled">
 

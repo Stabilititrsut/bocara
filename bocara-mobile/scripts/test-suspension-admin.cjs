@@ -135,7 +135,7 @@ test('SUSP-8: los endpoints del cliente API son los esperados', () => {
 test('SUSP-9: detalle del negocio — el botón inferior abre el modal y confirma con el flujo compartido', () => {
   const src = read('app/admin/restaurante-detalle.tsx');
   assert.match(src, /onPress=\{abrirSuspension\}/, 'el botón inferior tiene handler');
-  assert.match(src, /onPress=\{confirmarSuspension\}/, 'el modal confirma');
+  assert.match(src, /onConfirmar=\{confirmarSuspension\}/, 'el modal confirma');
   assert.match(src, /ejecutarAccionNegocio\(adminAPI, negocio, suspensionModal, motivoSuspension\)/);
   assert.match(src, /setNegocio\(\(prev: any\) => \(\{ \.\.\.prev, activo: r\.activo \}\)\)/, 'estado visual inmediato');
   assert.match(src, /setErrorSuspension\(r\.error\)/, 'muestra el error real');
@@ -153,66 +153,9 @@ test('SUSP-10: ninguna pantalla admin llama a toggle/suspender por fuera del flu
   assert.match(read('app/admin/usuarios.tsx'), /suspenderCuenta\(adminAPI, suspendModal, suspendMotivo\)/);
 });
 
-// ── Render real de las pantallas (hooks con estado por posición, como en
-//    test-foto-obligatoria.cjs). Se presiona el botón y se mira el resultado. ──
-const React = require('react');
-function cargarPantalla(file, mocks) {
-  const exportsObj = {};
-  const code = ts.transpileModule(read(file), { compilerOptions: {
-    module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true,
-  } }).outputText;
-  vm.runInNewContext(code, { exports: exportsObj, console, setTimeout, clearTimeout,
-    require(name) {
-      if (name in mocks) return mocks[name];
-      if (name === 'react/jsx-runtime') return require(name);
-      throw new Error(`Import sin double: ${name}`);
-    },
-  }, { filename: file });
-  return exportsObj.default;
-}
-const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(setImmediate); };
-const walk = (n) => (!n || typeof n !== 'object') ? [] : [n, ...[n.props?.children].flat(Infinity).flatMap(walk)];
-const textOf = (n) => (typeof n === 'string' || typeof n === 'number') ? String(n)
-  : (!n || typeof n !== 'object') ? '' : [n.props?.children].flat(Infinity).map(textOf).join(' ');
-
-function montar(file, { forzados = {}, api }) {
-  const cells = []; let cursor = 0;
-  const alerts = [];
-  const react = { ...React,
-    useState(inicial) {
-      const i = cursor++;
-      if (!(i in cells)) cells[i] = { value: i in forzados ? forzados[i] : (typeof inicial === 'function' ? inicial() : inicial) };
-      const cell = cells[i];
-      return [cell.value, (v) => { cell.value = typeof v === 'function' ? v(cell.value) : v; }];
-    },
-    useCallback(f) { cursor++; return f; },
-    useEffect() { cursor++; },
-  };
-  const native = new Proxy({
-    StyleSheet: { create: (x) => x }, Platform: { OS: 'web' },
-    // Igual que react-native-web: Alert.alert no hace nada (solo se registra).
-    Alert: { alert: (...args) => alerts.push(args) },
-    TouchableOpacity: 'Button', TextInput: 'Input',
-  }, { get: (t, k) => (k in t ? t[k] : String(k)) });
-  const Component = cargarPantalla(file, {
-    react, 'react-native': native,
-    'expo-router': { useLocalSearchParams: () => ({ id: 'n1' }), useRouter: () => ({ push() {}, replace() {}, back() {} }) },
-    '@/src/services/api': { adminAPI: api },
-    '@/constants/Colors': { Colors: { orange: 'orange', white: 'white' } },
-    '@/src/utils/backNavigation': { volver() {} },
-    '@/src/utils/suspensionAdmin': load('src/utils/suspensionAdmin.ts'),
-  });
-  const render = () => { cursor = 0; return Component(); };
-  const app = {
-    alerts,
-    estado: (i) => cells[i]?.value,
-    texto: () => textOf(render()),
-    boton: (re) => walk(render()).filter((n) => n.type === 'Button' && re.test(textOf(n))).at(-1),
-    input: (re) => walk(render()).find((n) => n.type === 'Input' && re.test(n.props.placeholder || '')),
-  };
-  render();
-  return app;
-}
+// ── Render real de las pantallas (scripts/harness-pantallas-admin.cjs).
+//    Se presiona el botón y se mira el resultado. ──
+const { montar, tick } = require('./harness-pantallas-admin.cjs');
 
 // restaurante-detalle: negocio(0), propietario(1), loading(2), tab(3), procesando(4),
 // rechazarModal(5), motivo(6), suspensionModal(7), motivoSuspension(8), errorSuspension(9), aviso(10)

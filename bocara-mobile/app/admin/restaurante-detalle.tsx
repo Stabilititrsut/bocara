@@ -11,6 +11,8 @@ import { volver } from '@/src/utils/backNavigation';
 import {
   accionDisponibleNegocio, ejecutarAccionNegocio, textosAccionNegocio, type AccionNegocio,
 } from '@/src/utils/suspensionAdmin';
+import { ejecutarAccionAdmin } from '@/src/utils/accionAdmin';
+import ConfirmarAccionModal, { AvisoAccion } from '@/components/ConfirmarAccionModal';
 
 const DARK  = '#1E293B';
 const DARK2 = '#0F172A';
@@ -32,6 +34,8 @@ export default function RestauranteDetalleScreen() {
   const [motivoSuspension, setMotivoSuspension] = useState('');
   const [errorSuspension, setErrorSuspension] = useState('');
   const [aviso, setAviso] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
+  const [aprobarModal, setAprobarModal] = useState(false);
+  const [errorAprobar, setErrorAprobar] = useState('');
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -62,23 +66,35 @@ export default function RestauranteDetalleScreen() {
     cargar();
   }, [id, cargar]);
 
-  async function aprobar() {
+  // Confirmación con modal propio: Alert.alert con botones no hace nada en web.
+  function aprobar() {
     if (!negocio) return;
-    Alert.alert('Aprobar restaurante', `¿Aprobar "${negocio.nombre}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Aprobar', onPress: async () => {
-          setProcesando(true);
-          try {
-            await adminAPI.verificarNegocio(negocio.id);
-            await cargar();
-            Alert.alert('Aprobado', 'El restaurante fue aprobado y notificado.');
-          } catch (e: any) {
-            Alert.alert('Error', e.message);
-          } finally { setProcesando(false); }
-        }
-      },
-    ]);
+    setAviso(null);
+    setErrorAprobar('');
+    setAprobarModal(true);
+  }
+
+  async function confirmarAprobar() {
+    if (!negocio) return;
+    setProcesando(true);
+    setErrorAprobar('');
+    const r = await ejecutarAccionAdmin(() => adminAPI.verificarNegocio(negocio.id), {
+      exito: `"${negocio.nombre}" fue aprobado y notificado.`,
+      error: 'No se pudo aprobar el negocio.',
+    });
+    setProcesando(false);
+    if (!r.ok) {
+      // El modal queda abierto con el error real (p. ej. negocio sin foto).
+      setErrorAprobar(r.error);
+      return;
+    }
+    // El backend devuelve la fila ya aprobada: se pinta sin recargar.
+    setNegocio((prev: any) => ({
+      ...prev, verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null,
+      ...(r.data?.data || {}),
+    }));
+    setAprobarModal(false);
+    setAviso({ tipo: 'exito', texto: r.mensaje });
   }
 
   async function rechazar() {
@@ -172,17 +188,7 @@ export default function RestauranteDetalleScreen() {
         </View>
       </View>
 
-      {aviso && (
-        <TouchableOpacity
-          style={[s.aviso, aviso.tipo === 'exito' ? s.avisoExito : s.avisoError]}
-          onPress={() => setAviso(null)}
-          accessibilityRole="alert"
-        >
-          <Text style={aviso.tipo === 'exito' ? s.avisoExitoText : s.avisoErrorText}>
-            {aviso.tipo === 'exito' ? '✓ ' : '⚠️ '}{aviso.texto}
-          </Text>
-        </TouchableOpacity>
-      )}
+      <AvisoAccion aviso={aviso} onCerrar={() => setAviso(null)} />
 
       {/* Tabs */}
       <View style={s.tabs}>
@@ -331,49 +337,46 @@ export default function RestauranteDetalleScreen() {
       </View>
 
       {/* Modal suspender / reactivar negocio */}
-      <Modal
+      <ConfirmarAccionModal
         visible={!!suspensionModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => { if (!procesando) setSuspensionModal(null); }}
+        titulo={textosSuspension?.titulo || ''}
+        mensaje={textosSuspension?.pregunta || ''}
+        detalle={textosSuspension?.detalle}
+        textoConfirmar={textosSuspension?.boton || ''}
+        tono={suspensionModal === 'reactivar' ? 'exito' : 'peligro'}
+        procesando={procesando}
+        error={errorSuspension}
+        onConfirmar={confirmarSuspension}
+        onCancelar={() => setSuspensionModal(null)}
       >
-        <View style={s.overlay}>
-          <View style={s.modalCard}>
-            <Text style={s.modalTitle}>{textosSuspension?.titulo}</Text>
-            <Text style={s.modalSub}>{textosSuspension?.pregunta}</Text>
-            <Text style={s.modalDetalle}>{textosSuspension?.detalle}</Text>
-            {suspensionModal === 'suspender' && (
-              <>
-                <Text style={s.modalLabel}>Motivo (opcional — si lo indicas, se notifica al propietario)</Text>
-                <TextInput
-                  style={s.modalInput}
-                  value={motivoSuspension}
-                  onChangeText={setMotivoSuspension}
-                  placeholder="Ej. Quejas reiteradas de clientes..."
-                  placeholderTextColor="#64748B"
-                  multiline
-                />
-              </>
-            )}
-            {errorSuspension ? <Text style={s.modalError}>⚠️ {errorSuspension}</Text> : null}
-            <View style={s.modalActions}>
-              <TouchableOpacity style={s.modalCancel} onPress={() => setSuspensionModal(null)} disabled={procesando}>
-                <Text style={s.modalCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.modalConfirm, suspensionModal === 'reactivar' && s.modalConfirmActivar]}
-                onPress={confirmarSuspension}
-                disabled={procesando}
-              >
-                {procesando ? <ActivityIndicator color={Colors.white} size="small" />
-                  : <Text style={[s.modalConfirmText, suspensionModal === 'reactivar' && s.btnActivarText]}>
-                      {textosSuspension?.boton}
-                    </Text>}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        {suspensionModal === 'suspender' && (
+          <>
+            <Text style={s.modalLabel}>Motivo (opcional — si lo indicas, se notifica al propietario)</Text>
+            <TextInput
+              style={s.modalInput}
+              value={motivoSuspension}
+              onChangeText={setMotivoSuspension}
+              placeholder="Ej. Quejas reiteradas de clientes..."
+              placeholderTextColor="#64748B"
+              multiline
+            />
+          </>
+        )}
+      </ConfirmarAccionModal>
+
+      {/* Modal aprobar negocio */}
+      <ConfirmarAccionModal
+        visible={aprobarModal}
+        titulo="Aprobar restaurante"
+        mensaje={`¿Seguro que deseas aprobar "${negocio.nombre}"?`}
+        detalle="Quedará verificado y visible para los clientes, y se notificará al propietario."
+        textoConfirmar="Aprobar"
+        tono="exito"
+        procesando={procesando}
+        error={errorAprobar}
+        onConfirmar={confirmarAprobar}
+        onCancelar={() => setAprobarModal(false)}
+      />
 
       {/* Modal rechazo */}
       <Modal visible={rechazarModal} transparent animationType="fade">
@@ -462,14 +465,6 @@ const s = StyleSheet.create({
   btnActivar:   { borderColor: '#065F46', backgroundColor: '#021F16' },
   btnToggleText: { color: '#F87171', fontWeight: '800', fontSize: 14 },
   btnActivarText: { color: '#6EE7B7' },
-  aviso:        { marginHorizontal: 16, marginTop: 12, borderRadius: 12, padding: 12, borderWidth: 1 },
-  avisoExito:   { backgroundColor: '#022C22', borderColor: '#065F46' },
-  avisoError:   { backgroundColor: '#450A0A', borderColor: '#991B1B' },
-  avisoExitoText: { color: '#6EE7B7', fontWeight: '700', fontSize: 13 },
-  avisoErrorText: { color: '#FCA5A5', fontWeight: '700', fontSize: 13 },
-  modalDetalle: { fontSize: 12, color: '#64748B', lineHeight: 18, marginBottom: 16 },
-  modalError:   { color: '#FCA5A5', fontSize: 13, fontWeight: '600', marginBottom: 12 },
-  modalConfirmActivar: { backgroundColor: '#065F46' },
   overlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 24 },
   modalCard:    { backgroundColor: DARK, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: '#334155' },
   modalTitle:   { fontSize: 18, fontWeight: '900', color: Colors.white, marginBottom: 4 },
