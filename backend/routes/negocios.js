@@ -85,21 +85,25 @@ router.get('/mi-negocio', authMiddleware, async (req, res) => {
   res.json(data);
 });
 
-// GET /api/negocios/feed[?lat=&lng=] — TODOS los negocios activos y verificados
-// (con o sin publicaciones) + stats de descuento; lat/lng solo ordenan
+// GET /api/negocios/feed[?lat=&lng=] — negocios activos y verificados con ≥1
+// publicación visible (Promoción o Tiempo limitado) + stats de descuento;
+// lat/lng solo ordenan
 router.get('/feed', async (req, res) => {
   const { zona, categoria } = req.query;
   // Estado, horario, unidades y vigencia se seleccionan aunque no se devuelvan:
   // son los que decide filtrarVisiblesParaCliente (misma regla que /api/bolsas).
   const CAMPOS_FEED = 'id, negocio_id, tipo, precio_original, precio_descuento, ' +
     'activo, estado_aprobacion, cantidad_disponible, ' +
-    'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, ' +
+    'hora_recogida_inicio, hora_recogida_fin, fecha_caducidad, fecha_disponible, ' +
     'negocios(id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,activo,estado_verificacion)';
+  // eliminado_en: mismo filtro que /api/bolsas — una eliminada no cuenta como
+  // publicación disponible del restaurante.
   let { data: bolsas, error } = await supabase
     .from('bolsas')
     .select(CAMPOS_FEED)
     .eq('activo', true)
     .gt('cantidad_disponible', 0)
+    .is('eliminado_en', null)
     .or('estado_aprobacion.eq.aprobado,estado_aprobacion.is.null')
     .or(`fecha_caducidad.is.null,fecha_caducidad.gte.${hoy()}`);
   if (error) {
@@ -117,10 +121,8 @@ router.get('/feed', async (req, res) => {
   // mostrando cantidad_bolsas > 0.
   bolsas = filtrarVisiblesParaCliente(bolsas);
 
-  // TODOS los restaurantes activos y verificados, tengan o no publicaciones
-  // hoy (regla de negocio: el cliente siempre ve el catálogo completo). Antes
-  // el feed salía de las publicaciones disponibles y un restaurante sin bolsas
-  // vigentes desaparecía de Inicio/Tiendas.
+  // Restaurantes activos y verificados; abajo se quedan solo los que tienen
+  // al menos una publicación visible.
   const CAMPOS_NEGOCIO_FEED = 'id,nombre,zona,descripcion,categoria,imagen_url,calificacion_promedio,' +
     'latitud,longitud,activo,estado_verificacion';
   let { data: negocios, error: nErr } = await supabase
@@ -144,7 +146,11 @@ router.get('/feed', async (req, res) => {
   const ubic = validarCoordenadasEntrada(req.query.lat, req.query.lng);
   const coords = ubic.ok ? { lat: ubic.lat, lng: ubic.lng } : null;
 
+  // Al cliente solo se le muestran restaurantes que tienen algo disponible
+  // (Promoción o Tiempo limitado). Una publicación diaria fuera de su horario
+  // de hoy sigue contando: se ve, aunque solo se compra dentro de la ventana.
   const resultado = armarFeedNegocios(negocios, bolsas, coords)
+    .filter((n) => n.cantidad_bolsas > 0)
     .map(({ activo, estado_verificacion, ...pub }) => pub);
   res.json(resultado);
 });
