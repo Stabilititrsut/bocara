@@ -569,13 +569,21 @@ test('HTTP-6: foto del negocio (registro, perfil, portada) se guarda tal cual, S
       assert.equal(n[c], undefined, `${c} no se toca`);
     }
   };
-  // Perfil / portada de un negocio aprobado.
-  const put = await silenciar(() => pedir('PUT', `/api/negocios/${IDS.olaAzul}`, { como: IDS.restaurante, body: { imagen_url: FOTO_NEGOCIO } }));
-  assert.equal(put.status, 200, JSON.stringify(put.body));
-  assert.equal(negocio().imagen_url, FOTO_NEGOCIO, 'se guarda la imagen subida');
-  sinIA(negocio());
-  assert.equal((await silenciar(() => pedir('PUT', `/api/negocios/${IDS.olaAzul}`, { como: IDS.restaurante, body: { imagen_url: OTRA } }))).status, 200);
-  assert.equal(negocio().imagen_url, OTRA);
+  // Perfil / portada de un negocio aprobado: pasa por la revisión del admin
+  // (negocio_cambios_pendientes) y al aprobarla se guarda tal cual, sin IA.
+  const fotoAprobada = async (url) => {
+    const put = await silenciar(() => pedir('PUT', `/api/negocios/${IDS.olaAzul}`, { como: IDS.restaurante, body: { imagen_url: url } }));
+    assert.equal(put.status, 200, JSON.stringify(put.body));
+    assert.equal(put.body.cambio_foto_pendiente, true);
+    assert.notEqual(negocio().imagen_url, url, 'no se publica antes de la aprobación');
+    sinIA(negocio());
+    const ok = await silenciar(() => pedir('PUT', `/api/admin/cambios-perfil/${put.body.solicitud.id}/aprobar`, { como: IDS.admin }));
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(negocio().imagen_url, url, 'se guarda la imagen subida');
+    sinIA(negocio());
+  };
+  await fotoAprobada(FOTO_NEGOCIO);
+  await fotoAprobada(OTRA);
   // Registro: negocio pendiente que sube su foto justo después de crearse.
   negocio().estado_verificacion = 'pendiente';
   assert.equal((await silenciar(() => pedir('PUT', `/api/negocios/${IDS.olaAzul}`, { como: IDS.restaurante, body: { imagen_url: FOTO_NEGOCIO } }))).status, 200);

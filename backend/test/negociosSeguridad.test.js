@@ -203,3 +203,91 @@ test('SEC-3: legacy rechazada sin foto → corrige con foto → pendiente → ad
   const aprobar = await pedir('PUT', `/api/admin/bolsas/${id}/aprobar`, { como: IDS.admin });
   assert.equal(aprobar.status, 200, JSON.stringify(aprobar.body));
 });
+
+// ── SEC-4: la foto de un negocio aprobado pasa por el admin ──────────────────
+
+const FOTO_NUEVA = 'https://cdn.bocara.test/negocios/foto-nueva.jpg';
+const solicitudesDe = (negocioId = IDS.olaAzul) =>
+  fake.tabla('negocio_cambios_pendientes').filter(s => s.negocio_id === negocioId);
+
+test('SEC-4: cambiar la foto de un negocio aprobado crea una solicitud pendiente y no se auto-aprueba', async () => {
+  const r = await putNegocio({ imagen_url: FOTO_NUEVA });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.cambio_foto_pendiente, true);
+  assert.equal(r.body.imagen_url, FOTO_NEGOCIO, 'la respuesta trae la foto vigente');
+  assert.equal(olaAzul().imagen_url, FOTO_NEGOCIO, 'negocios no se toca');
+
+  const sols = solicitudesDe();
+  assert.equal(sols.length, 1);
+  assert.equal(sols[0].estado, 'pendiente');
+  assert.equal(sols[0].usuario_id, IDS.restaurante);
+  assert.deepEqual(sols[0].cambios, { imagen_url: FOTO_NUEVA });
+});
+
+test('SEC-4: solo al aprobar el admin la foto nueva llega a negocios', async () => {
+  await putNegocio({ imagen_url: FOTO_NUEVA });
+  const [sol] = solicitudesDe();
+
+  const lista = await pedir('GET', '/api/admin/cambios-perfil?estado=pendiente', { como: IDS.admin });
+  assert.equal(lista.status, 200);
+  const enLista = lista.body.find(s => s.id === sol.id);
+  assert.equal(enLista.cambios.imagen_url, FOTO_NUEVA, 'el admin ve la foto propuesta');
+  assert.equal(enLista.negocios.imagen_url, FOTO_NEGOCIO, 'y la foto actual para compararla');
+
+  const ok = await pedir('PUT', `/api/admin/cambios-perfil/${sol.id}/aprobar`, { como: IDS.admin });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(olaAzul().imagen_url, FOTO_NUEVA);
+  assert.equal(solicitudesDe()[0].estado, 'aprobado');
+});
+
+test('SEC-4: si el admin rechaza, el negocio conserva su foto', async () => {
+  await putNegocio({ imagen_url: FOTO_NUEVA });
+  const [sol] = solicitudesDe();
+  const r = await pedir('PUT', `/api/admin/cambios-perfil/${sol.id}/rechazar`, { como: IDS.admin, body: { motivo: 'Foto borrosa' } });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(olaAzul().imagen_url, FOTO_NEGOCIO);
+  assert.equal(solicitudesDe()[0].estado, 'rechazado');
+});
+
+test('SEC-4: foto y textos en revisión se combinan en una sola solicitud sin pisarse', async () => {
+  const solicitar = (cambios) => pedir('POST', '/api/negocios/mi-negocio/solicitar-cambios', { como: IDS.restaurante, body: { cambios } });
+  assert.equal((await solicitar({ telefono: '5555-0000' })).status, 201);
+  assert.equal((await putNegocio({ imagen_url: FOTO_NUEVA })).status, 200);
+  assert.equal((await solicitar({ descripcion: 'Mariscos frescos' })).status, 200);
+
+  const sols = solicitudesDe();
+  assert.equal(sols.length, 1);
+  assert.equal(sols[0].cambios.imagen_url, FOTO_NUEVA, 'reenviar textos no borra la foto en revisión');
+  assert.equal(sols[0].cambios.descripcion, 'Mariscos frescos');
+  assert.equal(olaAzul().imagen_url, FOTO_NEGOCIO);
+});
+
+test('SEC-4: los demás campos del PUT se aplican; solo la foto queda en revisión', async () => {
+  const r = await putNegocio({ descripcion: 'Mariscos', imagen_url: FOTO_NUEVA });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(olaAzul().descripcion, 'Mariscos');
+  assert.equal(olaAzul().imagen_url, FOTO_NEGOCIO);
+  assert.deepEqual(solicitudesDe()[0].cambios, { imagen_url: FOTO_NUEVA });
+});
+
+test('SEC-4: reenviar la misma foto vigente no crea solicitud', async () => {
+  const r = await putNegocio({ imagen_url: FOTO_NEGOCIO });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.cambio_foto_pendiente, undefined);
+  assert.equal(solicitudesDe().length, 0);
+});
+
+test('SEC-4: un negocio rechazado corrige su foto directo (todo el negocio vuelve a revisión)', async () => {
+  rechazarOlaAzul();
+  const r = await putNegocio({ imagen_url: FOTO_NUEVA });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(olaAzul().imagen_url, FOTO_NUEVA);
+  assert.equal(solicitudesDe().length, 0);
+});
+
+test('SEC-4: el admin edita la foto de un negocio directamente', async () => {
+  const r = await putNegocio({ imagen_url: FOTO_NUEVA }, IDS.admin);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(olaAzul().imagen_url, FOTO_NUEVA);
+  assert.equal(solicitudesDe().length, 0);
+});

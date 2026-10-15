@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   SafeAreaView, ActivityIndicator, TextInput, RefreshControl, Modal,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { adminAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 
@@ -224,7 +225,7 @@ const CAMPO_LABELS: Record<string, string> = {
   nombre: 'Nombre', descripcion: 'Descripción', direccion: 'Dirección',
   zona: 'Zona', ciudad: 'Ciudad', telefono: 'Teléfono', categoria: 'Categoría',
   latitud: 'Latitud', longitud: 'Longitud', punto_referencia: 'Punto de referencia',
-  google_maps_url: 'Google Maps', waze_url: 'Waze',
+  google_maps_url: 'Google Maps', waze_url: 'Waze', imagen_url: 'Foto del negocio',
 };
 
 function SolicitudCard({ item, procesando, onAprobar, onRechazar, onModificar, readonly }: any) {
@@ -232,6 +233,7 @@ function SolicitudCard({ item, procesando, onAprobar, onRechazar, onModificar, r
   const negocio = item.negocios;
   const cambios = item.cambios || {};
   const esPendiente = item.estado === 'pendiente';
+  const fotoNueva: string | undefined = cambios.imagen_url;
 
   return (
     <View style={s.card}>
@@ -251,7 +253,26 @@ function SolicitudCard({ item, procesando, onAprobar, onRechazar, onModificar, r
       </View>
 
       <Text style={s.seccionLabel}>Cambios solicitados:</Text>
-      {Object.entries(cambios).map(([campo, valor]) => (
+      {fotoNueva ? (
+        // Foto del negocio: se compara contra la vigente. Una vez resuelta, la
+        // "actual" ya no es la de antes (si se aprobó, es esta misma), así que
+        // en el historial solo se muestra la propuesta.
+        <View style={s.fotosRow}>
+          {esPendiente ? (
+            <View style={s.fotoCol}>
+              <Text style={s.fotoLabel}>Actual</Text>
+              {negocio?.imagen_url
+                ? <Image source={{ uri: negocio.imagen_url }} style={s.foto} contentFit="cover" />
+                : <View style={[s.foto, s.fotoVacia]}><Text style={s.fotoVaciaText}>Sin foto</Text></View>}
+            </View>
+          ) : null}
+          <View style={s.fotoCol}>
+            <Text style={[s.fotoLabel, esPendiente && s.fotoLabelNueva]}>{esPendiente ? 'Nueva' : 'Foto propuesta'}</Text>
+            <Image source={{ uri: fotoNueva }} style={[s.foto, esPendiente && s.fotoNuevaBorde]} contentFit="cover" />
+          </View>
+        </View>
+      ) : null}
+      {Object.entries(cambios).filter(([campo]) => campo !== 'imagen_url').map(([campo, valor]) => (
         <View key={campo} style={s.campoRow}>
           <Text style={s.campoLabel}>{CAMPO_LABELS[campo] || campo}:</Text>
           <Text style={s.campoValor} numberOfLines={2}>{String(valor)}</Text>
@@ -345,6 +366,14 @@ const s = StyleSheet.create({
   campoRow: { flexDirection: 'row', gap: 8, marginBottom: 6, alignItems: 'flex-start' },
   campoLabel: { fontSize: 12, color: '#64748B', fontWeight: '700', minWidth: 100 },
   campoValor: { fontSize: 13, color: '#E2E8F0', flex: 1, flexShrink: 1 },
+  fotosRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  fotoCol: { flex: 1 },
+  fotoLabel: { fontSize: 11, color: '#94A3B8', fontWeight: '700', marginBottom: 4 },
+  fotoLabelNueva: { color: '#F59E0B' },
+  foto: { width: '100%', height: 120, borderRadius: 10, backgroundColor: DARK2 },
+  fotoNuevaBorde: { borderWidth: 2, borderColor: '#F59E0B' },
+  fotoVacia: { alignItems: 'center', justifyContent: 'center' },
+  fotoVaciaText: { fontSize: 12, color: '#475569' },
   motivoBox: { backgroundColor: '#450A0A', borderRadius: 8, padding: 10, marginTop: 8, marginBottom: 4 },
   motivoText: { fontSize: 12, color: '#FCA5A5', fontWeight: '600' },
   fecha: { fontSize: 10, color: '#475569', marginTop: 10, marginBottom: 4 },
