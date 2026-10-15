@@ -145,3 +145,21 @@ cd bocara-mobile && node scripts/test-proceso-imagen.cjs   # 15: textos, pasos, 
 ```
 
 OpenAI se simula siempre (cliente inyectado); las fotos son escenas sintéticas medidas con sharp de verdad.
+
+## 9. Foto de perfil y portada del restaurante
+
+Mismo pipeline (`trabajos.js`), con `uso` = `perfil` o `portada`. El uso sale de la ruta en Storage, así que **no requiere migración**:
+
+| Uso | Ruta de subida | Lienzo de salida | Calidad mínima (`calidad.js`) | Se guarda en |
+|---|---|---|---|---|
+| publicacion | `bolsas/<negocio>_…` | comercial (≥ 1024 px) | `publicable` | `bolsas.imagen_url` |
+| perfil | `negocios/<negocio>/perfil_…` | 1024×1024 (avatar) | `perfil`: cuadrada, ≥ 400 px, admite fondo blanco | `negocios.logo_url` |
+| portada | `negocios/<negocio>/portada_…` | 1536×1024 (banner) | `portada`: horizontal (≥ 1.2:1), ≥ 720 px | `negocios.imagen_url` + columnas del pipeline |
+
+- Prompt propio (`prompts.js`): conserva logo, nombre, letras, colores y elementos de marca; prohíbe inventar logos, texto, comida o personas; solo extiende el fondo existente.
+- Revisión propia (`revisionIA.js`): un logo con letras es válido. Irreparable: `no_relacionada`, `captura_pantalla`, `irreconocible`. Infiel: `marca_alterada`, `elemento_inventado`.
+- Solo proveedores que declaran el encuadre (`encuadres`, hoy OpenAI); otro proveedor termina en `fallida/proveedor_no_soporta`.
+- App: `components/ImagenNegocioIA.tsx` (pasos, Guardar bloqueado hasta "Imagen optimizada y lista", Reintentar / Cambiar foto / Usar original).
+- Backend: `PUT /api/negocios/:id/imagen { tipo, imagen_trabajo_id, usar_original? }` exige el trabajo `lista` del mismo negocio y uso. **Usar original** solo si `calidad_original.original_aceptable` (la original pasó la revisión IA y cumple la calidad mínima del uso). `PUT /api/negocios/:id` ya no cambia `imagen_url` de un negocio no pendiente (salvo admin): 409 `IMAGEN_NO_PROCESADA`. El registro (negocio pendiente) sigue igual.
+- La original nunca se sobrescribe: es otro archivo en Storage y queda en `trabajos_imagen.original_url` (y en `negocios.imagen_original_url` para la portada).
+- Tests: `backend/test/imagenesNegocio.test.js`, `bocara-mobile/scripts/test-imagen-negocio.cjs`.

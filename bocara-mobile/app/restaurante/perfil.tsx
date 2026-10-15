@@ -12,6 +12,7 @@ import { Colors } from '@/constants/Colors';
 import { ZONAS_GT } from '@/constants/zonas';
 import { pickImage } from '@/src/utils/pickImage';
 import EstadoImagenIA from '@/components/EstadoImagenIA';
+import ImagenNegocioIA from '@/components/ImagenNegocioIA';
 
 const CATEGORIAS = ['Panadería', 'Restaurante', 'Cafetería', 'Supermercado', 'Sushi', 'Pizza', 'Comida Típica', 'Otros'];
 const CAMBIO_CERRADO_KEY = 'bocara_cambio_perfil_cerrado';
@@ -22,12 +23,9 @@ export default function PerfilRestauranteScreen() {
   const [camposPendientes, setCamposPendientes] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploadingImg, setUploadingImg] = useState(false);
-  const [imgError, setImgError] = useState('');
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [solicitudPendiente, setSolicitudPendiente] = useState<any>(null);
   const { logout } = useAuth();
-  const fileInputRef = useRef<any>(null);
   const dpiInputRef = useRef<any>(null);
   const pollingRef = useRef<any>(null);
   const [dpiUrl, setDpiUrl] = useState('');
@@ -137,34 +135,6 @@ export default function PerfilRestauranteScreen() {
       .finally(() => setRefrescando(false));
   }
 
-  // Web: leer el archivo seleccionado y subirlo
-  function handleWebFileChange(e: any) {
-    const file = e.target?.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1];
-      subirImagen(base64, file.type || 'image/jpeg');
-    };
-    reader.onerror = () => setImgError('No se pudo leer la imagen');
-    reader.readAsDataURL(file);
-    e.target.value = ''; // permite volver a seleccionar el mismo archivo
-  }
-
-  function seleccionarImagen() {
-    setImgError('');
-    if (Platform.OS === 'web') {
-      // Activar el input oculto directamente — sincrónico dentro del gesto del usuario
-      fileInputRef.current?.click();
-      return;
-    }
-    // Nativo: usar pickImage (expo-image-picker)
-    pickImage().then((picked) => {
-      if (!picked) return;
-      subirImagen(picked.base64, picked.mimeType);
-    });
-  }
-
   const isRejected = (campo: string) => !!(rechazoInfo?.campos?.includes(campo));
 
   function handleWebDpiChange(e: any) {
@@ -208,22 +178,9 @@ export default function PerfilRestauranteScreen() {
     }
   }
 
-  async function subirImagen(base64: string, mimeType: string) {
-    if (!negocio?.id) return;
-    setUploadingImg(true);
-    try {
-      const ext = mimeType.split('/')[1] || 'jpg';
-      const path = `negocios/${negocio.id}/imagen_${Date.now()}.${ext}`;
-      const { data } = await uploadsAPI.uploadBase64(base64, path, mimeType);
-      if (data?.publicUrl) {
-        await negociosAPI.actualizar(negocio.id, { imagen_url: data.publicUrl });
-        setNegocio((n: any) => ({ ...n, imagen_url: data.publicUrl }));
-      }
-    } catch (e: any) {
-      setImgError(e.message || 'No se pudo subir la imagen');
-    } finally {
-      setUploadingImg(false);
-    }
+  // Foto de perfil / portada guardada (ya validada con IA en ImagenNegocioIA).
+  function imagenGuardada(actualizado: any) {
+    if (actualizado) setNegocio((n: any) => ({ ...n, ...actualizado }));
   }
 
   async function guardar() {
@@ -318,14 +275,7 @@ export default function PerfilRestauranteScreen() {
 
   return (
     <SafeAreaView style={s.root}>
-      {/* Input de archivo oculto — solo web, activado via ref desde seleccionarImagen() */}
-      {Platform.OS === 'web' && React.createElement('input', {
-        ref: fileInputRef,
-        type: 'file',
-        accept: 'image/*',
-        style: { display: 'none' },
-        onChange: handleWebFileChange,
-      })}
+      {/* Input de archivo oculto del DPI — solo web, activado via ref desde seleccionarDpi() */}
       {Platform.OS === 'web' && React.createElement('input', {
         ref: dpiInputRef,
         type: 'file',
@@ -425,33 +375,30 @@ export default function PerfilRestauranteScreen() {
           </View>
         )}
 
-        {/* Foto del negocio (obligatoria: sin ella el negocio no puede aprobarse ni activarse) */}
-        <Text style={s.fotoLabel}>Foto del negocio *</Text>
-        <TouchableOpacity style={[s.imgContainer, !negocio?.imagen_url && s.imgContainerError]} onPress={seleccionarImagen} disabled={uploadingImg}>
-          {negocio?.imagen_url ? (
-            <Image source={{ uri: negocio.imagen_url }} style={s.imgNegocio} contentFit="cover" transition={200} />
-          ) : (
-            <View style={s.imgPlaceholder}>
-              <Text style={{ fontSize: 40 }}>🏪</Text>
-              <Text style={s.imgPlaceholderText}>Agregar foto</Text>
-            </View>
-          )}
-          <View style={s.imgEditBtn}>
-            {uploadingImg
-              ? <ActivityIndicator color={Colors.white} size="small" />
-              : <Text style={s.imgEditText}>📷 Cambiar foto</Text>
-            }
-          </View>
-        </TouchableOpacity>
+        {/* Portada (imagen_url, obligatoria: sin ella el negocio no puede
+            aprobarse ni activarse) y foto de perfil (logo_url). Ambas pasan por
+            la IA de imágenes antes de guardarse. */}
         {negocio?.id ? (
-          <EstadoImagenIA tipo="negocio" id={negocio.id} fila={negocio} onCambio={cargarNegocio} />
+          <>
+            <ImagenNegocioIA
+              tipo="portada"
+              negocioId={negocio.id}
+              actualUrl={negocio.imagen_url}
+              obligatoria
+              onGuardada={imagenGuardada}
+              onAviso={showToast}
+              pie={<EstadoImagenIA tipo="negocio" id={negocio.id} fila={negocio} onCambio={cargarNegocio} />}
+            />
+            <ImagenNegocioIA
+              tipo="perfil"
+              negocioId={negocio.id}
+              actualUrl={negocio.logo_url}
+              onGuardada={imagenGuardada}
+              onAviso={showToast}
+            />
+          </>
         ) : null}
-        {imgError ? (
-          <View style={s.errorInline}>
-            <Text style={s.errorInlineText}>⚠️ {imgError}</Text>
-          </View>
-        ) : null}
-        {negocio && !negocio.imagen_url && !uploadingImg ? (
+        {negocio && !negocio.imagen_url ? (
           <View style={s.errorInline}>
             <Text style={s.errorInlineText}>⚠️ Debes agregar una foto del negocio para continuar.</Text>
           </View>
@@ -675,12 +622,6 @@ const s = StyleSheet.create({
   toastOk: { backgroundColor: '#DCFCE7' },
   toastErr: { backgroundColor: '#FEE2E2' },
   toastText: { fontSize: 13, fontWeight: '600', color: Colors.brown },
-  imgContainer: { borderRadius: 16, overflow: 'hidden', marginBottom: 8, height: 160 },
-  imgContainerError: { borderWidth: 2, borderColor: Colors.error },
-  fotoLabel: { fontSize: 13, fontWeight: '700', color: Colors.textSecondary, marginBottom: 6 },
-  imgNegocio: { width: '100%', height: '100%' },
-  imgPlaceholder: { width: '100%', height: '100%', backgroundColor: Colors.brownLight, justifyContent: 'center', alignItems: 'center', gap: 8 },
-  imgPlaceholderText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
   imgEditBtn: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.55)', paddingVertical: 10, alignItems: 'center' },
   imgEditText: { color: Colors.white, fontWeight: '700', fontSize: 13 },
   errorInline: { backgroundColor: '#FEE2E2', borderRadius: 10, padding: 10, marginBottom: 12 },

@@ -10,6 +10,9 @@ const TRABAJO_LISTO = Object.freeze({
 
 module.exports = () => ({
   '@/components/EstadoProcesoImagen': { __esModule: true, default: () => null },
+  // Foto de perfil / portada del restaurante: elemento inerte con sus props
+  // (su flujo con IA se prueba en scripts/test-proceso-imagen.cjs).
+  '@/components/ImagenNegocioIA': { __esModule: true, default: 'ImagenNegocioIA' },
   '@/hooks/use-trabajo-imagen': {
     useTrabajoImagen: () => ({ trabajo: TRABAJO_LISTO, error: null, errorRed: false, iniciar() {}, reintentar() {}, reiniciar() {} }),
   },

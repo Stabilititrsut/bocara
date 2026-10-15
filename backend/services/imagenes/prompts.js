@@ -79,6 +79,62 @@ const PROMPT_COMERCIAL = [OBJETIVO, PRESERVAR_COMERCIAL, MEJORAR, ENCUADRE_COMER
   .map((seccion) => seccion.join(' '))
   .join('\n');
 
+// Imágenes del RESTAURANTE (no de un producto): foto de perfil y portada.
+// La identidad del negocio es lo que hay que preservar: logo, nombre, letras,
+// colores de marca, fachada, local, platos y personas tal como son.
+const PRESERVAR_NEGOCIO = [
+  'This image represents a real restaurant or food business on a food marketplace.',
+  'Keep its identity exactly: every logo, brand mark, name, letter, word, color of the brand, storefront, interior, dish and person must stay the same, in the same place and legible.',
+  'Do not redraw, restyle, retype, translate, simplify or "clean up" a logo or any text.',
+];
+const PROHIBIDO_NEGOCIO = [
+  'Never invent or add logos, text, signs, food, dishes, products, people, decorations or brand elements that were not in the image.',
+  'Never remove existing logos, text or brand elements.',
+  'Do not warp, stretch or distort shapes.',
+  'The soft blurred area around the image is only padding: replace it with a plain, natural continuation of the existing background (same color, wall, surface or scene), never with new objects.',
+];
+const ESTILO_NEGOCIO = [
+  'The result must look like the same real image, professionally retouched:',
+  'no artificial HDR look, no oversaturated colors, no plastic or overly smooth AI look, no illustration or 3D render style.',
+];
+
+// Perfil (avatar): lienzo cuadrado, lo principal centrado y completo.
+const ENCUADRE_PERFIL = [
+  'Retouch it to work as a square profile picture shown inside a circle:',
+  'the original image occupies a rectangle in the center of this square canvas; keep it exactly where it is, at the same size, fully visible and centered.',
+  'Improve sharpness, clean edges, lighting, contrast and resolution; remove compression artifacts and noise.',
+];
+// Portada (banner): lienzo horizontal, el fondo puede extenderse.
+const ENCUADRE_PORTADA = [
+  'Retouch it to work as a wide horizontal cover banner for the business page:',
+  'the original image occupies a rectangle of this horizontal canvas; keep it exactly where it is, at the same size.',
+  'Extend only the existing background, walls, surfaces or scenery so the banner looks like one complete, well-composed photograph.',
+  'Improve lighting, white balance, exposure, contrast, sharpness and resolution, and make the surroundings tidier without replacing the setting.',
+];
+
+const PROMPT_PERFIL = [PRESERVAR_NEGOCIO, ENCUADRE_PERFIL, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
+  .map((seccion) => seccion.join(' '))
+  .join('\n');
+const PROMPT_PORTADA = [PRESERVAR_NEGOCIO, ENCUADRE_PORTADA, PROHIBIDO_NEGOCIO, ESTILO_NEGOCIO]
+  .map((seccion) => seccion.join(' '))
+  .join('\n');
+
+// Igual que CORRECCIONES, sin suponer que la imagen es comida.
+const CORRECCIONES_NEGOCIO = Object.freeze({
+  oscura: 'The image is underexposed: brighten it and open the shadows.',
+  muy_oscura: 'The image is underexposed: brighten it and open the shadows.',
+  quemada: 'The image is overexposed: recover the blown highlights.',
+  sin_contraste: 'The image looks flat and washed out: restore natural contrast and color depth.',
+  borrosa: 'The image is soft or slightly out of focus: recover crisp edges and detail without inventing new details or changing any letter.',
+  resolucion: 'The image is low resolution: restore clean, crisp detail and edges.',
+  baja_calidad: 'The image has low overall quality: clean up noise and compression artifacts.',
+  desordenada: 'The surroundings look messy: make them tidier and less distracting without replacing the setting.',
+  proporcion: 'The original image has an awkward aspect ratio: extend only the existing background to fill the canvas.',
+  no_cuadrada: 'The original image is not square: extend only the existing background to fill the square canvas.',
+  no_horizontal: 'The original image is not horizontal: extend only the existing background to the sides to fill the wide canvas.',
+  recortada: 'The main subject is tightly framed: extend only the background around it, never the subject itself.',
+});
+
 // Problemas detectados en el análisis de la original (calidad.js y
 // revisionIA.js) → indicación concreta para el modelo. Sin entrada aquí, el
 // problema no se menciona (el prompt base ya cubre la mejora general).
@@ -96,16 +152,21 @@ const CORRECCIONES = Object.freeze({
   manos_o_personas: 'Hands or people are visible: keep the food as the clear protagonist and make them less prominent without altering the food.',
 });
 
-// encuadre: 'original' (fotos de negocio: mismo encuadre y proporción) o
-// 'comercial' (publicaciones: lienzo estándar con el fondo extendido).
+// encuadre: 'original' (fotos de negocio: mismo encuadre y proporción),
+// 'comercial' (publicaciones: lienzo estándar con el fondo extendido),
+// 'perfil' (avatar cuadrado) o 'portada' (banner horizontal) del restaurante.
+// IMAGE_AI_PROMPT solo reemplaza el prompt de comida: perfil y portada nunca
+// deben recibir instrucciones pensadas para un plato.
 function promptMejora({ problemas = [], encuadre = 'original' } = {}) {
-  if (process.env.IMAGE_AI_PROMPT) return process.env.IMAGE_AI_PROMPT;
-  const base = encuadre === 'comercial' ? PROMPT_COMERCIAL : PROMPT_FOTO_COMIDA;
-  const extra = [...new Set(problemas.map((c) => CORRECCIONES[c]).filter(Boolean))];
+  const negocio = encuadre === 'perfil' || encuadre === 'portada';
+  if (process.env.IMAGE_AI_PROMPT && !negocio) return process.env.IMAGE_AI_PROMPT;
+  const base = { comercial: PROMPT_COMERCIAL, perfil: PROMPT_PERFIL, portada: PROMPT_PORTADA }[encuadre] || PROMPT_FOTO_COMIDA;
+  const tabla = negocio ? CORRECCIONES_NEGOCIO : CORRECCIONES;
+  const extra = [...new Set(problemas.map((c) => tabla[c]).filter(Boolean))];
   return extra.length ? `${base}\nSpecific fixes for this photo: ${extra.join(' ')}` : base;
 }
 
 module.exports = {
-  PROMPT_FOTO_COMIDA, PROMPT_COMERCIAL, CORRECCIONES, promptMejora,
-  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL },
+  PROMPT_FOTO_COMIDA, PROMPT_COMERCIAL, PROMPT_PERFIL, PROMPT_PORTADA, CORRECCIONES, CORRECCIONES_NEGOCIO, promptMejora,
+  SECCIONES: { OBJETIVO, PRESERVAR, MEJORAR, PROHIBIDO, ESTILO, ENCUADRE_COMERCIAL, ENCUADRE_PERFIL, ENCUADRE_PORTADA },
 };

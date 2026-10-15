@@ -189,10 +189,12 @@ function perfil(negocio, api = {}, pendientes = ['descripcion']) {
   });
 }
 
-test('PHOTO-BIZ-4: el perfil rotula "Foto del negocio *" y avisa si falta', () => {
-  const sinFoto = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'aprobado', imagen_url: null, descripcion: 'x' });
+test('PHOTO-BIZ-4: el perfil monta portada (obligatoria) y foto de perfil con IA, y avisa si falta la foto', () => {
+  const sinFoto = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'aprobado', imagen_url: null, logo_url: 'https://cdn.bocara.test/logo.jpg', descripcion: 'x' });
   const texto = textOf(sinFoto.tree);
-  assert.match(texto, /Foto del negocio \*/);
+  const slots = walk(sinFoto.tree).filter(n => n.type === 'ImagenNegocioIA');
+  assert.deepEqual(slots.map(n => [n.props.tipo, !!n.props.obligatoria, n.props.actualUrl ?? null]),
+    [['portada', true, null], ['perfil', false, 'https://cdn.bocara.test/logo.jpg']]);
   assert.match(texto, /Debes agregar una foto del negocio para continuar\./);
   const conFoto = perfil({ id: 'n1', nombre: 'Ola', estado_verificacion: 'aprobado', imagen_url: FOTO, descripcion: 'x' });
   assert.doesNotMatch(textOf(conFoto.tree), /Debes agregar una foto del negocio/);

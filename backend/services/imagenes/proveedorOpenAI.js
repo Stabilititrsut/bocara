@@ -19,6 +19,10 @@
 //        original (fracciones 0–1) para validar que la comida no cambió. Si
 //        la foto venía cortada o muy cerrada, entra con margen
 //        (MARGEN_RECOMPONER) para que el modelo pueda recomponerla.
+//      · 'perfil' / 'portada' (imágenes del restaurante): igual que
+//        'comercial' pero con lienzo fijo: 1024x1024 (avatar) o 1536x1024 (banner).
+//   `encuadres` declara cuáles soporta: trabajos.js no manda perfil ni portada
+//   a un proveedor que no los declare (Replicate usa el prompt de comida).
 const { promptMejora } = require('./prompts');
 const { ErrorProveedor } = require('./errores');
 
@@ -46,13 +50,19 @@ function elegirTamano(ancho, alto) {
 const MARGEN_RECOMPONER = 0.84;
 const PROBLEMAS_RECOMPONER = new Set(['recortada']);
 
+// Encuadres que entregan el lienzo COMPLETO (con el fondo extendido) y el
+// tamaño fijo que usan los del restaurante: perfil cuadrado, portada horizontal.
+const LIENZO_COMPLETO = new Set(['comercial', 'perfil', 'portada']);
+const TAMANO_FIJO = Object.freeze({ perfil: TAMANOS[0], portada: TAMANOS[1] });
+
 // Lienzo del tamaño de salida con la foto completa centrada (ampliada con
 // lanczos si es pequeña) y un fondo desenfocado de la misma foto. `margen` < 1
-// deja espacio alrededor. Devuelve el lienzo JPEG y el rectángulo útil.
-async function prepararLienzo(buffer, { margen = 1 } = {}) {
+// deja espacio alrededor; `tamano` fija el lienzo (si no, el más parecido a la
+// foto). Devuelve el lienzo JPEG y el rectángulo útil.
+async function prepararLienzo(buffer, { margen = 1, tamano = null } = {}) {
   const base = sharp()(buffer, { failOn: 'none' }).rotate();
   const { data: plano, info } = await base.toBuffer({ resolveWithObject: true });
-  const t = elegirTamano(info.width, info.height);
+  const t = tamano || elegirTamano(info.width, info.height);
   const escala = Math.min(t.ancho / info.width, t.alto / info.height) * margen;
   const w = Math.min(t.ancho, Math.round(info.width * escala));
   const h = Math.min(t.alto, Math.round(info.height * escala));
@@ -116,21 +126,23 @@ function crearProveedorOpenAI({
     ia: true,
     modelo,
     necesitaUrl: false, // la imagen viaja en la petición (multipart), no por URL
+    encuadres: LIENZO_COMPLETO,
     async mejorar({ buffer, contexto = {} }) {
       const inicio = Date.now();
       const { toFile } = require('openai');
       const problemas = contexto.problemas || [];
-      const comercial = contexto.encuadre === 'comercial';
-      const margen = comercial && problemas.some((c) => PROBLEMAS_RECOMPONER.has(c)) ? MARGEN_RECOMPONER : 1;
-      const { lienzo, tamano, rect } = await prepararLienzo(buffer, { margen });
+      const encuadre = LIENZO_COMPLETO.has(contexto.encuadre) ? contexto.encuadre : 'original';
+      const completo = encuadre !== 'original';
+      const margen = completo && problemas.some((c) => PROBLEMAS_RECOMPONER.has(c)) ? MARGEN_RECOMPONER : 1;
+      const { lienzo, tamano, rect } = await prepararLienzo(buffer, { margen, tamano: TAMANO_FIJO[encuadre] || null });
 
-      console.log('[IMAGEN_IA] OpenAI images.edit → modelo=%s size=%s calidad=%s encuadre=%s', modelo, tamano.size, calidad, comercial ? 'comercial' : 'original');
+      console.log('[IMAGEN_IA] OpenAI images.edit → modelo=%s size=%s calidad=%s encuadre=%s', modelo, tamano.size, calidad, encuadre);
       let respuesta;
       try {
         respuesta = await obtenerCliente().images.edit({
           model: modelo,
           image: await toFile(lienzo, 'foto.jpg', { type: 'image/jpeg' }),
-          prompt: promptMejora({ problemas, encuadre: comercial ? 'comercial' : 'original' }),
+          prompt: promptMejora({ problemas, encuadre }),
           size: tamano.size,
           quality: calidad,
           output_format: 'png',
@@ -156,9 +168,9 @@ function crearProveedorOpenAI({
           left: Math.round(rect.left * fx), top: Math.round(rect.top * fy),
           width: Math.min(meta.width, Math.round(rect.width * fx)), height: Math.min(meta.height, Math.round(rect.height * fy)),
         };
-        // Comercial: el lienzo completo (el fondo extendido es parte de la foto).
+        // Comercial / perfil / portada: el lienzo completo (el fondo extendido es parte de la foto).
         const img2 = sharp()(Buffer.from(b64, 'base64'));
-        const { data, info } = await (comercial ? img2 : img2.extract(recorte))
+        const { data, info } = await (completo ? img2 : img2.extract(recorte))
           .resize({ width: LADO_MAX_SALIDA, height: LADO_MAX_SALIDA, fit: 'inside', withoutEnlargement: true })
           .webp({ quality: 88 }).toBuffer({ resolveWithObject: true });
         salida = { data, info };
@@ -172,9 +184,9 @@ function crearProveedorOpenAI({
         meta: {
           ia: true, proveedor: 'openai', modelo, calidad, input_fidelity: fidelidad || null, size: tamano.size,
           relleno: rect.width !== tamano.ancho || rect.height !== tamano.alto,
-          encuadre: comercial ? 'comercial' : 'original',
+          encuadre,
           // Dónde quedó la foto original dentro del resultado (fracciones 0–1).
-          region: comercial ? {
+          region: completo ? {
             left: rect.left / tamano.ancho, top: rect.top / tamano.alto,
             width: rect.width / tamano.ancho, height: rect.height / tamano.alto,
           } : null,
@@ -186,4 +198,4 @@ function crearProveedorOpenAI({
   };
 }
 
-module.exports = { MODELO_POR_DEFECTO, TAMANOS, MARGEN_RECOMPONER, elegirTamano, prepararLienzo, clasificarError, crearProveedorOpenAI };
+module.exports = { MODELO_POR_DEFECTO, TAMANOS, TAMANO_FIJO, MARGEN_RECOMPONER, elegirTamano, prepararLienzo, clasificarError, crearProveedorOpenAI };

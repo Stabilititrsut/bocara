@@ -29,10 +29,20 @@
 // caída), el trabajo termina en 'fallida' con un error_codigo que dice el
 // motivo exacto: nunca se "aprueba" una foto sin IA ni se aparenta una mejora.
 // La original nunca se toca: la mejorada es un archivo nuevo en Storage.
+//
+// Usos (mismo flujo, distinto encuadre, revisión y calidad mínima):
+//   publicacion  foto de Promoción / Tiempo limitado   bolsas/<negocio>_…
+//   perfil       foto de perfil / logo del restaurante negocios/<negocio>/perfil_…
+//   portada      portada / banner del restaurante      negocios/<negocio>/portada_…
+// El uso sale de la ruta en Storage (la valida crearTrabajo), así que no hace
+// falta columna nueva y un trabajo de perfil nunca sirve para una publicación.
+// Perfil y portada, además, pueden guardarse con la ORIGINAL ("usar mi
+// original") solo si esta pasó el análisis con IA y cumple la calidad mínima
+// de su uso (calidad_original.original_aceptable).
 const { ErrorProveedor } = require('./errores');
 const { prepararEntrada, validarResultado, ErrorValidacion } = require('./validacion');
 const { analizarCalidad, analizarRecuperable } = require('./calidad');
-const { crearRevisorIA, IRREPARABLES, INFIDELIDAD } = require('./revisionIA');
+const { crearRevisorIA, INFIDELIDAD, irreparablesDe } = require('./revisionIA');
 const { obtenerProveedor } = require('./proveedores');
 const pipeline = require('./pipeline');
 const { estadoIAImagen } = require('../iaEstado');
@@ -46,6 +56,21 @@ const INTERRUMPIDO_MS = 10 * 60 * 1000;
 const HUERFANO_MS = 20 * 1000;
 const ESPERA_REINTENTO_PROVEEDOR_MS = 3000;
 
+const USOS = Object.freeze({
+  publicacion: { carpeta: (negocioId) => `/bocara-images/bolsas/${negocioId}_`, encuadre: 'comercial', nivel: 'publicable' },
+  perfil: { carpeta: (negocioId) => `/bocara-images/negocios/${negocioId}/perfil_`, encuadre: 'perfil', nivel: 'perfil' },
+  portada: { carpeta: (negocioId) => `/bocara-images/negocios/${negocioId}/portada_`, encuadre: 'portada', nivel: 'portada' },
+});
+// Problemas de la revisión que impiden usar la original sin IA.
+const BLOQUEAN_ORIGINAL = new Set(['muy_oscura', 'borrosa', 'baja_calidad']);
+
+function usoDeUrl(url) {
+  try {
+    const m = /\/bocara-images\/negocios\/[^/]+\/(perfil|portada)_[^/]*$/.exec(new URL(url).pathname);
+    return m ? m[1] : 'publicacion';
+  } catch { return 'publicacion'; }
+}
+
 // Mensajes para el restaurante según error_codigo (el detalle técnico va aparte).
 const MENSAJES_FALLO = Object.freeze({
   ia_no_configurada: 'La mejora con IA no está configurada en el servidor.',
@@ -53,6 +78,7 @@ const MENSAJES_FALLO = Object.freeze({
   proveedor_sin_credito: 'La IA no pudo procesar la foto: la cuenta de OpenAI de Bocara no tiene créditos. Avísale al administrador para recargarla.',
   proveedor_clave: 'La IA no pudo procesar la foto: la clave de OpenAI del servidor no es válida. Avísale al administrador.',
   proveedor_modelo: 'La IA no pudo procesar la foto: el modelo configurado en el servidor no está disponible. Avísale al administrador.',
+  proveedor_no_soporta: 'La IA configurada en el servidor no admite fotos de perfil ni portada. Avísale al administrador.',
   validacion: 'La versión mejorada no se parecía lo suficiente a tu foto, así que no la usamos.',
   calidad_resultado: 'Aun después de mejorarla con IA, la foto no alcanzó la calidad mínima para Bocara.',
   fidelidad: 'La versión con IA cambió tu producto (por ejemplo, agregó o quitó ingredientes), así que no la usamos. Reintenta para generar otra versión.',
@@ -98,9 +124,13 @@ function pasoError(t) {
 // Lo que ve la app. `detalle` (técnico) solo cuando expone=true (desarrollo).
 function serializar(t, { expone = process.env.NODE_ENV !== 'production' } = {}) {
   if (!t) return null;
+  const uso = usoDeUrl(t.original_url);
   return {
     id: t.id,
+    uso,
     estado: t.estado,
+    // Perfil / portada: la original pasó el análisis y cumple la calidad mínima.
+    puede_usar_original: puedeUsarOriginal(t, uso),
     original_url: t.original_url,
     mejorada_url: t.estado === ESTADOS.LISTA ? t.mejorada_url : null,
     // Lista con la foto original (la mejorada no pasó y la original ya cumplía).
@@ -119,20 +149,27 @@ function serializar(t, { expone = process.env.NODE_ENV !== 'production' } = {}) 
   };
 }
 
-// ── Crear ───────────────────────────────────────────────────────────────────
-// La foto debe estar en NUESTRO Storage y en la carpeta del negocio
-// (routes/uploads.js nombra las fotos de publicaciones `bolsas/<negocio>_...`).
-function urlDelNegocio(url, negocioId, hosts) {
-  if (!pipeline.origenPermitido(url, hosts)) return false;
-  try { return new URL(url).pathname.includes(`/bocara-images/bolsas/${negocioId}_`); } catch { return false; }
+function puedeUsarOriginal(t, uso = usoDeUrl(t?.original_url)) {
+  return uso !== 'publicacion' && t?.calidad_original?.original_aceptable === true
+    && [ESTADOS.LISTA, ESTADOS.FALLIDA, ESTADOS.RECHAZADA].includes(t.estado);
 }
 
-async function crearTrabajo({ usuario, negocioId, imagenUrl }, {
+// ── Crear ───────────────────────────────────────────────────────────────────
+// La foto debe estar en NUESTRO Storage y en la carpeta del negocio para su
+// uso (routes/uploads.js: publicaciones `bolsas/<negocio>_...`, perfil y
+// portada `negocios/<negocio>/perfil_...` / `negocios/<negocio>/portada_...`).
+function urlDelNegocio(url, negocioId, hosts, uso = 'publicacion') {
+  if (!pipeline.origenPermitido(url, hosts)) return false;
+  try { return new URL(url).pathname.includes(USOS[uso].carpeta(negocioId)) && usoDeUrl(url) === uso; } catch { return false; }
+}
+
+async function crearTrabajo({ usuario, negocioId, imagenUrl, uso = 'publicacion' }, {
   cliente = db(), hosts = pipeline.hostsPermitidos(), ahora = Date.now(), procesar = true, deps,
 } = {}) {
+  if (!Object.hasOwn(USOS, uso)) return { ok: false, status: 400, error: 'uso inválido (publicacion, perfil o portada)' };
   if (typeof imagenUrl !== 'string' || !imagenUrl.trim()) return { ok: false, status: 400, error: 'imagen_url es requerida' };
   const url = imagenUrl.trim();
-  if (!urlDelNegocio(url, negocioId, hosts)) {
+  if (!urlDelNegocio(url, negocioId, hosts, uso)) {
     return { ok: false, status: 400, error: 'La foto debe subirse primero con la carga de imágenes de Bocara.' };
   }
 
@@ -153,7 +190,7 @@ async function crearTrabajo({ usuario, negocioId, imagenUrl }, {
     created_at: new Date(ahora).toISOString(), updated_at: new Date(ahora).toISOString(),
   }]).select().single();
   if (error) return errorTabla(error);
-  console.log('[IMAGEN_IA] %s imagen subida (negocio %s): trabajo creado', data.id, negocioId);
+  console.log('[IMAGEN_IA] %s imagen subida (negocio %s, uso %s): trabajo creado', data.id, negocioId, uso);
   if (procesar) programarTrabajo(data.id, { cliente, hosts, deps });
   return { ok: true, trabajo: data };
 }
@@ -195,7 +232,9 @@ async function procesarTrabajo(id, {
     proveedor: null, modelo: null, revision_ia: null, calidad_resultado: null,
   }))) return null;
   const inicio = Date.now();
-  console.log('[IMAGEN_IA] %s analizando calidad (intento %d)', id, (t.intentos || 0) + 1);
+  const uso = usoDeUrl(t.original_url);
+  const cfg = USOS[uso];
+  console.log('[IMAGEN_IA] %s analizando calidad (%s, intento %d)', id, uso, (t.intentos || 0) + 1);
 
   let estadoActual = ESTADOS.ANALIZANDO;
   const fallar = async (codigo, detalle, extra = {}) => {
@@ -213,6 +252,9 @@ async function procesarTrabajo(id, {
     if (deps.configError) return await fallar('ia_no_configurada', deps.configError);
     const { proveedor, revisor } = deps;
     if (!proveedor?.ia || !revisor) return await fallar('ia_no_configurada', 'proveedor sin IA real');
+    if (uso !== 'publicacion' && !proveedor.encuadres?.has(cfg.encuadre)) {
+      return await fallar('proveedor_no_soporta', `${proveedor.nombre} no soporta el encuadre ${cfg.encuadre}`);
+    }
 
     // 1. Analizar la original: solo se rechaza lo irreparable.
     if (!pipeline.origenPermitido(t.original_url, hosts)) return await fallar('descarga', 'origen no permitido');
@@ -220,19 +262,20 @@ async function procesarTrabajo(id, {
     try { original = (await descargar(t.original_url)).buffer; } catch (err) { return await fallar('descarga', err.message); }
     if (!original?.length || original.length > pipeline.MAX_BYTES_ORIGINAL) return await fallar('descarga', 'imagen vacía o demasiado grande');
 
-    const calidad = await analizarRecuperable(original);
+    const calidad = await analizarRecuperable(original, { nivel: uso === 'publicacion' ? 'original' : cfg.nivel });
     console.log('[IMAGEN_IA] %s calidad original: %s', id, JSON.stringify(calidad.metricas));
     if (!calidad.ok) return await rechazar(calidad.motivos, { calidad_original: calidad.metricas });
     const prep = await prepararEntrada(original);
     let revision;
     try {
-      revision = await conReintento(() => revisor.revisar(prep.buffer, { modo: 'original' }), dormir);
+      revision = await conReintento(() => revisor.revisar(prep.buffer, { modo: 'original', uso }), dormir);
     } catch (err) {
       if (err instanceof ErrorProveedor) return await fallar(codigoProveedor(err), err.message, { calidad_original: calidad.metricas });
       throw err;
     }
     if (revision.irreparable) {
-      return await rechazar(revision.problemas.filter((p) => IRREPARABLES.has(p.codigo)), {
+      const irreparables = irreparablesDe(uso);
+      return await rechazar(revision.problemas.filter((p) => irreparables.has(p.codigo)), {
         calidad_original: calidad.metricas,
         revision_ia: { modelo: revisor.modelo, resumen: revision.resumen, problemas: revision.problemas.map((p) => p.codigo) },
       });
@@ -240,10 +283,17 @@ async function procesarTrabajo(id, {
     // Lo que la IA debe corregir: métricas técnicas + lo que vio la revisión.
     const problemasPrevios = [...new Set([...calidad.problemas, ...revision.problemas].map((p) => p.codigo))];
     console.log('[IMAGEN_IA] %s original recuperable; a corregir con IA: [%s]', id, problemasPrevios.join(','));
+    // Perfil / portada: ¿la original se podría usar tal cual si la IA no sirve?
+    let calidadOriginal = calidad.metricas;
+    // (calidad ya se midió con los umbrales del uso: sin problemas = cumple el mínimo).
+    if (uso !== 'publicacion') {
+      const aceptable = !calidad.problemas.length && !revision.problemas.some((p) => BLOQUEAN_ORIGINAL.has(p.codigo));
+      calidadOriginal = { ...calidad.metricas, original_aceptable: aceptable };
+    }
 
     // 2. Mejorar con IA (siempre que la original sea recuperable).
     if (!(await mover(cliente, id, ESTADOS.ANALIZANDO, {
-      estado: ESTADOS.MEJORANDO, calidad_original: calidad.metricas,
+      estado: ESTADOS.MEJORANDO, calidad_original: calidadOriginal,
       revision_ia: { modelo: revisor.modelo, resumen: revision.resumen, apta: revision.apta, problemas_previos: problemasPrevios },
       proveedor: proveedor.nombre, modelo: proveedor.modelo || null,
     }))) return null;
@@ -258,7 +308,8 @@ async function procesarTrabajo(id, {
       resultado = await conReintento(() => proveedor.mejorar({
         buffer: prep.buffer, urlEntrada, urlOriginal: t.original_url,
         // Comercial: formato estándar (≥ 1024 px) con el fondo extendido si hace falta.
-        contexto: { trabajo: id, problemas: problemasPrevios, encuadre: 'comercial' },
+        // Perfil: cuadrado; portada: horizontal (proveedorOpenAI.js).
+        contexto: { trabajo: id, uso, problemas: problemasPrevios, encuadre: cfg.encuadre },
       }), dormir);
     } catch (err) {
       return await fallar(codigoProveedor(err), err.message);
@@ -279,7 +330,7 @@ async function procesarTrabajo(id, {
     }
     let calidadFinal = null;
     if (!fallo) {
-      calidadFinal = await analizarCalidad(resultado.buffer, { nivel: 'publicable' });
+      calidadFinal = await analizarCalidad(resultado.buffer, { nivel: cfg.nivel });
       if (!calidadFinal.ok) {
         fallo = { codigo: 'calidad_resultado', detalle: calidadFinal.motivos.map((m) => m.codigo).join(','),
           motivos: calidadFinal.motivos, metricas: { ...similitud, ...calidadFinal.metricas } };
@@ -290,7 +341,7 @@ async function procesarTrabajo(id, {
     if (!fallo) {
       const metricas = { ...similitud, ...calidadFinal.metricas, meta_proveedor: resultado.meta || null };
       try {
-        revisionFinal = await conReintento(() => revisor.revisar(resultado.buffer, { modo: 'resultado', original: prep.buffer }), dormir);
+        revisionFinal = await conReintento(() => revisor.revisar(resultado.buffer, { modo: 'resultado', original: prep.buffer, uso }), dormir);
       } catch (err) {
         if (err instanceof ErrorProveedor) return await fallar(codigoProveedor(err), err.message, { calidad_resultado: metricas });
         throw err;
@@ -309,7 +360,7 @@ async function procesarTrabajo(id, {
       console.warn('[IMAGEN_IA] %s la mejorada no pasó la validación (%s): %s', id, fallo.codigo, fallo.detalle);
       // Fallback seguro: si la ORIGINAL ya cumplía todo (sin problemas en el
       // análisis ni en la revisión), se publica la original tal cual.
-      if (!problemasPrevios.length && (await analizarCalidad(original, { nivel: 'publicable' })).ok) {
+      if (!problemasPrevios.length && (await analizarCalidad(original, { nivel: cfg.nivel })).ok) {
         await mover(cliente, id, ESTADOS.VALIDANDO, {
           estado: ESTADOS.LISTA, mejorada_url: t.original_url, revision_ia: revisionIA,
           calidad_resultado: { ...fallo.metricas, fallback_original: true, motivo_fallback: fallo.detalle },
@@ -409,7 +460,9 @@ async function trabajoParaPublicar(trabajoId, { usuario, negocioId, bolsaId = nu
   if (!trabajoId || typeof trabajoId !== 'string') return rechazo(400, 'IMAGEN_NO_PROCESADA');
   const { data: t, error } = await cliente.from('trabajos_imagen').select('*').eq('id', trabajoId).maybeSingle();
   if (error) return errorTabla(error);
-  if (!t || String(t.negocio_id) !== String(negocioId) || (usuario.rol !== 'admin' && t.usuario_id !== usuario.id)) {
+  // Un trabajo de foto de perfil o portada nunca autoriza una publicación.
+  if (!t || String(t.negocio_id) !== String(negocioId) || (usuario.rol !== 'admin' && t.usuario_id !== usuario.id)
+    || usoDeUrl(t.original_url) !== 'publicacion') {
     return rechazo(400, 'IMAGEN_NO_PROCESADA');
   }
   if (EN_CURSO.has(t.estado)) return rechazo(409, 'IMAGEN_EN_PROCESO');
@@ -420,20 +473,56 @@ async function trabajoParaPublicar(trabajoId, { usuario, negocioId, bolsaId = nu
   return { ok: true, trabajo: t };
 }
 
-// Columnas de bolsas que fija una foto validada.
-// Con fallback a la original no hay mejorada que guardar: queda 'descartada'
-// (se muestra la original, que ya pasó el análisis y la revisión IA).
-function columnasImagenValidada(t) {
-  const usaOriginal = !!t.calidad_resultado?.fallback_original;
+// ── Regla de la foto de perfil / portada del restaurante ───────────────────
+const CODIGOS_NEGOCIO = Object.freeze({
+  IMAGEN_NO_PROCESADA: 'La imagen debe pasar por la mejora con IA antes de guardarla. Sube o cambia la foto.',
+  IMAGEN_EN_PROCESO: 'La imagen todavía se está procesando. Espera a que esté lista para guardar.',
+  IMAGEN_RECHAZADA: 'Esta imagen no cumple la calidad mínima para Bocara. Cambia la foto.',
+  IMAGEN_FALLIDA: 'No se pudo mejorar la imagen. Reintenta o cambia la foto.',
+  ORIGINAL_NO_PERMITIDA: 'Tu imagen original no cumple la calidad mínima para usarla sin la mejora con IA. Reintenta o cambia la foto.',
+});
+const rechazoNegocio = (status, codigo) => ({ ok: false, status, codigo, error: CODIGOS_NEGOCIO[codigo] });
+
+// ¿Este trabajo autoriza la foto de perfil o la portada del negocio?
+// usarOriginal: el restaurante elige su original (si la IA falló, la rechazó
+// o prefiere la suya); solo se permite si la original pasó el análisis y
+// cumple la calidad mínima del uso. → { ok, trabajo, usarOriginal } | rechazo
+async function trabajoParaNegocio(trabajoId, { usuario, negocioId, uso, usarOriginal = false }, { cliente = db() } = {}) {
+  if (!trabajoId || typeof trabajoId !== 'string' || !['perfil', 'portada'].includes(uso)) return rechazoNegocio(400, 'IMAGEN_NO_PROCESADA');
+  const { data: t, error } = await cliente.from('trabajos_imagen').select('*').eq('id', trabajoId).maybeSingle();
+  if (error) return errorTabla(error);
+  if (!t || String(t.negocio_id) !== String(negocioId) || (usuario.rol !== 'admin' && t.usuario_id !== usuario.id)
+    || usoDeUrl(t.original_url) !== uso) {
+    return rechazoNegocio(400, 'IMAGEN_NO_PROCESADA');
+  }
+  if (EN_CURSO.has(t.estado)) return rechazoNegocio(409, 'IMAGEN_EN_PROCESO');
+  if (usarOriginal) {
+    return puedeUsarOriginal(t, uso) ? { ok: true, trabajo: t, usarOriginal: true } : rechazoNegocio(422, 'ORIGINAL_NO_PERMITIDA');
+  }
+  if (t.estado === ESTADOS.RECHAZADA) return rechazoNegocio(422, 'IMAGEN_RECHAZADA');
+  if (t.estado === ESTADOS.FALLIDA) return rechazoNegocio(422, 'IMAGEN_FALLIDA');
+  if (t.estado !== ESTADOS.LISTA || !t.mejorada_url) return rechazoNegocio(400, 'IMAGEN_NO_PROCESADA');
+  return { ok: true, trabajo: t, usarOriginal: false };
+}
+
+// Columnas de imagen (bolsas o portada de negocios) que fija una foto validada.
+// Con fallback a la original, o si el restaurante eligió su original, queda
+// 'descartada' (se muestra la original, que ya pasó el análisis y la revisión
+// IA); la mejorada, si existe, se conserva para poder volver a ella.
+function columnasImagenValidada(t, { usarOriginal = false } = {}) {
+  const fallback = !!t.calidad_resultado?.fallback_original;
+  const hayMejorada = t.estado === ESTADOS.LISTA && !!t.mejorada_url && !fallback;
+  const original = usarOriginal || fallback;
   return {
-    imagen_url: t.mejorada_url,
+    imagen_url: original ? t.original_url : t.mejorada_url,
     imagen_original_url: t.original_url,
-    imagen_mejorada_url: usaOriginal ? null : t.mejorada_url,
-    estado_procesamiento_imagen: usaOriginal ? 'descartada' : 'completada',
+    imagen_mejorada_url: hayMejorada ? t.mejorada_url : null,
+    estado_procesamiento_imagen: original ? 'descartada' : 'completada',
     proveedor_imagen_ia: t.proveedor || null,
     error_procesamiento_imagen: null,
     imagen_procesamiento_meta: {
-      trabajo_id: t.id, modelo: t.modelo || null, ia: true,
+      trabajo_id: t.id, uso: usoDeUrl(t.original_url), modelo: t.modelo || null, ia: true,
+      original_aceptable: original || t.calidad_original?.original_aceptable === true,
       calidad_original: t.calidad_original || null, calidad_resultado: t.calidad_resultado || null,
       revision_ia: t.revision_ia || null,
     },
@@ -454,8 +543,9 @@ async function marcarUsado(trabajoId, bolsaId, { cliente = db() } = {}) {
 }
 
 module.exports = {
-  ESTADOS, EN_CURSO, MENSAJES_FALLO, CODIGOS_PUBLICAR,
-  dependenciasIA, serializar, pasoError, codigoProveedor, crearTrabajo, procesarTrabajo, programarTrabajo, esperarTrabajosEnCurso,
+  ESTADOS, EN_CURSO, USOS, MENSAJES_FALLO, CODIGOS_PUBLICAR, CODIGOS_NEGOCIO,
+  dependenciasIA, serializar, pasoError, codigoProveedor, usoDeUrl, puedeUsarOriginal,
+  crearTrabajo, procesarTrabajo, programarTrabajo, esperarTrabajosEnCurso,
   procesarTrabajosPendientes, leerTrabajoPropio, reintentarTrabajo,
-  trabajoParaPublicar, columnasImagenValidada, bolsaTieneImagenValidada, marcarUsado,
+  trabajoParaPublicar, trabajoParaNegocio, columnasImagenValidada, bolsaTieneImagenValidada, marcarUsado,
 };

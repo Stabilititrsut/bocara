@@ -15,7 +15,11 @@ const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
 const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
+const { trabajoParaNegocio, columnasImagenValidada, CODIGOS_NEGOCIO } = require('../services/imagenes/trabajos');
 const router = express.Router();
+
+const RE_COLUMNA_IMAGEN = /imagen_original_url|imagen_mejorada_url|estado_procesamiento_imagen|proveedor_imagen_ia|imagen_procesamiento_meta|imagen_procesada_at|error_procesamiento_imagen|logo_url/;
+const MENSAJE_MIGRACION_IMAGEN = 'No se puede guardar la imagen validada: falta aplicar la migración 20261006100000_pipeline_imagenes.sql (y logo_url de sql/schema_fix.sql).';
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
 // deben incluir datos sensibles (dpi, dpi_foto_url, datos_bancarios, nit, motivo_rechazo, etc.).
@@ -509,7 +513,7 @@ router.get('/mi-negocio/liquidaciones/:id/comprobante', authMiddleware, async (r
 
 // PUT /api/negocios/:id — actualizar negocio con re-geocodificación si cambia dirección
 router.put('/:id', authMiddleware, async (req, res) => {
-  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud,imagen_url').eq('id', req.params.id).single();
+  const { data: negocio } = await supabase.from('negocios').select('propietario_id,direccion,zona,ciudad,latitud,longitud,imagen_url,estado_verificacion').eq('id', req.params.id).single();
   if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
   if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin')
     return res.status(403).json({ error: 'No autorizado' });
@@ -566,6 +570,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
     fotoNueva = esFotoNueva(updates.imagen_url, { ...negocio, ...(img || {}) });
     if (!fotoNueva) delete updates.imagen_url;
   }
+  // Fuera del registro (negocio pendiente, que sube su primera foto aquí), la
+  // portada del restaurante solo se cambia con una imagen validada por IA:
+  // PUT /api/negocios/:id/imagen. El admin conserva la vía directa.
+  if (fotoNueva && req.usuario.rol !== 'admin' && negocio.estado_verificacion !== 'pendiente') {
+    return res.status(409).json({ error: CODIGOS_NEGOCIO.IMAGEN_NO_PROCESADA, codigo: 'IMAGEN_NO_PROCESADA' });
+  }
   const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
   if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
     return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
@@ -591,6 +601,41 @@ router.put('/:id', authMiddleware, async (req, res) => {
 
   if (error) return res.status(400).json({ error: error.message });
   if (fotoNueva) programarMejora('negocios', req.params.id, data.imagen_url);
+  res.json(data);
+});
+
+// PUT /api/negocios/:id/imagen — foto de perfil o portada del restaurante.
+//   { tipo: 'perfil' | 'portada', imagen_trabajo_id, usar_original? }
+// La imagen pasó antes por el mismo pipeline de IA que las publicaciones
+// (services/imagenes/trabajos.js, uso perfil/portada). Aquí se exige su
+// trabajo 'lista' (o la original, si cumple la calidad mínima). La original
+// nunca se pisa: es otro archivo en Storage y queda en trabajos_imagen.
+//   perfil  → logo_url
+//   portada → imagen_url + columnas del pipeline (original / mejorada / estado)
+router.put('/:id/imagen', authMiddleware, async (req, res) => {
+  const tipo = req.body?.tipo;
+  if (tipo !== 'perfil' && tipo !== 'portada') return res.status(400).json({ error: 'tipo debe ser "perfil" o "portada"' });
+  if (req.usuario.rol !== 'restaurante' && req.usuario.rol !== 'admin') return res.status(403).json({ error: 'No autorizado' });
+  const { data: negocio, error: errNegocio } = await supabase.from('negocios').select('id,propietario_id').eq('id', req.params.id).maybeSingle();
+  if (errNegocio) return res.status(500).json({ error: errNegocio.message });
+  if (!negocio) return res.status(404).json({ error: 'Negocio no encontrado' });
+  if (negocio.propietario_id !== req.usuario.id && req.usuario.rol !== 'admin') return res.status(403).json({ error: 'No autorizado' });
+
+  const r = await trabajoParaNegocio(req.body?.imagen_trabajo_id, {
+    usuario: req.usuario, negocioId: negocio.id, uso: tipo, usarOriginal: req.body?.usar_original === true,
+  });
+  if (!r.ok) return res.status(r.status || 400).json({ error: r.error, ...(r.codigo ? { codigo: r.codigo } : {}) });
+
+  const updates = tipo === 'perfil'
+    ? { logo_url: r.usarOriginal ? r.trabajo.original_url : r.trabajo.mejorada_url }
+    : columnasImagenValidada(r.trabajo, { usarOriginal: r.usarOriginal });
+  const { data, error } = await supabase.from('negocios').update(updates).eq('id', negocio.id).select().single();
+  if (error && RE_COLUMNA_IMAGEN.test(error.message || '')) {
+    console.error('[NEGOCIO IMAGEN] %s', MENSAJE_MIGRACION_IMAGEN);
+    return res.status(503).json({ error: MENSAJE_MIGRACION_IMAGEN, codigo: 'MIGRACION_PENDIENTE' });
+  }
+  if (error) return res.status(400).json({ error: error.message });
+  console.log('[NEGOCIO IMAGEN] %s %s guardada (trabajo %s%s)', negocio.id, tipo, r.trabajo.id, r.usarOriginal ? ', original' : '');
   res.json(data);
 });
 
