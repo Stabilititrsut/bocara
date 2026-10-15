@@ -15,7 +15,6 @@ const { esMesValido, urlFirmadaComprobante, consolidarPagosPorMes } = require('.
 const {
   resumirFinanzas, cargarBolsasPorId, resolverPeriodoFinanciero, aplicarRango,
 } = require('../services/desgloseFinanciero');
-const { programarMejora, esFotoNueva } = require('../services/imagenes/pipeline');
 const router = express.Router();
 
 // Campos públicos de un negocio — estos endpoints no llevan auth, así que nunca
@@ -359,7 +358,6 @@ router.post('/', authMiddleware, async (req, res) => {
     .select()
     .single();
   if (error) return res.status(400).json({ error: error.message });
-  programarMejora('negocios', data.id, data.imagen_url);
   res.status(201).json(data);
 });
 
@@ -576,16 +574,9 @@ router.put('/:id', authMiddleware, async (req, res) => {
   // quedar activo por esta vía.
   const errorFoto = normalizarFotoEnEdicion(updates, negocio.imagen_url, MENSAJE_FOTO_NEGOCIO);
   if (errorFoto) return res.status(400).json({ error: errorFoto });
-  // Pipeline de imágenes: la original/mejorada de la foto actual no es una
-  // foto nueva. Lectura aparte y tolerante: sin la migración aplicada, las
-  // columnas no existen y se compara solo contra imagen_url.
-  let fotoNueva = false;
-  if (updates.imagen_url !== undefined && updates.imagen_url !== negocio.imagen_url) {
-    const { data: img } = await supabase.from('negocios')
-      .select('imagen_original_url, imagen_mejorada_url').eq('id', req.params.id).maybeSingle();
-    fotoNueva = esFotoNueva(updates.imagen_url, { ...negocio, ...(img || {}) });
-    if (!fotoNueva) delete updates.imagen_url;
-  }
+  // La foto del negocio (registro, perfil, portada) se guarda tal como la
+  // subió el restaurante: la IA de imágenes es solo para publicaciones
+  // (Tiempo limitado / Promociones, services/imagenes/trabajos.js).
   const fotoResultante = updates.imagen_url !== undefined ? updates.imagen_url : negocio.imagen_url;
   if ((updates.activo === true || updates.activo === 'true') && !tieneFoto(fotoResultante)) {
     return res.status(400).json({ error: MENSAJE_FOTO_NEGOCIO });
@@ -610,7 +601,6 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const { data, error } = await supabase.from('negocios').update(updates).eq('id', req.params.id).select().single();
 
   if (error) return res.status(400).json({ error: error.message });
-  if (fotoNueva) programarMejora('negocios', req.params.id, data.imagen_url);
   res.json(data);
 });
 

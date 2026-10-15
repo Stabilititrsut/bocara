@@ -2,7 +2,7 @@
 //   POST /api/imagenes/:tipo/:id/reintentar     (fallida o sin procesar → cola)
 //   POST /api/imagenes/:tipo/:id/usar-original  (completada → descartada)
 //   POST /api/imagenes/:tipo/:id/usar-mejorada  (descartada → completada)
-// :tipo = publicacion (tabla bolsas) | negocio (tabla negocios).
+// :tipo = publicacion (tabla bolsas). La foto del negocio no pasa por IA.
 // Solo el dueño del negocio o un admin.
 // Publicaciones: "reintentar" no aplica. Su foto se valida ANTES de guardar con
 // un trabajo (/trabajos, más abajo); reprocesarla aquí saltaría el análisis de
@@ -14,7 +14,7 @@ const pipeline = require('../services/imagenes/pipeline');
 const trabajos = require('../services/imagenes/trabajos');
 
 const router = express.Router();
-const TABLA_POR_TIPO = { publicacion: 'bolsas', negocio: 'negocios' };
+const TABLA_POR_TIPO = { publicacion: 'bolsas' };
 const ACCIONES = {
   reintentar: pipeline.reintentar,
   'usar-original': pipeline.usarOriginal,
@@ -24,9 +24,7 @@ const ACCIONES = {
 async function puedeEditar(usuario, tabla, id) {
   if (usuario.rol === 'admin') return { ok: true };
   if (usuario.rol !== 'restaurante') return { ok: false, status: 403 };
-  const negocioId = tabla === 'negocios'
-    ? id
-    : (await supabase.from('bolsas').select('negocio_id').eq('id', id).maybeSingle()).data?.negocio_id;
+  const negocioId = (await supabase.from(tabla).select('negocio_id').eq('id', id).maybeSingle()).data?.negocio_id;
   if (!negocioId) return { ok: false, status: 404 };
   const { data: negocio } = await supabase.from('negocios').select('propietario_id').eq('id', negocioId).maybeSingle();
   if (!negocio) return { ok: false, status: 404 };
