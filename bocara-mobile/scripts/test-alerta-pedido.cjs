@@ -6,7 +6,8 @@
 //   · hooks/use-timbre-cocina.ts — montado con un doble de React que SÍ corre
 //     efectos: suena en la primera carga, se calla al aceptar, respeta la
 //     preferencia "Silenciado", pide/suelta Wake Lock.
-//   · Cableado: el layout monta el hook; pedidos.tsx publica su lista, dice
+//   · Cableado: el layout monta el hook (vía TimbreCocinaProvider) sin barra
+//     visible; pedidos.tsx pinta el control, publica su lista, dice
 //     "Aceptar pedido" y confirma antes de cancelar.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -466,10 +467,21 @@ test('hook: sin Wake Lock en el navegador no falla', async () => {
 
 // ── 7. Cableado en las pantallas ──────────────────────────────────────────────
 
-test('restaurante/_layout monta el timbre global y su barra', () => {
+test('restaurante/_layout monta el timbre global (suena en cualquier pestaña) SIN barra visible', () => {
   const src = leer('app/restaurante/_layout.tsx');
-  assert.match(src, /const timbre = useTimbreCocina\(\);/);
-  assert.match(src, /<BarraTimbreCocina timbre=\{timbre\}/);
+  assert.match(src, /<TimbreCocinaProvider>\s*<RestauranteTabs \/>\s*<\/TimbreCocinaProvider>/,
+    'el proveedor envuelve TODAS las pestañas');
+  assert.doesNotMatch(src, /BarraTimbreCocina/, 'Disponibles, Ganancias, Mi negocio… quedan limpias');
+  assert.match(src, /tabBarBadge: pendientes > 0 \? pendientes : undefined/, 'pedidos por aceptar en la pestaña Pedidos');
+  const ctx = leer('src/context/TimbreCocinaContext.tsx');
+  assert.match(ctx, /const timbre = useTimbreCocina\(\);/, 'el proveedor es quien ejecuta el hook (una sola instancia)');
+});
+
+test('restaurante/pedidos: el control del timbre vive aquí y lee la instancia del layout', () => {
+  const src = leer('app/restaurante/pedidos.tsx');
+  assert.match(src, /const timbre = useTimbreCocinaPanel\(\);/);
+  assert.match(src, /\{timbre && <BarraTimbreCocina timbre=\{timbre\} \/>\}/);
+  assert.doesNotMatch(src, /useTimbreCocina\(\)/, 'no monta un segundo timbre (doble polling / doble sonido)');
 });
 
 test('barra: textos del control y del banner de activación', () => {

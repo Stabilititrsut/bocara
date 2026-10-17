@@ -1,5 +1,7 @@
-// Timbre de cocina global del panel del restaurante (app/restaurante/_layout.tsx):
-// acompaña al personal en Dashboard, Pedidos o cualquier pestaña.
+// Timbre de cocina global del panel del restaurante. Se ejecuta UNA vez, en
+// TimbreCocinaProvider (src/context/TimbreCocinaContext.tsx, montado en
+// app/restaurante/_layout.tsx): suena en Dashboard, Pedidos o cualquier
+// pestaña. Su control visible se pinta solo en app/restaurante/pedidos.tsx.
 //
 //   · Suena mientras haya pedidos 'confirmado' (pagados, sin aceptar) —
 //     también en la primera carga— y se calla solo cuando ya no queda ninguno.

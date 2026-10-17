@@ -13,6 +13,8 @@ import { useRealtime } from '@/src/context/RealtimeContext';
 import { hoyGuatemala, fechaGuatemalaDe } from '@/src/utils/horarioRecogida';
 import { detectarNuevosConfirmados, publicarPedidosRestaurante } from '@/src/utils/alertaPedido';
 import ConfirmarAccionModal from '@/components/ConfirmarAccionModal';
+import BarraTimbreCocina from '@/components/BarraTimbreCocina';
+import { useTimbreCocinaPanel } from '@/src/context/TimbreCocinaContext';
 
 // 'cancelado' fuera de las pestañas a propósito: los pedidos cancelados/no
 // confirmados no deben mostrarse en ningún panel — ver filtro en cargar().
@@ -128,6 +130,8 @@ export default function PedidosRestauranteScreen() {
   const [cancelarPedido, setCancelarPedido] = useState<any>(null);
   const [cancelando, setCancelando] = useState(false);
   const [errorCancelar, setErrorCancelar] = useState('');
+  // Estado del timbre global (corre en el layout); aquí solo se controla.
+  const timbre = useTimbreCocinaPanel();
 
   const cargar = useCallback(async () => {
     try {
@@ -273,6 +277,10 @@ export default function PedidosRestauranteScreen() {
           )}
         </View>
       </View>
+
+      {/* Control del timbre de cocina: solo en esta pantalla. El timbre suena
+          igual en cualquier pestaña mientras haya pedidos por aceptar. */}
+      {timbre && <BarraTimbreCocina timbre={timbre} />}
 
       {avisoNuevos > 0 && (
         <TouchableOpacity style={s.avisoNuevos} onPress={() => { setFiltro('confirmado'); setAvisoNuevos(0); }}>
