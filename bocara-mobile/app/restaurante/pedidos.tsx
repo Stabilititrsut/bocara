@@ -11,7 +11,8 @@ import { Colors } from '@/constants/Colors';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRealtime } from '@/src/context/RealtimeContext';
 import { hoyGuatemala, fechaGuatemalaDe } from '@/src/utils/horarioRecogida';
-import { detectarNuevosConfirmados, reproducirAlertaNuevoPedido, prepararAudioWeb } from '@/src/utils/alertaPedido';
+import { detectarNuevosConfirmados, publicarPedidosRestaurante } from '@/src/utils/alertaPedido';
+import ConfirmarAccionModal from '@/components/ConfirmarAccionModal';
 
 // 'cancelado' fuera de las pestañas a propósito: los pedidos cancelados/no
 // confirmados no deben mostrarse en ningún panel — ver filtro en cargar().
@@ -124,6 +125,9 @@ export default function PedidosRestauranteScreen() {
   const vistosRef = useRef<Set<string> | null>(null);
   const [avisoNuevos, setAvisoNuevos] = useState(0);
   const avisoTimerRef = useRef<any>(null);
+  const [cancelarPedido, setCancelarPedido] = useState<any>(null);
+  const [cancelando, setCancelando] = useState(false);
+  const [errorCancelar, setErrorCancelar] = useState('');
 
   const cargar = useCallback(async () => {
     try {
@@ -132,14 +136,17 @@ export default function PedidosRestauranteScreen() {
       // cancelados (un pedido puede pagarse y luego cancelarse) — esta pantalla
       // nunca debe mostrarlos.
       const reales = (res.data || []).filter((p: any) => p.estado !== 'cancelado');
-      // Alerta sonora + vibración por cada tanda de confirmados nuevos (polling,
-      // realtime o pull-to-refresh). El conjunto se actualiza de forma síncrona:
-      // dos cargas que se cruzan no hacen sonar dos veces el mismo pedido.
+      // El SONIDO es del timbre de cocina global (hooks/use-timbre-cocina.ts,
+      // en el layout): suena mientras haya 'confirmado'. Se le pasa cada lista
+      // cargada aquí —incluida la de justo después de aceptar o cancelar— para
+      // que se calle al instante, sin esperar a su propio polling.
+      publicarPedidosRestaurante(reales);
+      // Aviso visual por cada tanda de confirmados nuevos (polling, realtime o
+      // pull-to-refresh). El conjunto se actualiza de forma síncrona: dos
+      // cargas que se cruzan no avisan dos veces del mismo pedido.
       const { nuevos, vistos } = detectarNuevosConfirmados<any>(vistosRef.current, reales);
       vistosRef.current = vistos;
       if (nuevos.length > 0) {
-        reproducirAlertaNuevoPedido(nuevos.length, nuevos[0].codigo_recogida);
-        // Aviso visual: respaldo si el navegador bloqueó el audio.
         setAvisoNuevos((n) => n + nuevos.length);
         clearTimeout(avisoTimerRef.current);
         avisoTimerRef.current = setTimeout(() => setAvisoNuevos(0), 8000);
@@ -150,8 +157,6 @@ export default function PedidosRestauranteScreen() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  // Web: desbloquea el audio con el primer toque en la página (autoplay).
-  useEffect(() => prepararAudioWeb(), []);
   useEffect(() => () => clearTimeout(avisoTimerRef.current), []);
 
   // Respaldo web para detectar pedidos y cambios aunque el push no esté disponible.
@@ -176,6 +181,32 @@ export default function PedidosRestauranteScreen() {
       // panel deje de mostrar el estado viejo en vez de solo la alerta.
       Alert.alert('Error', e.message || 'No se pudo actualizar el pedido.');
       if (e?.status === 409) cargar();
+    }
+  }
+
+  // Cancelar un pedido pagado no se hace de un solo toque: el ✕ queda junto a
+  // "Aceptar pedido" y un roce lo cancelaba sin preguntar. Modal propio porque
+  // Alert.alert con botones no muestra nada en web.
+  function pedirCancelacion(p: any) {
+    setErrorCancelar('');
+    setCancelarPedido(p);
+  }
+
+  async function confirmarCancelacion() {
+    if (!cancelarPedido) return;
+    setCancelando(true);
+    setErrorCancelar('');
+    try {
+      await pedidosAPI.actualizarEstado(cancelarPedido.id, 'cancelado');
+      setCancelarPedido(null);
+      cargar();
+    } catch (e: any) {
+      // El modal queda abierto con el error real; un 409 (ya cambió por otra
+      // vía) refresca la lista igual que cambiarEstado.
+      setErrorCancelar(e?.message || 'No se pudo cancelar el pedido.');
+      if (e?.status === 409) cargar();
+    } finally {
+      setCancelando(false);
     }
   }
 
@@ -300,10 +331,11 @@ export default function PedidosRestauranteScreen() {
             </View>
             {p.estado === 'confirmado' && (
               <View style={{ flexDirection: 'row', gap: 8 }}>
+                {/* Aceptar = confirmado → en_preparacion; es lo que calla el timbre. */}
                 <TouchableOpacity style={[s.btnListo, { flex: 1, backgroundColor: '#7C3AED' }]} onPress={() => cambiarEstado(p.id, 'en_preparacion')}>
-                  <Text style={s.btnListoText}>👨‍🍳 En preparación</Text>
+                  <Text style={s.btnListoText}>✅ Aceptar pedido</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.error, paddingHorizontal: 14 }]} onPress={() => cambiarEstado(p.id, 'cancelado')}>
+                <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.error, paddingHorizontal: 14 }]} onPress={() => pedirCancelacion(p)} accessibilityLabel="Cancelar pedido">
                   <Text style={s.btnListoText}>✕</Text>
                 </TouchableOpacity>
               </View>
@@ -313,7 +345,7 @@ export default function PedidosRestauranteScreen() {
                 <TouchableOpacity style={[s.btnListo, { flex: 1 }]} onPress={() => cambiarEstado(p.id, 'listo')}>
                   <Text style={s.btnListoText}>✓ Marcar como listo</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.error, paddingHorizontal: 14 }]} onPress={() => cambiarEstado(p.id, 'cancelado')}>
+                <TouchableOpacity style={[s.btnListo, { backgroundColor: Colors.error, paddingHorizontal: 14 }]} onPress={() => pedirCancelacion(p)} accessibilityLabel="Cancelar pedido">
                   <Text style={s.btnListoText}>✕</Text>
                 </TouchableOpacity>
               </View>
@@ -327,6 +359,20 @@ export default function PedidosRestauranteScreen() {
         ))}
         <View style={{ height: 20 }} />
       </ScrollView>
+
+      <ConfirmarAccionModal
+        visible={!!cancelarPedido}
+        titulo="Cancelar pedido"
+        mensaje={`¿Seguro que deseas cancelar el pedido ${cancelarPedido?.codigo_recogida || ''}?`}
+        detalle="El cliente ya pagó: el pedido se cancelará y no podrá recogerse. Esta acción no se puede deshacer."
+        textoConfirmar="Sí, cancelar pedido"
+        tono="peligro"
+        tema="claro"
+        procesando={cancelando}
+        error={errorCancelar}
+        onConfirmar={confirmarCancelacion}
+        onCancelar={() => setCancelarPedido(null)}
+      />
 
       {CameraView && (
         <QRScannerModal

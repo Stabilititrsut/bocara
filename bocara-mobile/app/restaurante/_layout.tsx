@@ -1,6 +1,8 @@
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import { Text, View } from 'react-native';
 import { NotificacionesRestauranteProvider, useNotificacionesRestaurante } from '@/src/context/NotificacionesRestauranteContext';
+import { useTimbreCocina } from '@/hooks/use-timbre-cocina';
+import BarraTimbreCocina from '@/components/BarraTimbreCocina';
 
 const PRIMARY = '#0A2A2A';
 const GOLD    = '#C8960C';
@@ -28,25 +30,33 @@ export default function RestauranteLayout() {
 
 function RestauranteTabs() {
   const { sinLeer } = useNotificacionesRestaurante();
+  // Timbre de cocina en el layout, no en la pestaña Pedidos: el panel abre en
+  // Dashboard y el personal puede estar en cualquier pestaña cuando entra un
+  // pedido pagado.
+  const timbre = useTimbreCocina();
+  const router = useRouter();
 
   return (
-    <Tabs screenOptions={{
-      headerShown: false,
-      tabBarStyle: { backgroundColor: PRIMARY, borderTopColor: BORDER, height: 64, paddingBottom: 8 },
-      tabBarShowLabel: false,
-    }}>
-      <Tabs.Screen name="index"          options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
-      <Tabs.Screen name="bolsas"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="⏱️" label="Disponibles" focused={focused} /> }} />
-      <Tabs.Screen name="pedidos"        options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Pedidos" focused={focused} /> }} />
-      <Tabs.Screen name="ganancias"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Ganancias" focused={focused} /> }} />
-      <Tabs.Screen name="notificaciones" options={{
-        tabBarBadge: sinLeer > 0 ? sinLeer : undefined,
-        tabBarBadgeStyle: { backgroundColor: GOLD, fontSize: 10 },
-        tabBarIcon: ({ focused }) => <TabIcon emoji="🔔" label="Avisos" focused={focused} />,
-      }} />
-      <Tabs.Screen name="perfil"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />
-      <Tabs.Screen name="cupones"        options={{ href: null }} />
-      <Tabs.Screen name="historial"      options={{ href: null }} />
-    </Tabs>
+    <View style={{ flex: 1, backgroundColor: PRIMARY }}>
+      <BarraTimbreCocina timbre={timbre} onVerPedidos={() => router.navigate('/restaurante/pedidos' as any)} />
+      <Tabs screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: PRIMARY, borderTopColor: BORDER, height: 64, paddingBottom: 8 },
+        tabBarShowLabel: false,
+      }}>
+        <Tabs.Screen name="index"          options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📊" label="Dashboard" focused={focused} /> }} />
+        <Tabs.Screen name="bolsas"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="⏱️" label="Disponibles" focused={focused} /> }} />
+        <Tabs.Screen name="pedidos"        options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="📋" label="Pedidos" focused={focused} /> }} />
+        <Tabs.Screen name="ganancias"      options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="💰" label="Ganancias" focused={focused} /> }} />
+        <Tabs.Screen name="notificaciones" options={{
+          tabBarBadge: sinLeer > 0 ? sinLeer : undefined,
+          tabBarBadgeStyle: { backgroundColor: GOLD, fontSize: 10 },
+          tabBarIcon: ({ focused }) => <TabIcon emoji="🔔" label="Avisos" focused={focused} />,
+        }} />
+        <Tabs.Screen name="perfil"         options={{ tabBarIcon: ({ focused }) => <TabIcon emoji="🏪" label="Mi negocio" focused={focused} /> }} />
+        <Tabs.Screen name="cupones"        options={{ href: null }} />
+        <Tabs.Screen name="historial"      options={{ href: null }} />
+      </Tabs>
+    </View>
   );
 }
