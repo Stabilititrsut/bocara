@@ -99,7 +99,7 @@ function montar(file, { forcedStates = [], mocks = {}, params = {} } = {}) {
     '@/src/utils/pickImage': { pickImage: async () => null },
     // Dobles de las pantallas del cliente (tienda, detalle): los mismos módulos
     // reales que usan scripts/test-cart.cjs y test-tipo-publicacion.cjs.
-    '@/src/utils/horarioRecogida': horarioReal,
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
     '@/src/utils/usePublicacionesVigentes': { useRelojPublicaciones: () => new Date(), usePublicacionesVigentes: items => horarioReal.publicacionesVigentes(items) },
     '@/src/utils/tipoPublicacion': tipoPublicacionReal,
     '@/src/utils/stock': stockReal,
@@ -241,7 +241,7 @@ function pantallaCupones(lista, api = {}) {
   return montar('app/restaurante/cupones.tsx', {
     forcedStates: [lista, false, false, false, null, false, 'n1'],
     mocks: {
-      '@/src/utils/horarioRecogida': horarioReal,
+      '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
       '@/src/utils/hora': load('src/utils/hora.ts'),
       '@/src/services/api': {
         bolsasAPI: { listar: async () => ({ data: lista }), ...api },
@@ -297,7 +297,7 @@ test('Promociones (restaurante): al guardar una corrección avisa que vuelve a r
   const app = montar('app/restaurante/cupones.tsx', {
     forcedStates: [[], false, false, true, cupon({ estado_aprobacion: 'rechazado' }), false, 'n1', form],
     mocks: {
-      '@/src/utils/horarioRecogida': horarioReal,
+      '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
       '@/src/utils/hora': load('src/utils/hora.ts'),
       '@/src/services/api': {
         bolsasAPI: { listar: async () => ({ data: [] }), actualizar: async () => ({ data: { estado_aprobacion: 'pendiente' } }) },

@@ -160,6 +160,7 @@ const { montar, tick } = require('./harness-pantallas-admin.cjs');
 // restaurante-detalle: negocio(0), propietario(1), loading(2), tab(3), procesando(4),
 // rechazarModal(5), motivo(6), suspensionModal(7), motivoSuspension(8), errorSuspension(9), aviso(10)
 const DETALLE = 'app/admin/restaurante-detalle.tsx';
+const FOTO = 'https://cdn.bocara.test/negocios/foto.jpg';
 function apiDetalle({ activoInicial = true, falla } = {}) {
   let activo = activoInicial;
   const llamadas = [];
@@ -176,7 +177,9 @@ function apiDetalle({ activoInicial = true, falla } = {}) {
 }
 
 test('SUSP-UI-1: botón inferior "Suspender negocio" (pestañas Negocio/Propietario/Bancario) confirma y suspende', async () => {
-  const negocio = { id: 'n1', nombre: 'Tacos Don Pepe', verificado: true, activo: true };
+  // Con foto: tras suspenderlo, "Reactivar" es una opción real (sin foto, el
+  // detalle ofrece subirla — ver SUSP-FOTO-*).
+  const negocio = { id: 'n1', nombre: 'Tacos Don Pepe', verificado: true, activo: true, imagen_url: FOTO };
   for (const tab of ['negocio', 'propietario', 'bancario']) {
     const a = montar(DETALLE, { forzados: { 0: negocio, 2: false, 3: tab }, api: apiDetalle() });
     assert.ok(a.boton(/⏸ Suspender negocio/), `botón visible en la pestaña ${tab}`);
@@ -215,7 +218,7 @@ test('SUSP-UI-2: si el backend falla, el modal sigue abierto con el error real',
 
 test('SUSP-UI-3: negocio suspendido → "Reactivar negocio" usa el mismo endpoint y vuelve a activo', async () => {
   const api = apiDetalle({ activoInicial: false });
-  const app = montar(DETALLE, { forzados: { 0: { id: 'n1', nombre: 'X', verificado: true, activo: false }, 2: false }, api });
+  const app = montar(DETALLE, { forzados: { 0: { id: 'n1', nombre: 'X', verificado: true, activo: false, imagen_url: FOTO }, 2: false }, api });
   app.boton(/▶ Reactivar negocio/).props.onPress();
   assert.equal(app.estado(7), 'reactivar');
   assert.ok(!app.input(/Quejas reiteradas/), 'reactivar no pide motivo');

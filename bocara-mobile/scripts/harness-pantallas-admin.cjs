@@ -47,7 +47,13 @@ function textOf(n) {
   return [n.props?.children].flat(Infinity).map(textOf).join(' ');
 }
 
-function montar(file, { forzados = {}, api, params = { id: 'n1' } } = {}) {
+// `negociosApi`, `uploadsApi` y `pickImage` son opcionales: la carga de la
+// foto del negocio por el admin (restaurante-detalle) los usa; por defecto el
+// selector "se cancela" (null) y nada sube.
+function montar(file, {
+  forzados = {}, api, params = { id: 'n1' },
+  negociosApi = {}, uploadsApi = {}, pickImage = async () => null, rutas = [], mocks = {},
+} = {}) {
   const cells = []; let cursor = 0;
   const alerts = [];
   const react = { ...React,
@@ -69,19 +75,22 @@ function montar(file, { forzados = {}, api, params = { id: 'n1' } } = {}) {
   const confirmar = cargarModulo('components/ConfirmarAccionModal.tsx', { 'react-native': native });
   const Component = cargarModulo(file, {
     react, 'react-native': native,
-    'expo-router': { useLocalSearchParams: () => params, useRouter: () => ({ push() {}, replace() {}, back() {} }) },
+    'expo-router': { useLocalSearchParams: () => params, useRouter: () => ({ push(r) { rutas.push(r); }, replace() {}, back() {} }) },
     '@expo/vector-icons': { Ionicons: 'Icon' },
-    '@/src/services/api': { adminAPI: api, API_BASE_URL: 'http://api.test' },
+    '@/src/services/api': { adminAPI: api, negociosAPI: negociosApi, uploadsAPI: uploadsApi, API_BASE_URL: 'http://api.test' },
+    '@/src/utils/pickImage': { pickImage },
     '@/src/services/authTokenStorage': { getAuthToken: async () => 'tok' },
     '@/constants/Colors': { Colors: { orange: 'orange', white: 'white' } },
     '@/src/utils/backNavigation': { volver() {} },
     '@/src/utils/suspensionAdmin': cargarModulo('src/utils/suspensionAdmin.ts'),
     '@/src/utils/accionAdmin': cargarModulo('src/utils/accionAdmin.ts'),
     '@/components/ConfirmarAccionModal': confirmar,
+    ...mocks,
   }).default;
   const render = () => { cursor = 0; return Component(); };
   const app = {
     alerts,
+    rutas,
     estado: (i) => cells[i]?.value,
     texto: () => textOf(render()),
     nodos: () => walk(render()),

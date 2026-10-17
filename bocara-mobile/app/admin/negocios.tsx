@@ -9,7 +9,9 @@ import { adminAPI } from '@/src/services/api';
 import CalendarioPicker from '@/components/CalendarioPicker';
 import ListaResenas, { type ResenaLectura } from '@/components/ListaResenas';
 import { mesEnCurso, nombreMes } from '@/components/SelectorPeriodo';
-import { ejecutarAccionNegocio } from '@/src/utils/suspensionAdmin';
+import {
+  accionTarjetaSuspendido, ejecutarAccionNegocio, negocioTieneFoto, rutaAgregarFotoNegocio,
+} from '@/src/utils/suspensionAdmin';
 
 const BG     = '#F8FAFC';
 const CARD   = '#FFFFFF';
@@ -242,13 +244,12 @@ export default function AdminNegociosScreen() {
           </View>
         )}
 
+        {/* La tarjeta NO es pulsable: antes era un botón que navegaba al
+            perfil con "Reactivar" y "Ver perfil" anidados dentro — dos áreas
+            que llevaban al mismo sitio y un toque cerca de un botón abría el
+            perfil por accidente. La única navegación es "Ver perfil". */}
         {filtrados.map((n) => (
-          <TouchableOpacity
-            key={n.id}
-            style={s.card}
-            activeOpacity={0.85}
-            onPress={() => router.push(`/admin/restaurante-detalle?id=${n.id}` as any)}
-          >
+          <View key={n.id} style={s.card}>
             {/* Top row */}
             <View style={s.cardTop}>
               <View style={{ flex: 1 }}>
@@ -288,6 +289,9 @@ export default function AdminNegociosScreen() {
                   ? <View style={s.chipVer}><Text style={s.chipVerText}>Verificado</Text></View>
                   : <View style={s.chipPend}><Text style={s.chipPendText}>Pendiente</Text></View>}
                 {n.activo === false && <View style={s.chipInac}><Text style={s.chipInacText}>Inactivo</Text></View>}
+                {n.activo === false && !negocioTieneFoto(n) && (
+                  <View style={s.chipSinFoto}><Text style={s.chipSinFotoText}>📷 Sin foto</Text></View>
+                )}
               </View>
             </View>
 
@@ -316,11 +320,22 @@ export default function AdminNegociosScreen() {
                   </TouchableOpacity>
                 </>
               )}
-              {n.verificado && n.activo === false && (
+              {/* Sin foto, reactivar responde 409: se ofrece directamente
+                  subirla en el detalle en vez de un botón que va a fallar. */}
+              {accionTarjetaSuspendido(n) === 'reactivar' && (
                 <TouchableOpacity style={s.btnActivar} onPress={() => activar(n)} disabled={!!procesando}>
                   {procesando === n.id
                     ? <ActivityIndicator color="#16A34A" size="small" />
                     : <><Ionicons name="play-circle" size={14} color="#16A34A" /><Text style={s.btnActivarText}>Reactivar negocio</Text></>}
+                </TouchableOpacity>
+              )}
+              {accionTarjetaSuspendido(n) === 'agregar_foto' && (
+                <TouchableOpacity
+                  style={s.btnFoto}
+                  onPress={() => router.push(rutaAgregarFotoNegocio(n.id) as any)}
+                  accessibilityRole="button"
+                >
+                  <Text style={s.btnFotoText}>📷 Agregar foto para reactivar</Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity style={s.btnVer} onPress={() => router.push(`/admin/restaurante-detalle?id=${n.id}` as any)}>
@@ -329,7 +344,7 @@ export default function AdminNegociosScreen() {
               </TouchableOpacity>
             </View>
             {errores[n.id] ? <Text style={s.errorAccion}>⚠️ {errores[n.id]}</Text> : null}
-          </TouchableOpacity>
+          </View>
         ))}
 
         <View style={{ height: 24 }} />
@@ -408,6 +423,8 @@ const s = StyleSheet.create({
   chipPendText: { fontSize: 11, color: '#92400E', fontWeight: '700' },
   chipInac:     { backgroundColor: '#F9FAFB', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: BORDER },
   chipInacText: { fontSize: 11, color: TEXT2, fontWeight: '600' },
+  chipSinFoto:     { backgroundColor: '#FEF2F2', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, borderWidth: 1, borderColor: '#FECACA' },
+  chipSinFotoText: { fontSize: 11, color: '#B91C1C', fontWeight: '700' },
 
   actionsRow:       { flexDirection: 'row', gap: 8, borderTopWidth: 1, borderTopColor: BORDER, paddingTop: 12 },
   btnAprobar:       { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, backgroundColor: '#16A34A', borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, justifyContent: 'center' },
@@ -418,6 +435,8 @@ const s = StyleSheet.create({
   btnSuspenderText: { color: '#D97706', fontWeight: '700', fontSize: 12 },
   btnActivar:       { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, backgroundColor: '#F0FDF4', borderWidth: 1, borderColor: '#BBF7D0', borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, justifyContent: 'center' },
   btnActivarText:   { color: '#16A34A', fontWeight: '700', fontSize: 12 },
+  btnFoto:          { flexDirection: 'row', alignItems: 'center', gap: 5, flex: 1, backgroundColor: '#FFF7ED', borderWidth: 1, borderColor: '#FDBA74', borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, justifyContent: 'center' },
+  btnFotoText:      { color: '#C2410C', fontWeight: '800', fontSize: 12 },
   errorAccion:      { marginTop: 10, color: '#DC2626', fontSize: 12, fontWeight: '700' },
   exitoAccion:      { marginBottom: 10, color: '#16A34A', fontSize: 12, fontWeight: '700' },
   btnVer:           { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderColor: BORDER, borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, justifyContent: 'center' },
