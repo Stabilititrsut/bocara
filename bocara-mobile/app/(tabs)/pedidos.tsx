@@ -25,11 +25,13 @@ const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; 
 
 const RESENAS_KEY = 'bocara_resenas_enviadas';
 
-// En web, Linking.openURL navega la propia pestaña y el cliente pierde la app
-// (y su código de recogida) — igual que el enlace de WhatsApp, se abre aparte.
+// En web se abre en otra pestaña para que el cliente no pierda la app (ni su
+// código de recogida). 'noopener,noreferrer': la URL la escribe el
+// restaurante, y sin noopener la página abierta podría manipular la pestaña
+// de Bocara vía window.opener.
 function abrirNavegacion(url: string) {
   if (Platform.OS === 'web') {
-    (window as any).open(url, '_blank');
+    (window as any).open(url, '_blank', 'noopener,noreferrer');
   } else {
     Linking.openURL(url).catch(() => {});
   }

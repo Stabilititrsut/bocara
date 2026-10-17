@@ -69,6 +69,11 @@ export default function QrRecogidaScreen() {
   const urlMaps = urlGoogleMaps(negocioNav);
   const urlWz = urlWaze(negocioNav);
   const tieneNavegacion = !!(urlMaps || urlWz);
+  // Nombre, dirección y punto de referencia se muestran aunque no haya forma
+  // de abrir un mapa: siguen siendo la única guía para llegar a recoger.
+  const tieneDatosNegocio = !!(
+    negocioNav?.nombre || negocioNav?.direccion || negocioNav?.zona || negocioNav?.punto_referencia
+  );
   function abrirUrl(url: string | null) {
     if (url) Linking.openURL(url).catch(() => {});
   }
@@ -148,10 +153,11 @@ export default function QrRecogidaScreen() {
               <Text style={s.instruccionItem}>3. ¡Disfruta tu bolsa rescatada! 🌱</Text>
             </View>
 
-            {/* Cómo llegar — solo si hay al menos una URL de navegación válida */}
-            {tieneNavegacion && (
+            {/* Datos del negocio siempre que existan; los botones de mapa solo
+                con una URL de navegación válida. */}
+            {(tieneDatosNegocio || tieneNavegacion) && (
               <View style={s.navCard}>
-                <Text style={s.navTitle}>📍 Cómo llegar</Text>
+                <Text style={s.navTitle}>{tieneNavegacion ? '📍 Cómo llegar' : '📍 Dónde recoger'}</Text>
                 {negocioNav?.nombre ? (
                   <Text style={s.navNombre}>{negocioNav.nombre}</Text>
                 ) : null}
@@ -163,20 +169,22 @@ export default function QrRecogidaScreen() {
                 {negocioNav?.punto_referencia ? (
                   <Text style={s.navReferencia}>🔖 {negocioNav.punto_referencia}</Text>
                 ) : null}
-                <View style={s.navBtns}>
-                  {urlMaps && (
-                    <TouchableOpacity style={s.navBtnGoogle} onPress={() => abrirUrl(urlMaps)}>
-                      <Text style={{ fontSize: 16 }}>🗺️</Text>
-                      <Text style={s.navBtnText}>Google Maps</Text>
-                    </TouchableOpacity>
-                  )}
-                  {urlWz && (
-                    <TouchableOpacity style={s.navBtnWaze} onPress={() => abrirUrl(urlWz)}>
-                      <Text style={{ fontSize: 16 }}>🚗</Text>
-                      <Text style={s.navBtnText}>Waze</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+                {tieneNavegacion && (
+                  <View style={s.navBtns}>
+                    {urlMaps && (
+                      <TouchableOpacity style={s.navBtnGoogle} onPress={() => abrirUrl(urlMaps)}>
+                        <Text style={{ fontSize: 16 }}>🗺️</Text>
+                        <Text style={s.navBtnText}>Google Maps</Text>
+                      </TouchableOpacity>
+                    )}
+                    {urlWz && (
+                      <TouchableOpacity style={s.navBtnWaze} onPress={() => abrirUrl(urlWz)}>
+                        <Text style={{ fontSize: 16 }}>🚗</Text>
+                        <Text style={s.navBtnText}>Waze</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
               </View>
             )}
           </>

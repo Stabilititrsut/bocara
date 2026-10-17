@@ -18,8 +18,16 @@ type NegocioNavegable = {
   longitud?: number | string | null;
 } | null | undefined;
 
+// Las URLs manuales las escribe el propio restaurante y el backend no valida
+// su esquema: solo se acepta http(s) sin espacios. Cualquier otra cosa
+// (`javascript:`, `data:`, `intent:`, texto suelto…) se descarta y se cae a
+// las coordenadas, como si no hubiera URL manual.
+const URL_WEB = /^https?:\/\/\S+$/i;
+
 function urlManual(valor: unknown): string | null {
-  return typeof valor === 'string' && valor.trim() !== '' ? valor.trim() : null;
+  if (typeof valor !== 'string') return null;
+  const url = valor.trim();
+  return URL_WEB.test(url) ? url : null;
 }
 
 // '' o un texto no numérico no son coordenadas; 0 sí lo es.
