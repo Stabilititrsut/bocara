@@ -303,7 +303,7 @@ function ui(file, cart, forcedStates = [], extraMocks = {}) {
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/context/CartContext': { useCart: () => cart }, '@/src/utils/cartFeedback': feedback,
-    '@/src/utils/horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }),
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }),
     '@/src/utils/estadoPublicacion': load('src/utils/estadoPublicacion.ts', { './horarioRecogida': load('src/utils/horarioRecogida.ts', { '@/constants/Colors': { Colors: {} } }) }),
     '@/src/utils/stock': stockReal,
     '@/src/utils/tipoPublicacion': tipoPublicacionReal,
@@ -402,7 +402,7 @@ test('Tarjeta tienda sigue visible fuera de horario, impide agregar y revalida a
     'react-native-safe-area-context': {}, '@/src/services/api': {},
     '@/src/context/CartContext': { useCart: () => ({ loaded: true, items: [] }) },
     '@/src/utils/cartFeedback': { mostrarErrorCarrito: result => !result.ok },
-    '@/src/utils/horarioRecogida': horario, '@/src/utils/usePublicacionesVigentes': relojMock,
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horario, '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/utils/stock': stockReal, '@/src/utils/tipoPublicacion': tipoPublicacionReal,
     '@/src/utils/backNavigation': { volver: (router, fallback) => router.replace?.(fallback) },
   }, { setInterval: fn => { interval = fn; return 7; }, clearInterval: id => { assert.equal(id, 7); cleared = true; } }, '\nexport { ProductCard };');
@@ -432,7 +432,7 @@ test('A4 tarjeta no permite agregar durante hidratación y muestra rechazo del c
   const h = hooks(); const alerts = []; const native = { Platform: { OS: 'android' }, Dimensions: { get: () => ({ width: 400 }) }, StyleSheet: { create: x => x }, Alert: { alert: (...args) => alerts.push(args) } };
   let loaded = false;
   const Component = load('components/ProductCard.tsx', { react: h.react, 'react-native': native, 'expo-image': {}, '@expo/vector-icons': {}, 'expo-router': { useRouter: () => ({}) },
-    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/horarioRecogida': horarioReal, '@/src/utils/stock': stockReal, '@/src/utils/tipoPublicacion': tipoPublicacionReal, '@/src/context/CartContext': { useCart: () => ({ loaded, items: [] }) }, '@/src/services/api': {}, '@/src/utils/cartFeedback': load('src/utils/cartFeedback.ts', { 'react-native': native }),
+    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal, '@/src/utils/stock': stockReal, '@/src/utils/tipoPublicacion': tipoPublicacionReal, '@/src/context/CartContext': { useCart: () => ({ loaded, items: [] }) }, '@/src/services/api': {}, '@/src/utils/cartFeedback': load('src/utils/cartFeedback.ts', { 'react-native': native }),
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) } }).default;
   const render = () => { h.reset(); return Component({ bolsa: bolsa(), onAgregar: () => ({ ok: false, motivo: 'otro_negocio' }) }); };
   let button = walk(render()).find(n => n.props?.hitSlop && n.props?.onPress);
@@ -546,7 +546,7 @@ test('Detalle abierto antes de vencer bloquea un handler anterior y abandona UI 
   let added = 0;
   const result = ui('app/producto/[id].tsx', { loaded: true, items: [], agregar: () => { added++; return { ok: true }; } },
     [{ ...bolsa(), hora_recogida_fin: '12:00' }, false], {
-      '@/src/utils/horarioRecogida': horario,
+      '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horario,
       '@/src/utils/usePublicacionesVigentes': { useRelojPublicaciones: () => new Clock() },
     });
   const button = walk(result.tree).find(n => n.type === 'Button' && textOf(n).includes('Agregar al carrito'));

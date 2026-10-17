@@ -6,6 +6,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { adminAPI } from '@/src/services/api';
+import { ejecutarAccionAdmin } from '@/src/utils/accionAdmin';
+import ConfirmarAccionModal, { AvisoAccion } from '@/components/ConfirmarAccionModal';
 
 const BG      = '#F8FAFC';
 const CARD    = '#FFFFFF';
@@ -121,6 +123,12 @@ export default function AdminCuponesScreen() {
   const [detalleData,  setDetalleData]  = useState<(UsoRow | ReservaRow)[]>([]);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
 
+  // Confirmación de desactivar / eliminar y resultado de la última acción
+  const [confirmacion, setConfirmacion] = useState<{ tipo: 'desactivar' | 'eliminar'; cupon: Cupon } | null>(null);
+  const [procesandoConfirmacion, setProcesandoConfirmacion] = useState(false);
+  const [errorConfirmacion, setErrorConfirmacion] = useState('');
+  const [aviso, setAviso] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
+
   const cargar = useCallback(async () => {
     try {
       const res = await adminAPI.cupones();
@@ -223,51 +231,69 @@ export default function AdminCuponesScreen() {
 
   // ── Toggle activo con confirmación ──────────────────────────────────────────
 
+  // Desactivar y eliminar confirman con ConfirmarAccionModal: Alert.alert con
+  // botones no hace nada en web. Activar sigue sin confirmación, como antes.
   function toggleActivo(c: Cupon) {
+    setAviso(null);
     if (c.activo) {
-      Alert.alert(
-        'Desactivar cupón',
-        `¿Desactivar "${c.codigo}"? Los usuarios ya no podrán usarlo.`,
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Desactivar', style: 'destructive', onPress: () => _setActivo(c, false) },
-        ]
-      );
+      abrirConfirmacion('desactivar', c);
     } else {
       _setActivo(c, true);
     }
   }
 
+  function setActivoCupon(id: string, activo: boolean) {
+    setCupones(prev => prev.map(x => x.id === id ? { ...x, activo } : x));
+  }
+
   async function _setActivo(c: Cupon, activo: boolean) {
-    try {
-      await adminAPI.patchEstadoCupon(c.id, activo);
-      setCupones(prev => prev.map(x => x.id === c.id ? { ...x, activo } : x));
-    } catch (e: any) {
-      Alert.alert('Error', e.message);
-    }
+    const r = await ejecutarAccionAdmin(() => adminAPI.patchEstadoCupon(c.id, activo), {
+      exito: `"${c.codigo}" fue activado.`,
+      error: 'No se pudo activar el cupón.',
+    });
+    if (!r.ok) { setAviso({ tipo: 'error', texto: r.error }); return; }
+    setActivoCupon(c.id, activo);
+    setAviso({ tipo: 'exito', texto: r.mensaje });
   }
 
   // ── Eliminar ────────────────────────────────────────────────────────────────
 
   function confirmarEliminar(c: Cupon) {
-    Alert.alert(
-      'Eliminar cupón',
-      `¿Eliminar "${c.codigo}"? Esta acción no se puede deshacer.`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar', style: 'destructive',
-          onPress: async () => {
-            try {
-              await adminAPI.eliminarCupon(c.id);
-              cargar();
-            } catch (e: any) {
-              Alert.alert('Error', e.message);
-            }
-          },
-        },
-      ]
-    );
+    setAviso(null);
+    abrirConfirmacion('eliminar', c);
+  }
+
+  function abrirConfirmacion(tipo: 'desactivar' | 'eliminar', cupon: Cupon) {
+    setErrorConfirmacion('');
+    setConfirmacion({ tipo, cupon });
+  }
+
+  async function ejecutarConfirmacion() {
+    if (!confirmacion) return;
+    const { tipo, cupon } = confirmacion;
+    setProcesandoConfirmacion(true);
+    setErrorConfirmacion('');
+    const r = tipo === 'desactivar'
+      ? await ejecutarAccionAdmin(() => adminAPI.patchEstadoCupon(cupon.id, false), {
+          exito: `"${cupon.codigo}" fue desactivado.`, error: 'No se pudo desactivar el cupón.',
+        })
+      : await ejecutarAccionAdmin(() => adminAPI.eliminarCupon(cupon.id), {
+          exito: `"${cupon.codigo}" fue eliminado.`, error: 'No se pudo eliminar el cupón.',
+        });
+    setProcesandoConfirmacion(false);
+    if (!r.ok) {
+      // P. ej. 409 "Este cupón tiene N reserva(s) activa(s)…": queda a la vista.
+      setErrorConfirmacion(r.error);
+      return;
+    }
+    if (tipo === 'desactivar') {
+      setActivoCupon(cupon.id, false);
+    } else {
+      setCupones(prev => prev.filter(x => x.id !== cupon.id));
+      cargar();
+    }
+    setConfirmacion(null);
+    setAviso({ tipo: 'exito', texto: r.mensaje });
   }
 
   // ── Historial / Reservas ─────────────────────────────────────────────────────
@@ -517,6 +543,26 @@ export default function AdminCuponesScreen() {
           <Text style={s.btnNuevoText}>Nuevo</Text>
         </TouchableOpacity>
       </View>
+
+      <AvisoAccion aviso={aviso} onCerrar={() => setAviso(null)} tema="claro" />
+
+      <ConfirmarAccionModal
+        visible={!!confirmacion}
+        tema="claro"
+        titulo={confirmacion?.tipo === 'eliminar' ? 'Eliminar cupón' : 'Desactivar cupón'}
+        mensaje={confirmacion?.tipo === 'eliminar'
+          ? `¿Seguro que deseas eliminar "${confirmacion?.cupon.codigo}"?`
+          : `¿Seguro que deseas desactivar "${confirmacion?.cupon.codigo}"?`}
+        detalle={confirmacion?.tipo === 'eliminar'
+          ? 'Esta acción no se puede deshacer.'
+          : 'Los usuarios ya no podrán usarlo.'}
+        textoConfirmar={confirmacion?.tipo === 'eliminar' ? 'Eliminar' : 'Desactivar'}
+        tono="peligro"
+        procesando={procesandoConfirmacion}
+        error={errorConfirmacion}
+        onConfirmar={ejecutarConfirmacion}
+        onCancelar={() => setConfirmacion(null)}
+      />
 
       <ScrollView
         contentContainerStyle={s.scroll}

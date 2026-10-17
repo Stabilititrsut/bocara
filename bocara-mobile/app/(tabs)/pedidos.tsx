@@ -11,6 +11,7 @@ import { Pedido } from '@/src/types';
 import { Colors } from '@/constants/Colors';
 import { useRealtime } from '@/src/context/RealtimeContext';
 import { useLocalSearchParams } from 'expo-router';
+import { urlGoogleMaps, urlWaze } from '@/src/utils/navegacionNegocio';
 
 const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
   pendiente:       { label: 'Pendiente',          color: '#FF9800',            bg: '#FFF3E0',       icon: 'time-outline' },
@@ -24,6 +25,18 @@ const ESTADO_CONFIG: Record<string, { label: string; color: string; bg: string; 
 
 const RESENAS_KEY = 'bocara_resenas_enviadas';
 
+// En web se abre en otra pestaña para que el cliente no pierda la app (ni su
+// código de recogida). 'noopener,noreferrer': la URL la escribe el
+// restaurante, y sin noopener la página abierta podría manipular la pestaña
+// de Bocara vía window.opener.
+function abrirNavegacion(url: string) {
+  if (Platform.OS === 'web') {
+    (window as any).open(url, '_blank', 'noopener,noreferrer');
+  } else {
+    Linking.openURL(url).catch(() => {});
+  }
+}
+
 interface ResenaState {
   visible: boolean;
   pedido: Pedido | null;
@@ -36,6 +49,8 @@ interface ResenaState {
 function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosicion }: { pedido: Pedido; yaReseno: boolean; onResena: (p: Pedido) => void; onCancelar: (id: string, estado: string) => void; enfocado?: boolean; onPosicion?: (y: number) => void }) {
   const estado = ESTADO_CONFIG[pedido.estado] || ESTADO_CONFIG.pendiente;
   const activo = ['confirmado','en_preparacion','listo'].includes(pedido.estado);
+  const urlMaps = urlGoogleMaps(pedido.negocios);
+  const urlWz = urlWaze(pedido.negocios);
 
   return (
     <View
@@ -83,6 +98,26 @@ function PedidoCard({ pedido, yaReseno, onResena, onCancelar, enfocado, onPosici
             <Text style={[s.codigoHora, pedido.estado === 'listo' && { color: 'rgba(255,255,255,0.8)' }]}>
               {pedido.hora_recogida_inicio?.slice(0, 5)} – {pedido.hora_recogida_fin?.slice(0, 5)}
             </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Cómo llegar: disponible durante todo el ciclo activo de una recogida,
+          no solo en la pantalla posterior al pago (qr-recogida). */}
+      {pedido.tipo_entrega === 'recogida' && activo && (urlMaps || urlWz) && (
+        <View style={s.navBox}>
+          <Text style={s.navTitulo}>📍 Cómo llegar</Text>
+          <View style={s.navBtns}>
+            {urlMaps && (
+              <TouchableOpacity style={s.navBtn} onPress={() => abrirNavegacion(urlMaps)} accessibilityRole="link">
+                <Text style={s.navBtnText}>🗺️ Google Maps</Text>
+              </TouchableOpacity>
+            )}
+            {urlWz && (
+              <TouchableOpacity style={s.navBtn} onPress={() => abrirNavegacion(urlWz)} accessibilityRole="link">
+                <Text style={s.navBtnText}>🚗 Waze</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}
@@ -365,6 +400,12 @@ const s = StyleSheet.create({
   codigo: { fontSize: 32, fontWeight: '900', color: Colors.textPrimary, letterSpacing: 5 },
   codigoHoraRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
   codigoHora: { fontSize: 12, color: Colors.textSecondary },
+
+  navBox: { marginTop: 12, backgroundColor: Colors.surface, borderRadius: 16, padding: 14 },
+  navTitulo: { fontSize: 13, fontWeight: '800', color: Colors.textPrimary, marginBottom: 10 },
+  navBtns: { flexDirection: 'row', gap: 8 },
+  navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.white, borderWidth: 1.5, borderColor: Colors.primary, borderRadius: 50, paddingVertical: 10 },
+  navBtnText: { color: Colors.primary, fontWeight: '800', fontSize: 13 },
 
   btnCancelarLink: { marginTop: 8, borderWidth: 1, borderColor: '#1A5C5C', borderRadius: 10, padding: 12, alignItems: 'center', backgroundColor: '#FFFFFF' },
   btnCancelarTexto: { color: '#1A5C5C', fontSize: 13, fontWeight: '500' },

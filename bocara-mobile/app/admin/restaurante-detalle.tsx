@@ -5,9 +5,16 @@ import {
   Image, Linking,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { adminAPI } from '@/src/services/api';
+import { adminAPI, negociosAPI, uploadsAPI } from '@/src/services/api';
 import { Colors } from '@/constants/Colors';
 import { volver } from '@/src/utils/backNavigation';
+import { pickImage } from '@/src/utils/pickImage';
+import {
+  accionDisponibleNegocio, ejecutarAccionNegocio, textosAccionNegocio, type AccionNegocio,
+  negocioTieneFoto, solicitudFotoPendiente, subirFotoNegocio,
+} from '@/src/utils/suspensionAdmin';
+import { ejecutarAccionAdmin } from '@/src/utils/accionAdmin';
+import ConfirmarAccionModal, { AvisoAccion } from '@/components/ConfirmarAccionModal';
 
 const DARK  = '#1E293B';
 const DARK2 = '#0F172A';
@@ -15,7 +22,8 @@ const DARK2 = '#0F172A';
 type Tab = 'negocio' | 'propietario' | 'bancario';
 
 export default function RestauranteDetalleScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // accion=foto: llega desde "📷 Agregar foto para reactivar" (admin/negocios).
+  const { id, accion } = useLocalSearchParams<{ id: string; accion?: string }>();
   const router  = useRouter();
 
   const [negocio,    setNegocio]    = useState<any>(null);
@@ -25,6 +33,18 @@ export default function RestauranteDetalleScreen() {
   const [procesando, setProcesando] = useState(false);
   const [rechazarModal, setRechazarModal] = useState(false);
   const [motivo,     setMotivo]     = useState('');
+  const [suspensionModal, setSuspensionModal] = useState<AccionNegocio | null>(null);
+  const [motivoSuspension, setMotivoSuspension] = useState('');
+  const [errorSuspension, setErrorSuspension] = useState('');
+  const [aviso, setAviso] = useState<{ tipo: 'exito' | 'error'; texto: string } | null>(null);
+  const [aprobarModal, setAprobarModal] = useState(false);
+  const [errorAprobar, setErrorAprobar] = useState('');
+  // Foto del negocio subida por el admin (caso "Sabor Casero": suspendido y
+  // sin foto, el toggle respondía 409 y no había forma de cargarla aquí).
+  const [subiendoFoto, setSubiendoFoto] = useState(false);
+  const [errorFoto, setErrorFoto] = useState('');
+  const [fotoRecienSubida, setFotoRecienSubida] = useState(false);
+  const [solicitudFoto, setSolicitudFoto] = useState<any>(null);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -48,6 +68,14 @@ export default function RestauranteDetalleScreen() {
     } finally {
       setLoading(false);
     }
+    // Foto que el restaurante subió y espera revisión: aparte y sin bloquear
+    // la pantalla si el listado de cambios falla.
+    try {
+      const sol = await adminAPI.cambiosPerfil();
+      setSolicitudFoto(solicitudFotoPendiente(sol.data, id));
+    } catch {
+      setSolicitudFoto(null);
+    }
   }, [id]);
 
   useEffect(() => {
@@ -55,23 +83,35 @@ export default function RestauranteDetalleScreen() {
     cargar();
   }, [id, cargar]);
 
-  async function aprobar() {
+  // Confirmación con modal propio: Alert.alert con botones no hace nada en web.
+  function aprobar() {
     if (!negocio) return;
-    Alert.alert('Aprobar restaurante', `¿Aprobar "${negocio.nombre}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Aprobar', onPress: async () => {
-          setProcesando(true);
-          try {
-            await adminAPI.verificarNegocio(negocio.id);
-            await cargar();
-            Alert.alert('Aprobado', 'El restaurante fue aprobado y notificado.');
-          } catch (e: any) {
-            Alert.alert('Error', e.message);
-          } finally { setProcesando(false); }
-        }
-      },
-    ]);
+    setAviso(null);
+    setErrorAprobar('');
+    setAprobarModal(true);
+  }
+
+  async function confirmarAprobar() {
+    if (!negocio) return;
+    setProcesando(true);
+    setErrorAprobar('');
+    const r = await ejecutarAccionAdmin(() => adminAPI.verificarNegocio(negocio.id), {
+      exito: `"${negocio.nombre}" fue aprobado y notificado.`,
+      error: 'No se pudo aprobar el negocio.',
+    });
+    setProcesando(false);
+    if (!r.ok) {
+      // El modal queda abierto con el error real (p. ej. negocio sin foto).
+      setErrorAprobar(r.error);
+      return;
+    }
+    // El backend devuelve la fila ya aprobada: se pinta sin recargar.
+    setNegocio((prev: any) => ({
+      ...prev, verificado: true, activo: true, estado_verificacion: 'aprobado', motivo_rechazo: null,
+      ...(r.data?.data || {}),
+    }));
+    setAprobarModal(false);
+    setAviso({ tipo: 'exito', texto: r.mensaje });
   }
 
   async function rechazar() {
@@ -88,23 +128,84 @@ export default function RestauranteDetalleScreen() {
     } finally { setProcesando(false); }
   }
 
-  async function toggleSuspender() {
+  // Antes usaba Alert.alert con botones, que en web es un no-op: el botón
+  // "Suspender" no abría nada ni llamaba al API. Ahora confirma con un Modal.
+  function abrirSuspension() {
+    const accion = accionDisponibleNegocio(negocio);
+    if (!accion) return;
+    setAviso(null);
+    setErrorSuspension('');
+    setMotivoSuspension('');
+    setSuspensionModal(accion);
+  }
+
+  async function confirmarSuspension() {
+    if (!negocio || !suspensionModal) return;
+    setProcesando(true);
+    setErrorSuspension('');
+    const r = await ejecutarAccionNegocio(adminAPI, negocio, suspensionModal, motivoSuspension);
+    setProcesando(false);
+    if (!r.ok) {
+      // El modal queda abierto con el error real del backend.
+      setErrorSuspension(r.error);
+      return;
+    }
+    setNegocio((prev: any) => ({ ...prev, activo: r.activo }));
+    setSuspensionModal(null);
+    setMotivoSuspension('');
+    setAviso({ tipo: 'exito', texto: r.mensaje });
+  }
+
+  // pickImage() va primero y sin await previo: en web abre el selector de
+  // archivos, y el navegador solo lo permite dentro del gesto (onPress).
+  async function subirFoto() {
+    if (!negocio || subiendoFoto) return;
+    const imagen = await pickImage();
+    if (!imagen) return;
+    setAviso(null);
+    setErrorFoto('');
+    setSubiendoFoto(true);
+    const r = await subirFotoNegocio(
+      { uploadBase64: uploadsAPI.uploadBase64, actualizarNegocio: negociosAPI.actualizar },
+      negocio.id, imagen,
+    );
+    setSubiendoFoto(false);
+    if (!r.ok) { setErrorFoto(r.error); return; }
+    setNegocio((prev: any) => ({ ...prev, ...(r.negocio || {}), imagen_url: r.imagen_url }));
+    setFotoRecienSubida(true);
+    setAviso({ tipo: 'exito', texto: 'Foto del negocio actualizada.' });
+  }
+
+  // La solicitud del restaurante solo se aprueba desde aquí si trae ÚNICAMENTE
+  // la foto; si cambia más campos, se revisa completa en Cambios de perfil.
+  async function aprobarSolicitudFoto() {
+    if (!solicitudFoto) return;
+    setProcesando(true);
+    setErrorFoto('');
+    const r = await ejecutarAccionAdmin(() => adminAPI.aprobarCambioPerfil(solicitudFoto.id), {
+      exito: 'Foto del restaurante aprobada y publicada.',
+      error: 'No se pudo aprobar la foto.',
+    });
+    setProcesando(false);
+    if (!r.ok) { setErrorFoto(r.error); return; }
+    setNegocio((prev: any) => ({ ...prev, imagen_url: solicitudFoto.cambios.imagen_url }));
+    setSolicitudFoto(null);
+    setFotoRecienSubida(true);
+    setAviso({ tipo: 'exito', texto: r.mensaje });
+  }
+
+  // Mismo flujo compartido que el botón inferior (ejecutarAccionNegocio); el
+  // admin ya lo pidió explícitamente con "Reactivar negocio ahora".
+  async function reactivarAhora() {
     if (!negocio) return;
-    const accion = negocio.activo === false ? 'Activar' : 'Suspender';
-    Alert.alert(`${accion} restaurante`, `¿${accion} "${negocio.nombre}"?`, [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: accion, onPress: async () => {
-          setProcesando(true);
-          try {
-            await adminAPI.toggleNegocio(negocio.id);
-            await cargar();
-          } catch (e: any) {
-            Alert.alert('Error', e.message);
-          } finally { setProcesando(false); }
-        }
-      },
-    ]);
+    setProcesando(true);
+    setErrorFoto('');
+    const r = await ejecutarAccionNegocio(adminAPI, negocio, 'reactivar');
+    setProcesando(false);
+    if (!r.ok) { setErrorFoto(r.error); return; }
+    setNegocio((prev: any) => ({ ...prev, activo: r.activo }));
+    setFotoRecienSubida(false);
+    setAviso({ tipo: 'exito', texto: r.mensaje });
   }
 
   if (loading) return (
@@ -132,6 +233,14 @@ export default function RestauranteDetalleScreen() {
   const estadoLabel = negocio.verificado
     ? 'Verificado'
     : negocio.estado_verificacion === 'rechazado' ? 'Rechazado' : 'Pendiente';
+  const accionSuspension = accionDisponibleNegocio(negocio);
+  const suspendido = accionSuspension === 'reactivar';
+  const textosSuspension = suspensionModal ? textosAccionNegocio(suspensionModal, negocio.nombre) : null;
+  const tieneFoto = negocioTieneFoto(negocio);
+  const faltaFotoParaReactivar = suspendido && !tieneFoto;
+  const destacarFoto = faltaFotoParaReactivar || (accion === 'foto' && !tieneFoto);
+  const puedeReactivarAhora = suspendido && tieneFoto && fotoRecienSubida;
+  const soloFotoEnSolicitud = !!solicitudFoto && Object.keys(solicitudFoto.cambios || {}).every((k) => k === 'imagen_url');
 
   return (
     <SafeAreaView style={s.root}>
@@ -145,8 +254,15 @@ export default function RestauranteDetalleScreen() {
           <View style={[s.estadoBadge, { backgroundColor: estadoColor + '22' }]}>
             <Text style={[s.estadoText, { color: estadoColor }]}>{estadoLabel}</Text>
           </View>
+          {suspendido && (
+            <View style={[s.estadoBadge, { backgroundColor: '#F8717122' }]}>
+              <Text style={[s.estadoText, { color: '#F87171' }]}>Negocio suspendido</Text>
+            </View>
+          )}
         </View>
       </View>
+
+      <AvisoAccion aviso={aviso} onCerrar={() => setAviso(null)} />
 
       {/* Tabs */}
       <View style={s.tabs}>
@@ -203,15 +319,54 @@ export default function RestauranteDetalleScreen() {
               {negocio.motivo_rechazo && <Row label="Motivo rechazo" val={negocio.motivo_rechazo} valColor="#F87171" />}
             </Section>
 
-            {negocio.imagen_url ? (
-              <Section title="Foto del negocio">
-                <Image source={{ uri: negocio.imagen_url }} style={s.dpiImg} resizeMode="cover" />
-              </Section>
-            ) : (
-              <Section title="Foto del negocio">
-                <Text style={s.noData}>Sin foto del negocio cargada</Text>
-              </Section>
-            )}
+            <Section title="Foto del negocio">
+              {tieneFoto
+                ? <Image source={{ uri: negocio.imagen_url }} style={s.dpiImg} resizeMode="cover" />
+                : <Text style={s.noData}>Sin foto del negocio cargada</Text>}
+              {destacarFoto && (
+                <Text style={s.fotoAviso}>
+                  ⚠️ Sin foto este negocio no se puede reactivar. Súbela aquí y luego reactívalo.
+                </Text>
+              )}
+              {solicitudFoto && (
+                <View style={s.fotoSolicitud}>
+                  <Text style={s.fotoSolicitudText}>
+                    📨 El restaurante envió una foto nueva que espera revisión.
+                  </Text>
+                  {solicitudFoto.cambios?.imagen_url
+                    ? <Image source={{ uri: solicitudFoto.cambios.imagen_url }} style={s.fotoPropuesta} resizeMode="cover" />
+                    : null}
+                  {soloFotoEnSolicitud ? (
+                    <TouchableOpacity style={s.btnFotoSecundario} onPress={aprobarSolicitudFoto} disabled={procesando} accessibilityRole="button">
+                      <Text style={s.btnFotoSecundarioText}>✓ Aprobar foto del restaurante</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={s.btnFotoSecundario} onPress={() => router.push('/admin/cambios-perfil' as any)} accessibilityRole="button">
+                      <Text style={s.btnFotoSecundarioText}>Revisar la solicitud en Cambios de perfil ›</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+              <TouchableOpacity
+                style={[s.btnFoto, destacarFoto && s.btnFotoDestacado]}
+                onPress={subirFoto}
+                disabled={subiendoFoto || procesando}
+                accessibilityRole="button"
+                testID="admin-negocio-subir-foto"
+              >
+                {subiendoFoto
+                  ? <ActivityIndicator color={Colors.orange} size="small" />
+                  : <Text style={s.btnFotoText}>{tieneFoto ? '📷 Cambiar foto del negocio' : '📷 Subir foto del negocio'}</Text>}
+              </TouchableOpacity>
+              {errorFoto ? <Text style={s.fotoError} accessibilityRole="alert">⚠️ {errorFoto}</Text> : null}
+              {puedeReactivarAhora && (
+                <TouchableOpacity style={s.btnReactivarAhora} onPress={reactivarAhora} disabled={procesando} accessibilityRole="button">
+                  {procesando
+                    ? <ActivityIndicator color="#6EE7B7" size="small" />
+                    : <Text style={s.btnReactivarAhoraText}>▶ Reactivar negocio ahora</Text>}
+                </TouchableOpacity>
+              )}
+            </Section>
 
             {dpiUrl ? (
               <Section title="Foto DPI">
@@ -279,17 +434,73 @@ export default function RestauranteDetalleScreen() {
             </TouchableOpacity>
           </>
         )}
-        {negocio.verificado && (
+        {/* Suspendido sin foto: "Reactivar" respondería 409. Se lleva a la
+            sección de la foto en vez de ofrecer un botón que va a fallar. */}
+        {faltaFotoParaReactivar && (
           <TouchableOpacity
-            style={[s.btnToggle, negocio.activo === false && s.btnActivar]}
-            onPress={toggleSuspender}
-            disabled={procesando}
+            style={[s.btnToggle, s.btnFotoPendiente]}
+            onPress={() => { setTab('negocio'); setErrorFoto(''); }}
+            accessibilityRole="button"
           >
-            {procesando ? <ActivityIndicator color={Colors.white} size="small" />
-              : <Text style={s.btnToggleText}>{negocio.activo === false ? '▶ Activar' : '⏸ Suspender'}</Text>}
+            <Text style={[s.btnToggleText, { color: '#FDBA74' }]}>📷 Sube una foto para reactivar</Text>
+          </TouchableOpacity>
+        )}
+        {accionSuspension && !faltaFotoParaReactivar && (
+          <TouchableOpacity
+            style={[s.btnToggle, suspendido && s.btnActivar]}
+            onPress={abrirSuspension}
+            disabled={procesando}
+            accessibilityRole="button"
+            testID="admin-negocio-suspension"
+          >
+            <Text style={[s.btnToggleText, suspendido && s.btnActivarText]}>
+              {suspendido ? '▶ Reactivar negocio' : '⏸ Suspender negocio'}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Modal suspender / reactivar negocio */}
+      <ConfirmarAccionModal
+        visible={!!suspensionModal}
+        titulo={textosSuspension?.titulo || ''}
+        mensaje={textosSuspension?.pregunta || ''}
+        detalle={textosSuspension?.detalle}
+        textoConfirmar={textosSuspension?.boton || ''}
+        tono={suspensionModal === 'reactivar' ? 'exito' : 'peligro'}
+        procesando={procesando}
+        error={errorSuspension}
+        onConfirmar={confirmarSuspension}
+        onCancelar={() => setSuspensionModal(null)}
+      >
+        {suspensionModal === 'suspender' && (
+          <>
+            <Text style={s.modalLabel}>Motivo (opcional — si lo indicas, se notifica al propietario)</Text>
+            <TextInput
+              style={s.modalInput}
+              value={motivoSuspension}
+              onChangeText={setMotivoSuspension}
+              placeholder="Ej. Quejas reiteradas de clientes..."
+              placeholderTextColor="#64748B"
+              multiline
+            />
+          </>
+        )}
+      </ConfirmarAccionModal>
+
+      {/* Modal aprobar negocio */}
+      <ConfirmarAccionModal
+        visible={aprobarModal}
+        titulo="Aprobar restaurante"
+        mensaje={`¿Seguro que deseas aprobar "${negocio.nombre}"?`}
+        detalle="Quedará verificado y visible para los clientes, y se notificará al propietario."
+        textoConfirmar="Aprobar"
+        tono="exito"
+        procesando={procesando}
+        error={errorAprobar}
+        onConfirmar={confirmarAprobar}
+        onCancelar={() => setAprobarModal(false)}
+      />
 
       {/* Modal rechazo */}
       <Modal visible={rechazarModal} transparent animationType="fade">
@@ -365,6 +576,19 @@ const s = StyleSheet.create({
   desc:         { fontSize: 13, color: '#94A3B8', padding: 12, lineHeight: 20 },
   noData:       { fontSize: 13, color: '#475569', padding: 12 },
   dpiImg:       { width: '100%', height: 200, borderRadius: 12 },
+  fotoAviso:    { fontSize: 13, color: '#FDBA74', fontWeight: '700', paddingHorizontal: 12, paddingBottom: 4, lineHeight: 19 },
+  fotoSolicitud: { margin: 12, marginBottom: 0, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#1D4ED8', backgroundColor: '#0B1A3A', gap: 8 },
+  fotoSolicitudText: { fontSize: 13, color: '#93C5FD', fontWeight: '700' },
+  fotoPropuesta: { width: '100%', height: 140, borderRadius: 10 },
+  btnFotoSecundario: { borderWidth: 1.5, borderColor: '#2563EB', borderRadius: 10, padding: 10, alignItems: 'center' },
+  btnFotoSecundarioText: { color: '#93C5FD', fontWeight: '800', fontSize: 13 },
+  btnFoto:      { margin: 12, borderWidth: 1.5, borderColor: Colors.orange, borderRadius: 10, padding: 12, alignItems: 'center' },
+  btnFotoDestacado: { backgroundColor: '#3B1D06' },
+  btnFotoText:  { color: Colors.orange, fontWeight: '800', fontSize: 14 },
+  fotoError:    { fontSize: 13, color: '#FCA5A5', fontWeight: '600', paddingHorizontal: 12, paddingBottom: 12 },
+  btnReactivarAhora: { margin: 12, marginTop: 0, backgroundColor: '#065F46', borderRadius: 10, padding: 13, alignItems: 'center' },
+  btnReactivarAhoraText: { color: '#6EE7B7', fontWeight: '900', fontSize: 14 },
+  btnFotoPendiente: { borderColor: '#C2410C', backgroundColor: '#2A1404' },
   mapBtn:       { margin: 12, marginTop: 4, borderWidth: 1.5, borderColor: '#2563EB', borderRadius: 10, padding: 12, alignItems: 'center' },
   mapBtnText:   { color: '#60A5FA', fontWeight: '700', fontSize: 13 },
   emptySection: { alignItems: 'center', paddingVertical: 40, gap: 10 },
@@ -377,6 +601,7 @@ const s = StyleSheet.create({
   btnToggle:    { flex: 1, borderWidth: 1.5, borderColor: '#991B1B', borderRadius: 12, padding: 14, alignItems: 'center' },
   btnActivar:   { borderColor: '#065F46', backgroundColor: '#021F16' },
   btnToggleText: { color: '#F87171', fontWeight: '800', fontSize: 14 },
+  btnActivarText: { color: '#6EE7B7' },
   overlay:      { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 24 },
   modalCard:    { backgroundColor: DARK, borderRadius: 20, padding: 24, borderWidth: 1, borderColor: '#334155' },
   modalTitle:   { fontSize: 18, fontWeight: '900', color: Colors.white, marginBottom: 4 },
