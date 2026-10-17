@@ -120,6 +120,7 @@ test('qr-recogida: resolverVerificacion nunca confirma con un estado cancelado n
     'react-native-qrcode-svg': 'QRCode',
     '@/constants/Colors': { Colors: {} },
     '@/src/services/api': { pedidosAPI: {} },
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'),
   });
   for (const confirmado of ['confirmado', 'en_preparacion', 'listo', 'completado', 'recogido']) {
     assert.equal(mod.resolverVerificacion(confirmado), 'ok', confirmado);

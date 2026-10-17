@@ -15,6 +15,7 @@ import { Colors } from '@/constants/Colors';
 import { useCart } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
 import { disponibilidadReal, textoDisponibilidad } from '@/src/utils/stock';
+import { urlGoogleMaps, urlWaze } from '@/src/utils/navegacionNegocio';
 import { etiquetaTipoProducto, emojiTipoProducto } from '@/src/utils/tipoPublicacion';
 import { useAuth } from '@/src/context/AuthContext';
 import { useLocation } from '@/src/context/LocationContext';
@@ -41,21 +42,17 @@ function MapCard({ lat, lng, direccion, zona, googleMapsUrl, wazeUrl }: {
 }) {
   const [mapErr, setMapErr] = useState(false);
   const hasCoords = lat != null && lng != null;
-  const canNavigate = !!(googleMapsUrl || hasCoords);
+  const ubicacion = { google_maps_url: googleMapsUrl, waze_url: wazeUrl, latitud: lat, longitud: lng };
+  const urlMaps = urlGoogleMaps(ubicacion);
+  const urlWz = urlWaze(ubicacion);
+  const canNavigate = !!urlMaps;
+  const canWaze = !!urlWz;
   const mapUrl = hasCoords && !mapErr
     ? `https://staticmap.openstreetmap.de/staticmap.php?center=${lat},${lng}&zoom=15&size=400x200&markers=${lat},${lng},red-pushpin`
     : null;
 
-  const openGoogleMaps = () => {
-    const url = googleMapsUrl || (hasCoords ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}` : null);
-    if (url) Linking.openURL(url);
-    else Alert.alert('Sin ubicación', 'Este negocio aún no tiene ubicación registrada.');
-  };
-  const openWaze = () => {
-    const url = wazeUrl || (hasCoords ? `https://waze.com/ul?ll=${lat},${lng}&navigate=yes` : null);
-    if (url) Linking.openURL(url);
-    else Alert.alert('Sin ubicación', 'Este negocio aún no tiene ubicación registrada.');
-  };
+  const openGoogleMaps = () => { if (urlMaps) Linking.openURL(urlMaps).catch(() => {}); };
+  const openWaze = () => { if (urlWz) Linking.openURL(urlWz).catch(() => {}); };
 
   return (
     <View style={ms.wrap}>
@@ -103,13 +100,13 @@ function MapCard({ lat, lng, direccion, zona, googleMapsUrl, wazeUrl }: {
           <Text style={[ms.navText, !canNavigate && ms.navTextOff]}>Google Maps</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[ms.navBtnWaze, !canNavigate && ms.navBtnOff]}
+          style={[ms.navBtnWaze, !canWaze && ms.navBtnOff]}
           onPress={openWaze}
-          disabled={!canNavigate}
+          disabled={!canWaze}
           activeOpacity={0.85}
         >
           <Text style={{ fontSize: 15 }}>🚗</Text>
-          <Text style={[ms.navText, !canNavigate && ms.navTextOff]}>Waze</Text>
+          <Text style={[ms.navText, !canWaze && ms.navTextOff]}>Waze</Text>
         </TouchableOpacity>
       </View>
     </View>

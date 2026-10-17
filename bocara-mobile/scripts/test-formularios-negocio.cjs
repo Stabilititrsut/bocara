@@ -95,7 +95,7 @@ function uiRestaurante(file, forcedStates, extraMocks = {}) {
   const mocks = {
     react: h.react, 'react-native': native, 'expo-image': { Image: 'Image' }, '@expo/vector-icons': { Ionicons: 'Icon' },
     'expo-router': { useRouter: () => ({ push: p => navigation.push(p), replace: p => navigation.push(p) }), useFocusEffect: () => {} },
-    '@/src/utils/horarioRecogida': horarioReal,
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
     '@/src/utils/estadoPublicacion': load('src/utils/estadoPublicacion.ts', { './horarioRecogida': horarioReal }),
     '@/components/EstadoImagenIA': { __esModule: true, default: () => null },
     '@/components/BotonDescripcionIA': { __esModule: true, default: () => null },
@@ -358,7 +358,7 @@ test('Etiquetas cliente: ProductCard compartido muestra el tipo con el mismo tex
   const native = { View: 'View', Text: 'Text', TouchableOpacity: 'Button', StyleSheet: { create: x => x }, Dimensions: { get: () => ({ width: 400 }) } };
   const Component = load('components/ProductCard.tsx', {
     react: h.react, 'react-native': native, 'expo-image': {}, '@expo/vector-icons': {}, 'expo-router': { useRouter: () => ({}) },
-    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/horarioRecogida': horarioReal,
+    '@/src/utils/usePublicacionesVigentes': relojMock, '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
     '@/src/utils/stock': load('src/utils/stock.ts', {}), '@/src/utils/tipoPublicacion': tipoPublicacionReal,
     '@/src/context/CartContext': { useCart: () => ({ loaded: true, items: [] }) }, '@/src/services/api': {},
     '@/src/utils/cartFeedback': { mostrarErrorCarrito: () => false },
@@ -379,7 +379,7 @@ test('Etiquetas cliente: detalle de producto usa "Promoción" (no "Cupón") y ag
     'expo-router': { useRouter: () => ({}), useLocalSearchParams: () => ({ id: 'b1' }) },
     '@/src/services/api': {}, '@/src/context/CartContext': { useCart: () => ({ loaded: true, items: [], agregar: () => ({ ok: true }) }) },
     '@/src/utils/cartFeedback': { mostrarErrorCarrito: () => false },
-    '@/src/utils/horarioRecogida': horarioReal, '@/src/utils/usePublicacionesVigentes': relojMock,
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal, '@/src/utils/usePublicacionesVigentes': relojMock,
     '@/src/utils/stock': load('src/utils/stock.ts', {}), '@/src/utils/tipoPublicacion': tipoPublicacionReal,
     '@/src/context/AuthContext': { useAuth: () => ({ usuario: { rol: 'cliente' } }) },
     '@/src/context/LocationContext': { useLocation: () => ({ haversine: () => null, formatDistancia: () => null }) },
@@ -410,7 +410,7 @@ function montarGanancias(data, { mesBuscado = '' } = {}) {
     '@/src/services/api': { negociosAPI: { ganancias: async () => ({ data }) } },
     '@/constants/Colors': { Colors: {} },
     '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
-    '@/src/utils/horarioRecogida': horarioReal,
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
   }).default;
   const render = () => { h.reset(); return Component(); };
   return { render, texto: () => textOf(render()) };
@@ -473,7 +473,7 @@ function renderHistorial(pedidos) {
     '@/src/services/api': { pedidosAPI: { restaurante: async () => ({ data: pedidos }) } },
     '@/constants/Colors': { Colors: {} },
     '@/components/CalendarioPicker': { __esModule: true, default: 'Calendario' },
-    '@/src/utils/horarioRecogida': horarioReal,
+    '@/src/utils/navegacionNegocio': load('src/utils/navegacionNegocio.ts'), '@/src/utils/horarioRecogida': horarioReal,
   }).default;
   return textOf(Component());
 }

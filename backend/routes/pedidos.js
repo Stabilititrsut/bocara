@@ -36,12 +36,17 @@ function filtrarSoloPagosCuboVerificados(query) {
 }
 
 // GET /api/pedidos — pedidos del cliente autenticado
+//
+// El negocio trae sus datos de navegación (dirección, URLs manuales de Google
+// Maps/Waze y coordenadas) para el botón "Cómo llegar" de cada tarjeta activa
+// en (tabs)/pedidos.tsx. Son los mismos campos que ya entrega GET /:id al
+// mismo usuario: no se expone nada nuevo.
 router.get('/', authMiddleware, async (req, res) => {
   try {
     let { data, error } = await filtrarSoloPagosCuboVerificados(
       supabase
         .from('pedidos')
-        .select('*, bolsas!bolsa_id(id,nombre), negocios!negocio_id(id,nombre,zona)')
+        .select('*, bolsas!bolsa_id(id,nombre), negocios!negocio_id(id,nombre,zona,direccion,punto_referencia,google_maps_url,waze_url,latitud,longitud)')
         .eq('usuario_id', req.usuario.id)
         .in('estado', ESTADOS_VISIBLES_CLIENTE)
     ).order('created_at', { ascending: false });

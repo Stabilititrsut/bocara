@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { negociosAPI, pedidosAPI, favoritosAPI, resenasAPI } from '@/src/services/api';
 import { useCart, type ResultadoAgregar } from '@/src/context/CartContext';
 import { mostrarErrorCarrito } from '@/src/utils/cartFeedback';
+import { urlGoogleMaps, urlWaze } from '@/src/utils/navegacionNegocio';
 import ProductCard, { CARD_W } from '@/components/ProductCard';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
@@ -197,15 +198,13 @@ export default function NegocioDetailScreen() {
     } finally { setToggling(false); }
   }
 
-  function abrirMapa(tipo: 'google' | 'waze') {
-    const lat = negocio?.latitud, lng = negocio?.longitud;
-    const url = tipo === 'google'
-      ? negocio?.google_maps_url || (lat && lng ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}` : '')
-      : negocio?.waze_url        || (lat && lng ? `https://waze.com/ul?ll=${lat},${lng}&navigate=yes` : '');
+  const urlMaps = urlGoogleMaps(negocio);
+  const urlWz   = urlWaze(negocio);
+  function abrirMapa(url: string | null) {
     if (url) Linking.openURL(url).catch(() => {});
   }
 
-  const tieneUbicacion = !!(negocio?.google_maps_url || negocio?.waze_url || (negocio?.latitud && negocio?.longitud));
+  const tieneUbicacion = !!(urlMaps || urlWz);
   const todoVacio      = tiempoLimitado.length === 0 && promocion.length === 0;
   const topPad         = Platform.OS === 'ios' ? insets.top : (StatusBar.currentHeight || 0) + 4;
   const mostrarFiltradas = filtro !== 'todos';
@@ -300,14 +299,18 @@ export default function NegocioDetailScreen() {
             {/* Navigation buttons */}
             {tieneUbicacion && (
               <View style={s.navRow}>
-                <TouchableOpacity style={s.navBtn} onPress={() => abrirMapa('google')} activeOpacity={0.85}>
-                  <Text style={s.navEmoji}>🗺️</Text>
-                  <Text style={s.navText}>Google Maps</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={s.navBtn} onPress={() => abrirMapa('waze')} activeOpacity={0.85}>
-                  <Text style={s.navEmoji}>🚗</Text>
-                  <Text style={s.navText}>Waze</Text>
-                </TouchableOpacity>
+                {urlMaps && (
+                  <TouchableOpacity style={s.navBtn} onPress={() => abrirMapa(urlMaps)} activeOpacity={0.85}>
+                    <Text style={s.navEmoji}>🗺️</Text>
+                    <Text style={s.navText}>Google Maps</Text>
+                  </TouchableOpacity>
+                )}
+                {urlWz && (
+                  <TouchableOpacity style={s.navBtn} onPress={() => abrirMapa(urlWz)} activeOpacity={0.85}>
+                    <Text style={s.navEmoji}>🚗</Text>
+                    <Text style={s.navText}>Waze</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
 

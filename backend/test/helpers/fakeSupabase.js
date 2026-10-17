@@ -3,7 +3,7 @@
 // sin red ni base de datos. Solo implementa lo que usan las rutas de
 // publicaciones (bolsas.js, admin.js, negocios.js) y sus servicios:
 //
-//   select (con embebidos `tabla(cols)` y { count, head }), insert, upsert
+//   select (con embebidos `tabla(cols)` / `tabla!fk(cols)` y { count, head }), insert, upsert
 //   (solo { onConflict, ignoreDuplicates: true }), update, delete, eq, neq, gt,
 //   gte, lt, lte, in, is, ilike, not(col,'in'|'is',...), or, order, limit,
 //   range, single, maybeSingle, rpc.
@@ -175,10 +175,11 @@ class Query {
     const cols = dividirNivelSuperior(this.columnas || '*');
     const salida = {};
     for (const col of cols) {
-      const emb = /^(\w+)\((.*)\)$/.exec(col);
+      // `tabla(cols)` o `tabla!columna_fk(cols)` (hint de FK de PostgREST).
+      const emb = /^(\w+)(?:!(\w+))?\((.*)\)$/.exec(col);
       if (emb) {
-        const [, rel, sub] = emb;
-        const fk = rel.replace(/s$/, '') + '_id';
+        const [, rel, hint, sub] = emb;
+        const fk = hint || rel.replace(/s$/, '') + '_id';
         const relacionada = (this.db.tablas[rel] || []).find(r => r.id === fila[fk]);
         salida[rel] = relacionada
           ? new Query(this.db, rel).select(sub)._proyectar(relacionada)
