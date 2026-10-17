@@ -1,7 +1,8 @@
 // Foto obligatoria (services/fotoObligatoria.js) por HTTP, con los routers
 // reales de bolsas/negocios/admin sobre Supabase en memoria:
 //   PHOTO-PUB-3..8  publicaciones (POST/PUT /api/bolsas)
-//   PHOTO-BIZ-1..4  negocios (POST/PUT /api/negocios, aprobar/toggle admin)
+//   PHOTO-BIZ-1..5  negocios (POST/PUT /api/negocios, aprobar/toggle admin,
+//                   foto subida por el admin para reactivar)
 //   PHOTO-LEGACY-1  datos históricos sin foto: se leen igual, no se rompen.
 
 const test = require('node:test');
@@ -201,6 +202,40 @@ test('PHOTO-BIZ-4: no se puede borrar la foto del negocio ni activarlo sin foto'
   assert.equal(foto.status, 200, JSON.stringify(foto.body));
   const conFoto = await pedir('PUT', `/api/negocios/${sinFotoId}`, { como: IDS.admin, body: { activo: true } });
   assert.equal(conFoto.status, 200, JSON.stringify(conFoto.body));
+});
+
+// Caso "Sabor Casero": negocio YA aprobado, suspendido y sin foto. La foto que
+// sube el restaurante queda en revisión (cambios-perfil) y no desbloquea la
+// reactivación; el admin la sube directo desde el detalle del negocio y
+// reactiva en el acto (app/admin/restaurante-detalle.tsx).
+test('PHOTO-BIZ-5: el admin sube la foto de un negocio aprobado y suspendido y lo reactiva (200)', async () => {
+  const id = sembrarNegocio({ verificado: true, estado_verificacion: 'aprobado', activo: false });
+  const toggle = () => pedir('PUT', `/api/admin/negocios/${id}/toggle`, { como: IDS.admin });
+
+  assert.equal((await toggle()).status, 409, 'sin foto no se reactiva');
+
+  // Vía del restaurante: la foto de un negocio aprobado va a revisión y no
+  // se escribe en negocios — por eso el admin necesitaba una vía directa.
+  const delDueno = await pedir('PUT', `/api/negocios/${id}`, { como: IDS.otroRestaurante, body: { imagen_url: FOTO_NEGOCIO } });
+  assert.equal(delDueno.status, 200, JSON.stringify(delDueno.body));
+  assert.equal(delDueno.body.cambio_foto_pendiente, true);
+  assert.equal(fila('negocios', id).imagen_url, null);
+  assert.equal((await toggle()).status, 409, 'una foto en revisión no cuenta');
+
+  // Vía del admin: se escribe directo, sin solicitud de cambio.
+  const pendientesAntes = fake.tabla('negocio_cambios_pendientes').length;
+  const delAdmin = await pedir('PUT', `/api/negocios/${id}`, { como: IDS.admin, body: { imagen_url: FOTO_NEGOCIO } });
+  assert.equal(delAdmin.status, 200, JSON.stringify(delAdmin.body));
+  assert.equal(delAdmin.body.cambio_foto_pendiente, undefined);
+  assert.equal(delAdmin.body.imagen_url, FOTO_NEGOCIO);
+  assert.equal(fila('negocios', id).imagen_url, FOTO_NEGOCIO);
+  assert.equal(fake.tabla('negocio_cambios_pendientes').length, pendientesAntes, 'el admin no genera una solicitud de cambio');
+  assert.equal(fila('negocios', id).activo, false, 'subir la foto no reactiva por sí solo: lo decide el admin');
+
+  const reactivar = await toggle();
+  assert.equal(reactivar.status, 200, JSON.stringify(reactivar.body));
+  assert.equal(reactivar.body.activo, true);
+  assert.equal(fila('negocios', id).activo, true);
 });
 
 // ── Datos heredados ──────────────────────────────────────────────────────────

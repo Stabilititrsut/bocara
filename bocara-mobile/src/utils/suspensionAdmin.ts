@@ -95,6 +95,82 @@ export async function ejecutarAccionNegocio(
   }
 }
 
+// ── Foto del negocio ─────────────────────────────────────────────────────────
+// Reactivar un negocio sin foto responde 409 ("No se puede activar el negocio
+// porque no tiene foto.", backend/routes/admin.js). En vez de ofrecer un
+// "Reactivar" que va a fallar, la lista y el detalle lo detectan antes y
+// llevan al admin a subir la foto (caso "Sabor Casero").
+
+// Mismo criterio que tieneFoto() del backend (services/fotoObligatoria.js).
+export function negocioTieneFoto(negocio: any): boolean {
+  const url = negocio?.imagen_url;
+  return typeof url === 'string' && url.trim() !== '';
+}
+
+export type AccionTarjetaSuspendido = 'reactivar' | 'agregar_foto';
+
+// Botón de la tarjeta de un negocio suspendido; null si no está suspendido.
+export function accionTarjetaSuspendido(negocio: any): AccionTarjetaSuspendido | null {
+  if (accionDisponibleNegocio(negocio) !== 'reactivar') return null;
+  return negocioTieneFoto(negocio) ? 'reactivar' : 'agregar_foto';
+}
+
+export function rutaAgregarFotoNegocio(id: string): string {
+  return `/admin/restaurante-detalle?id=${encodeURIComponent(id)}&accion=foto`;
+}
+
+export type ApiFotoNegocio = {
+  uploadBase64: (base64: string, path: string, contentType?: string) => Respuesta;
+  actualizarNegocio: (id: string, data: any) => Respuesta;
+};
+
+export type ResultadoFoto =
+  | { ok: true; imagen_url: string; negocio: any }
+  | { ok: false; error: string };
+
+// Extensiones que acepta POST /uploads/base64 (backend/routes/uploads.js).
+const EXTENSIONES_FOTO = new Set(['jpg', 'jpeg', 'png', 'webp', 'heic']);
+
+export function extensionFoto(mimeType: string | undefined): string {
+  const ext = String(mimeType || '').split('/')[1]?.toLowerCase().replace(/[^a-z0-9]/g, '') || '';
+  return EXTENSIONES_FOTO.has(ext) ? ext : 'jpg';
+}
+
+// Sube la foto (mismo path que usa el restaurante en restaurante/perfil.tsx) y
+// la escribe en el negocio. Como admin, PUT /negocios/:id la aplica directo,
+// sin pasar por cambios-perfil. No reactiva: eso sigue siendo una decisión
+// explícita del admin (ejecutarAccionNegocio).
+export async function subirFotoNegocio(
+  api: ApiFotoNegocio,
+  negocioId: string,
+  imagen: { base64: string; mimeType?: string },
+  ahora: number = Date.now(),
+): Promise<ResultadoFoto> {
+  try {
+    const mime = imagen.mimeType || 'image/jpeg';
+    const path = `negocios/${negocioId}/imagen_${ahora}.${extensionFoto(mime)}`;
+    const subida = await api.uploadBase64(imagen.base64, path, mime);
+    const url = subida?.data?.publicUrl;
+    if (typeof url !== 'string' || !url.trim()) return { ok: false, error: 'No se pudo subir la foto del negocio.' };
+    const res = await api.actualizarNegocio(negocioId, { imagen_url: url });
+    if (res?.data?.cambio_foto_pendiente) {
+      return { ok: false, error: 'La foto quedó en revisión en lugar de aplicarse. Apruébala en Cambios de perfil.' };
+    }
+    return { ok: true, imagen_url: url, negocio: res?.data || null };
+  } catch (e: any) {
+    return { ok: false, error: mensajeError(e, 'No se pudo subir la foto del negocio.') };
+  }
+}
+
+// Solicitud de cambio de perfil PENDIENTE de este negocio que trae una foto
+// (la que subió el restaurante y está esperando revisión), o null.
+export function solicitudFotoPendiente(solicitudes: any[] | null | undefined, negocioId: string): any | null {
+  if (!Array.isArray(solicitudes)) return null;
+  return solicitudes.find((s) =>
+    s?.negocio_id === negocioId && s?.estado === 'pendiente' &&
+    typeof s?.cambios?.imagen_url === 'string' && s.cambios.imagen_url.trim() !== '') || null;
+}
+
 export async function suspenderCuenta(
   api: ApiSuspensionCuenta,
   usuario: { id: string; nombre?: string; rol?: string },
